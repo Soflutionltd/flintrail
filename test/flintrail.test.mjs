@@ -167,7 +167,7 @@ test('console errors and uncaught exceptions are captured', async () => {
   const reported = [...(snap + act).matchAll(/(\d+) new console errors?, see fl_console/g)].reduce((n, m) => n + Number(m[1]), 0);
   assert.equal(reported, 2);
   const errors = await mcp.call('fl_console', { tab });
-  assert.match(errors, /error: boom from the page/);
+  assert.match(errors, /error: boom from the page \(http:\/\/127\.0\.0\.1:\d+\/canvas:\d+\)/);
   assert.match(errors, /pageerror: uncaught kaboom/);
   assert.doesNotMatch(errors, /careful/);
   assert.match(await mcp.call('fl_console', { tab, level: 'all' }), /warning: careful/);

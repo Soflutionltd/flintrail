@@ -92,7 +92,8 @@ function register(page: Page): string {
   page.on('console', (m) => {
     const t = m.type();
     const level = t === 'error' ? 'error' : t === 'warning' ? 'warning' : 'info';
-    logConsole(page, level, m.text());
+    const where = m.location();
+    logConsole(page, level, level === 'info' || !where.url ? m.text() : `${m.text()} (${where.url.slice(0, 160)}:${where.lineNumber})`);
   });
   page.on('pageerror', (e) => logConsole(page, 'pageerror', e.message));
   page.on('dialog', (d) => void onDialog(page, d));
