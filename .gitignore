@@ -6,3 +6,6 @@ docs/*.preview.png
 .DS_Store
 bench/.playwright-mcp/
 *.zip
+
+mcpb-bundle/
+*.mcpb

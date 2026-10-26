@@ -1,0 +1,51 @@
+{
+  "manifest_version": "0.3",
+  "name": "flintrail",
+  "display_name": "Flintrail",
+  "version": "0.0.0",
+  "description": "Drive a real Chrome live, record a flow once, replay it in milliseconds without an LLM.",
+  "long_description": "Flintrail is a fast browser MCP server. It attaches to your own Chrome (or launches one), acts on pages through compact accessibility snapshots, records a flow once and replays it in milliseconds without calling a model, and can skip the UI entirely by replaying the site's own API calls. A companion Chrome extension lets it drive your everyday browser profile.",
+  "author": {
+    "name": "Soflution Ltd",
+    "email": "contact@soflution.com",
+    "url": "https://github.com/Soflutionltd"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Soflutionltd/flintrail.git"
+  },
+  "homepage": "https://github.com/Soflutionltd/flintrail",
+  "support": "https://github.com/Soflutionltd/flintrail/issues",
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "chrome",
+    "automation",
+    "playwright",
+    "scraping",
+    "testing",
+    "replay",
+    "cdp"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/cli.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/cli.js"
+      ],
+      "env": {}
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}

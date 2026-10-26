@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Soflutionltd/flintrail",
+  "title": "Flintrail",
+  "description": "Drive a real Chrome live, record a flow once, replay it in milliseconds without an LLM.",
+  "version": "0.0.0",
+  "websiteUrl": "https://github.com/Soflutionltd/flintrail",
+  "repository": {
+    "url": "https://github.com/Soflutionltd/flintrail",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/Soflutionltd/flintrail/releases/download/TAG/flintrail.mcpb",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
