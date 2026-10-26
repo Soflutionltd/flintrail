@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" alt="Flintrail demo: record a flow, replay it in 773 ms, replay its API call in 127 ms" width="900">
+  <img src="docs/demo.gif" alt="Flintrail demo: record a flow, replay it in 683 ms, replay its API call in 114 ms" width="900">
 </p>
 
 ---
@@ -38,6 +38,8 @@ Flintrail treats the browser like a JIT compiler treats code:
 <p align="center"><img src="docs/benchmark.svg" alt="Benchmark" width="880"></p>
 
 Same 5-step task (fill a field, tick a box, change page, click a client-rendered button that calls an API, wait for the result), median of 10 runs, headless Chromium. The numbers are tool-side wall time only. In a real agent every tool call also costs a model turn, so going from 7 calls to 2 saves several more seconds on top.
+
+The hatched bar is the floor: the same clicks as a raw Playwright script, with no MCP and no agent. Any tool that clicks through the UI is bounded by it, which is why the per-call ratios stay modest. Flintrail adds about 50 ms per call on top of that floor, Playwright MCP about 260 ms. The only way under the floor is to stop clicking, which is what API replay does.
 
 Reproduce it: `npm run bench` (installs nothing global; Playwright MCP is a dependency of `bench/` only).
 
@@ -157,7 +159,7 @@ npm run bench                          # benchmark vs Playwright MCP
 
 ## En français
 
-Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,4 s avec Playwright MCP et 0,13 s avec Flintrail en mode API.
+Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,4 s avec Playwright MCP et 0,11 s avec Flintrail en mode API.
 
 ## License
 

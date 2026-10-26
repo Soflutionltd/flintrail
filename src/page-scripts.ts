@@ -157,10 +157,13 @@ export function describeScript(el: Element): TargetDescriptor {
   };
 }
 
-/** Resolves when the DOM has been quiet for `quiet` ms, or after `max` ms. */
-export function domQuietScript(args: { quiet: number; max: number }): Promise<void> {
+/**
+ * Resolves as soon as the page is visually settled: immediately if nothing changes within `idle` ms,
+ * otherwise once the DOM has been quiet for `quiet` ms, and never later than `max` ms.
+ */
+export function domQuietScript(args: { idle: number; quiet: number; max: number }): Promise<void> {
   return new Promise((resolve) => {
-    let timer = setTimeout(done, args.quiet);
+    let timer = setTimeout(done, args.idle);
     const cap = setTimeout(done, args.max);
     const obs = new MutationObserver(() => {
       clearTimeout(timer);

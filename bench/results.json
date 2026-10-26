@@ -1,6 +1,6 @@
 {
   "runs": 10,
-  "date": "2026-10-26T10:17:44.323Z",
+  "date": "2026-10-26T10:49:43.331Z",
   "node": "v22.23.4",
   "results": [
     {
@@ -10,23 +10,28 @@
     },
     {
       "label": "Flintrail live (1 action / call)",
-      "medianMs": 1274,
+      "medianMs": 880,
       "calls": 7
     },
     {
       "label": "Flintrail live, batched",
-      "medianMs": 894,
+      "medianMs": 777,
       "calls": 3
     },
     {
       "label": "Flintrail replay (fl_run)",
-      "medianMs": 773,
+      "medianMs": 683,
       "calls": 2
     },
     {
       "label": "Flintrail API replay (fl_run)",
-      "medianMs": 127,
+      "medianMs": 114,
       "calls": 2
+    },
+    {
+      "label": "Browser floor (raw script)",
+      "medianMs": 549,
+      "calls": 0
     }
   ]
 }

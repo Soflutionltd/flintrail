@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="880" height="472" viewBox="0 0 880 472" font-family="Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="530" viewBox="0 0 880 530" font-family="Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
   <defs>
+    <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#1B212B"/><line x1="0" y1="0" x2="0" y2="8" stroke="#5C6678" stroke-width="3"/></pattern>
     <linearGradient id="spark" x1="0" x2="1"><stop offset="0" stop-color="#FF4D00"/><stop offset="1" stop-color="#FFB020"/></linearGradient>
     <style>
       .lbl{font-size:15px;font-weight:600;fill:#E8ECF3}
@@ -8,7 +9,7 @@
       .gain{font-weight:500;fill:#FFB020}
     </style>
   </defs>
-  <rect width="880" height="472" rx="18" fill="#0E1116"/>
+  <rect width="880" height="530" rx="18" fill="#0E1116"/>
   <text x="32" y="48" font-size="22" font-weight="800" fill="#FFFFFF">Same 5-step task, median of 10 runs</text>
   <text x="32" y="76" font-size="13.5" fill="#8B95A7">Fill a field, tick a box, change page, click a client-rendered button that calls an API, wait for the result.</text>
   <text x="32" y="95" font-size="13.5" fill="#8B95A7">Tool-side wall time. Every extra tool call also costs one LLM turn, which is not included here.</text>
@@ -19,19 +20,23 @@
   <text x="780" y="141" class="val">2,379 ms<tspan class="gain"></tspan></text>
   <text x="284" y="192" text-anchor="end" class="lbl">Flintrail live (1 action / call)</text>
   <text x="284" y="210" text-anchor="end" class="sub">7 tool calls (model turns)</text>
-  <rect x="300" y="178" width="251.7" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
-  <text x="561.6939890710382" y="199" class="val">1,274 ms<tspan class="gain"> · 1.9× faster</tspan></text>
+  <rect x="300" y="178" width="173.9" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
+  <text x="483.85456073980663" y="199" class="val">880 ms<tspan class="gain"> · 2.7× faster</tspan></text>
   <text x="284" y="250" text-anchor="end" class="lbl">Flintrail live, batched</text>
   <text x="284" y="268" text-anchor="end" class="sub">3 tool calls (model turns)</text>
-  <rect x="300" y="236" width="176.6" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
-  <text x="486.6204287515763" y="257" class="val">894 ms<tspan class="gain"> · 2.7× faster</tspan></text>
+  <rect x="300" y="236" width="153.5" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
+  <text x="463.50567465321564" y="257" class="val">777 ms<tspan class="gain"> · 3.1× faster</tspan></text>
   <text x="284" y="308" text-anchor="end" class="lbl">Flintrail replay (fl_run)</text>
   <text x="284" y="326" text-anchor="end" class="sub">2 tool calls (model turns)</text>
-  <rect x="300" y="294" width="152.7" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
-  <text x="462.7154266498529" y="315" class="val">773 ms<tspan class="gain"> · 3.1× faster</tspan></text>
+  <rect x="300" y="294" width="134.9" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
+  <text x="444.93484657419083" y="315" class="val">683 ms<tspan class="gain"> · 3.5× faster</tspan></text>
   <text x="284" y="366" text-anchor="end" class="lbl">Flintrail API replay (fl_run)</text>
   <text x="284" y="384" text-anchor="end" class="sub">2 tool calls (model turns)</text>
-  <rect x="300" y="352" width="25.1" height="30" rx="7" fill="url(#spark)" opacity="1"/>
-  <text x="335.09037410676757" y="373" class="val">127 ms<tspan class="gain"> · 18.7× faster</tspan></text>
-  <text x="32" y="446" font-size="12" fill="#5C6678">Measured 2026-10-26 · Node v22.23.4 · headless Chromium · bench/bench.mjs reproduces it</text>
+  <rect x="300" y="352" width="22.5" height="30" rx="7" fill="url(#spark)" opacity="1"/>
+  <text x="332.52206809583856" y="373" class="val">114 ms<tspan class="gain"> · 20.9× faster</tspan></text>
+  <text x="284" y="424" text-anchor="end" class="lbl">Browser floor (raw script)</text>
+  <text x="284" y="442" text-anchor="end" class="sub">reference</text>
+  <rect x="300" y="410" width="108.5" height="30" rx="7" fill="url(#hatch)" opacity="0.85"/>
+  <text x="418.46153846153845" y="431" class="val">549 ms<tspan class="gain"> · no MCP, no agent: the limit for UI clicks</tspan></text>
+  <text x="32" y="504" font-size="12" fill="#5C6678">Measured 2026-10-26 · Node v22.23.4 · headless Chromium · bench/bench.mjs reproduces it</text>
 </svg>

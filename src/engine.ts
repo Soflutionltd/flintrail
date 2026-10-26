@@ -97,8 +97,8 @@ export async function gotoFast(page: Page, url: string) {
 }
 
 /** Lets a client-side app finish re-rendering before we read it. Never waits on the network. */
-export async function domQuiet(page: Page, quiet = 120, max = 1500) {
-  await page.mainFrame().evaluate(domQuietScript, { quiet, max }).catch(() => {});
+export async function domQuiet(page: Page, idle = 25, quiet = 80, max = 1200) {
+  await page.mainFrame().evaluate(domQuietScript, { idle, quiet, max }).catch(() => {});
 }
 
 /** Runs an interaction and waits for a navigation only if that interaction actually started one. */
@@ -110,7 +110,7 @@ async function withNavigation<T>(page: Page, fn: () => Promise<T>): Promise<T> {
   page.on('request', onReq);
   try {
     const out = await fn();
-    await sleep(40);
+    await sleep(25);
     if (navigated) await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
     return out;
   } finally {

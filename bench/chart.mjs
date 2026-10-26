@@ -12,18 +12,21 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const bars = rows.map((r, i) => {
   const y = top + i * rowH;
   const w = Math.max(6, (r.medianMs / max) * barMax);
-  const ours = !r.label.startsWith('Playwright');
-  const fill = ours ? (i === rows.length - 1 ? 'url(#spark)' : '#FF7A2F') : '#8B95A7';
-  const speed = r.medianMs < base ? ` · ${(base / r.medianMs).toFixed(1)}× faster` : '';
+  const floor = r.label.startsWith('Browser floor');
+  const ours = r.label.startsWith('Flintrail');
+  const fastest = ours && r.medianMs === Math.min(...rows.filter((x) => x.label.startsWith('Flintrail')).map((x) => x.medianMs));
+  const fill = floor ? 'url(#hatch)' : ours ? (fastest ? 'url(#spark)' : '#FF7A2F') : '#8B95A7';
+  const speed = floor ? ' · no MCP, no agent: the limit for UI clicks' : r.medianMs < base ? ` · ${(base / r.medianMs).toFixed(1)}× faster` : '';
   return `
   <text x="${left - 16}" y="${y + 22}" text-anchor="end" class="lbl">${esc(r.label)}</text>
-  <text x="${left - 16}" y="${y + 40}" text-anchor="end" class="sub">${r.calls} tool calls (model turns)</text>
+  <text x="${left - 16}" y="${y + 40}" text-anchor="end" class="sub">${floor ? 'reference' : `${r.calls} tool calls (model turns)`}</text>
   <rect x="${left}" y="${y + 8}" width="${w.toFixed(1)}" height="30" rx="7" fill="${fill}" opacity="${ours ? 1 : 0.85}"/>
   <text x="${left + w + 10}" y="${y + 29}" class="val">${r.medianMs.toLocaleString('en-US')} ms<tspan class="gain">${speed}</tspan></text>`;
 }).join('');
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
   <defs>
+    <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#1B212B"/><line x1="0" y1="0" x2="0" y2="8" stroke="#5C6678" stroke-width="3"/></pattern>
     <linearGradient id="spark" x1="0" x2="1"><stop offset="0" stop-color="#FF4D00"/><stop offset="1" stop-color="#FFB020"/></linearGradient>
     <style>
       .lbl{font-size:15px;font-weight:600;fill:#E8ECF3}

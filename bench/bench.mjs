@@ -3,6 +3,7 @@
 // We measure tool-side wall time and count the tool calls an agent must make: every call is one
 // extra model turn, which in real use costs seconds of LLM latency on top of what is measured here.
 import { writeFileSync, mkdirSync } from 'node:fs';
+import { chromium } from 'playwright-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { startFixture } from '../test/fixture.mjs';
@@ -123,6 +124,20 @@ results.push(await measure('Flintrail API replay (fl_run)', async () => {
   const out = await call('fl_run', { name: 'bench-api', vars: { plate: `FA-${i}` } });
   const tab = /tab (t\d+)\)/.exec(out)[1];
   await call('fl_close', { tab });
+}));
+
+// 6. Reference: the browser floor. A raw Playwright script, no MCP, no snapshots, no agent at all.
+results.push(await measure('Browser floor (raw script)', async () => {
+  const b = await chromium.launch(chrome ? { executablePath: chrome } : {});
+  const p = await b.newPage();
+  return { c: { close: () => b.close() }, p, calls: () => 0, reset: () => {} };
+}, async ({ p }, i = 0) => {
+  await p.goto(U, { waitUntil: 'domcontentloaded' });
+  await p.fill('input[name=plate]', `RAW-${i}`);
+  await p.check('input[type=checkbox]');
+  await Promise.all([p.waitForURL(/details/), p.click('button[type=submit]')]);
+  await p.click('[data-testid=confirm]');
+  await p.getByText('active').waitFor();
 }));
 
 site.server.close();

@@ -31,9 +31,9 @@ const { join } = require('node:path');
     { shot: 'confirm', ms: 450, lines: [] },
     { shot: 'done', ms: 1300, lines: [L(C.ok, '✓ Ticket T1000 active   one call, 5 actions')] },
     { shot: 'done', ms: 1400, lines: [L(C.cmd, '› fl_record_stop()'), L(C.ok, '✓ Flow "permit" saved: 5 steps, variables: plate')] },
-    { shot: 'done2', ms: 1700, lines: [L(C.cmd, '› fl_run("permit", { plate: "ZZ-999-ZZ" })'), L(C.ok, '✓ OK "permit" in 773 ms   no LLM in the loop')] },
+    { shot: 'done2', ms: 1700, lines: [L(C.cmd, '› fl_run("permit", { plate: "ZZ-999-ZZ" })'), L(C.ok, '✓ OK "permit" in 683 ms   no LLM in the loop')] },
     { shot: 'done2', ms: 1500, lines: [L(C.cmd, '› fl_run_many("permit", 3 plates, concurrency 3)'), L(C.ok, '✓ 3/3 succeeded in parallel')] },
-    { shot: 'done2', ms: 2600, lines: [L(C.cmd, '› fl_run("permit-api")   the site\'s own API call'), L(C.hi, '⚡ OK in 127 ms   18.7× faster than Playwright MCP')] },
+    { shot: 'done2', ms: 2600, lines: [L(C.cmd, '› fl_run("permit-api")   the site\'s own API call'), L(C.hi, '⚡ OK in 114 ms   20.9× faster than Playwright MCP')] },
   ];
 
   const stage = await browser.newPage({ viewport: { width: 1200, height: 560 } });
