@@ -98,7 +98,7 @@ The extension is the easiest way in: no command-line flags, no debugging port, w
 1. **Install.** Download `flintrail-extension-<version>.zip` from the [latest release](https://github.com/Soflutionltd/flintrail/releases/latest), unzip it, open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and pick the folder. (Chrome Web Store listing in progress.)
 2. **Run Flintrail in extension mode**, for example in Claude Desktop:
    ```json
-   { "mcpServers": { "flintrail": { "command": "npx", "args": ["-y", "flintrail"], "env": { "FLINTRAIL_MODE": "extension" } } } }
+   { "mcpServers": { "flintrail": { "command": "npx", "args": ["-y", "github:Soflutionltd/flintrail"], "env": { "FLINTRAIL_MODE": "extension" } } } }
    ```
 3. **Connect.** Click the Flintrail icon, paste the token from `~/.flintrail/token`, click *Connect*. The extension reconnects by itself afterwards.
 

@@ -20,7 +20,8 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "bench": "npm run build && npm --prefix bench install --no-audit --no-fund && node bench/bench.mjs && node bench/chart.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "pack:extension": "npm run build && node scripts/build-extension.mjs --zip"
+    "pack:extension": "npm run build && node scripts/build-extension.mjs --zip",
+    "prepare": "npm run build"
   },
   "keywords": [
     "mcp",
