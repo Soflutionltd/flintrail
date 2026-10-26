@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { config } from './config.js';
 import { loadToken } from './auth.js';
 import { startRelay } from './relay.js';
+import { startCdpFilter, type CdpFilter } from './cdp-filter.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -97,6 +98,7 @@ async function startChromeForTesting() {
 
 let ctxPromise: Promise<BrowserContext> | null = null;
 let browserRef: Browser | null = null;
+let filter: CdpFilter | null = null;
 
 async function connect(): Promise<BrowserContext> {
   if (config.mode === 'extension') {
@@ -128,7 +130,11 @@ async function connect(): Promise<BrowserContext> {
   }
   if (!version) throw new Error('Browser unreachable.');
   assertDedicatedBrowser(version);
-  const browser = await chromium.connectOverCDP(config.cdpUrl, { timeout: 15000 });
+  // Go through a local filter that hides Chrome's own UI targets, which make connectOverCDP hang.
+  const wsUrl = version['webSocketDebuggerUrl'];
+  filter?.close();
+  filter = wsUrl ? await startCdpFilter(wsUrl) : null;
+  const browser = await chromium.connectOverCDP(filter ? filter.url : config.cdpUrl, { timeout: 15000 });
   browserRef = browser;
   browser.on('disconnected', () => { ctxPromise = null; browserRef = null; });
   const ctx = browser.contexts()[0];
