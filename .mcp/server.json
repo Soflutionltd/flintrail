@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.Soflutionltd/flintrail",
+  "name": "com.soflution/flintrail",
   "title": "Flintrail",
   "description": "Drive a real Chrome live, record a flow once, replay it in milliseconds without an LLM.",
   "version": "0.0.0",
