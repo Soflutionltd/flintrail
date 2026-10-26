@@ -1,0 +1,32 @@
+{
+  "runs": 10,
+  "date": "2026-10-26T10:17:44.323Z",
+  "node": "v22.23.4",
+  "results": [
+    {
+      "label": "Playwright MCP (1 action / call)",
+      "medianMs": 2379,
+      "calls": 7
+    },
+    {
+      "label": "Flintrail live (1 action / call)",
+      "medianMs": 1274,
+      "calls": 7
+    },
+    {
+      "label": "Flintrail live, batched",
+      "medianMs": 894,
+      "calls": 3
+    },
+    {
+      "label": "Flintrail replay (fl_run)",
+      "medianMs": 773,
+      "calls": 2
+    },
+    {
+      "label": "Flintrail API replay (fl_run)",
+      "medianMs": 127,
+      "calls": 2
+    }
+  ]
+}

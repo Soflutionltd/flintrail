@@ -1,0 +1,7 @@
+node_modules/
+dist/
+bench/node_modules/
+docs/*.preview.png
+*.log
+.DS_Store
+bench/.playwright-mcp/

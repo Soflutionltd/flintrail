@@ -1,0 +1,118 @@
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { act, closeTab, getTab, listTabs, openTab, snapshot, type Action } from './engine.js';
+import { runFlow, runMany } from './flows.js';
+import { recorder } from './recorder.js';
+import { listFlows, loadFlow } from './store.js';
+
+export const VERSION = '1.0.0';
+
+type ToolResult = { content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]; isError?: boolean };
+const text = (t: string): ToolResult => ({ content: [{ type: 'text', text: t }] });
+const guard = <A>(fn: (a: A) => Promise<string>) => async (a: A): Promise<ToolResult> => {
+  try {
+    return text(await fn(a));
+  } catch (e) {
+    return { ...text(`Error: ${(e as Error).message.split('\n')[0]}`), isError: true };
+  }
+};
+
+const actionSchema = z.object({
+  do: z.enum(['click', 'dblclick', 'hover', 'fill', 'type', 'select', 'check', 'uncheck', 'press', 'download', 'goto', 'back', 'wait', 'scroll', 'eval', 'request']),
+  ref: z.string().optional().describe('Element ref from the latest snapshot, e.g. e12 or f1:e3. Fastest way to target.'),
+  selector: z.string().optional().describe('CSS or Playwright selector.'),
+  role: z.string().optional(), name: z.string().optional(),
+  text: z.string().optional(), label: z.string().optional(), placeholder: z.string().optional(), exact: z.boolean().optional(),
+  value: z.string().optional().describe('Value for fill / type / select.'),
+  var: z.string().optional().describe('While recording: store this value as variable {{var}} instead of the literal.'),
+  key: z.string().optional().describe('Key for press, e.g. Enter, Tab, Escape.'),
+  url: z.string().optional().describe('URL for goto / request, or a regex for wait.'),
+  ms: z.number().optional(), y: z.number().optional(),
+  js: z.string().optional().describe('Function body for eval, must return a value.'),
+  method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(),
+});
+
+const snapOpts = {
+  text: z.number().optional().describe('Characters of page text to include (default 600, 0 for none).'),
+  max: z.number().optional().describe('Max interactive elements listed (default 150).'),
+};
+
+export function buildServer(): McpServer {
+  const s = new McpServer({ name: 'flintrail', version: VERSION });
+
+  s.registerTool('fl_open', {
+    description: 'Open a URL in a background tab of the dedicated browser (logged-in sessions kept). Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    inputSchema: { url: z.string(), ...snapOpts },
+  }, guard(async ({ url, text: t, max }) => {
+    const id = await openTab(url);
+    return `Tab ${id}\n` + (await snapshot(getTab(id), { text: t, max }));
+  }));
+
+  s.registerTool('fl_act', {
+    description: 'Run SEVERAL actions in one call (fill a whole form, click, submit, wait, extract) and get one fresh snapshot back. Always batch as many actions as possible: one call beats ten.',
+    inputSchema: { tab: z.string(), actions: z.array(actionSchema).min(1), snapshot: z.boolean().optional(), ...snapOpts },
+  }, guard(async ({ tab, actions, snapshot: snap, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, text: t, max })));
+
+  s.registerTool('fl_snapshot', {
+    description: 'Re-read a tab: interactive elements with refs, headings and the start of the text.',
+    inputSchema: { tab: z.string(), ...snapOpts },
+  }, guard(async ({ tab, text: t, max }) => snapshot(getTab(tab), { text: t, max })));
+
+  s.registerTool('fl_extract', {
+    description: 'Run JavaScript in the page and return the result. Fastest way to pull tables, lists or links.',
+    inputSchema: { tab: z.string(), js: z.string().describe('Function body with return, e.g. return [...document.querySelectorAll("tr")].map(r => r.innerText)') },
+  }, guard(async ({ tab, js }) => act(getTab(tab), [{ do: 'eval', js }], { snapshot: false })));
+
+  s.registerTool('fl_network', {
+    description: 'List the API calls (fetch/XHR) the site made, with method, status, timing, body and a JSON sample. Use it to replace UI clicks with a direct {do:"request"} step: the fastest possible replay.',
+    inputSchema: { filter: z.string().optional().describe('Substring the URL must contain.'), limit: z.number().optional() },
+  }, guard(async ({ filter, limit }) => recorder.apiCalls(filter, limit)));
+
+  s.registerTool('fl_screenshot', {
+    description: 'Screenshot of a tab. Only when the visual layout matters: snapshots are much cheaper.',
+    inputSchema: { tab: z.string(), full: z.boolean().optional() },
+  }, async ({ tab, full }): Promise<ToolResult> => {
+    try {
+      const buf = await getTab(tab).screenshot({ type: 'jpeg', quality: 55, fullPage: !!full });
+      return { content: [{ type: 'image', data: buf.toString('base64'), mimeType: 'image/jpeg' }] };
+    } catch (e) {
+      return { ...text(`Error: ${(e as Error).message}`), isError: true };
+    }
+  });
+
+  s.registerTool('fl_tabs', { description: 'List tabs opened by Flintrail.', inputSchema: {} },
+    guard(async () => listTabs().join('\n') || 'No tabs.'));
+
+  s.registerTool('fl_close', { description: 'Close a Flintrail tab.', inputSchema: { tab: z.string() } },
+    guard(async ({ tab }) => { await closeTab(tab); return `Tab ${tab} closed.`; }));
+
+  s.registerTool('fl_record_start', {
+    description: 'Start recording a flow. Every fl_open / fl_act after this is captured with robust element fingerprints so fl_run can replay it without an LLM. repairFrom keeps steps before that index and replaces the rest.',
+    inputSchema: { name: z.string(), description: z.string().optional(), startUrl: z.string().optional(), repairFrom: z.number().optional() },
+  }, guard(async ({ name, description, startUrl, repairFrom }) => recorder.start(name, description, startUrl, repairFrom)));
+
+  s.registerTool('fl_record_stop', {
+    description: 'Stop recording and save the flow (save=false to discard).',
+    inputSchema: { save: z.boolean().optional() },
+  }, guard(async ({ save }) => recorder.stop(save !== false)));
+
+  s.registerTool('fl_run', {
+    description: 'Replay a recorded flow at browser speed, no LLM. On failure (site changed) it stops at the failing step and returns the page so the flow can be repaired.',
+    inputSchema: { name: z.string(), vars: z.record(z.string(), z.string()).optional(), tab: z.string().optional() },
+  }, guard(async ({ name, vars, tab }) => (await runFlow(name, vars || {}, tab)).text));
+
+  s.registerTool('fl_run_many', {
+    description: 'Replay the same flow for many variable sets in parallel, each in its own background tab.',
+    inputSchema: { name: z.string(), runs: z.array(z.record(z.string(), z.string())).min(1), concurrency: z.number().optional(), keepTabs: z.boolean().optional() },
+  }, guard(async ({ name, runs, concurrency, keepTabs }) => runMany(name, runs, concurrency ?? 4, !!keepTabs)));
+
+  s.registerTool('fl_flows', { description: 'List recorded flows with their variables and last timing.', inputSchema: {} },
+    guard(async () => listFlows()
+      .map((f) => `${f.name}: ${f.steps.length} steps, vars [${f.vars.join(', ')}], ${f.runs} runs${f.lastMs ? `, last ${f.lastMs} ms` : ''}. ${f.description}`)
+      .join('\n') || 'No flows yet.'));
+
+  s.registerTool('fl_flow', { description: 'Show a flow with all its steps and element fingerprints.', inputSchema: { name: z.string() } },
+    guard(async ({ name }) => JSON.stringify(loadFlow(name), null, 1)));
+
+  return s;
+}

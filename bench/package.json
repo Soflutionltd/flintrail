@@ -1,0 +1,9 @@
+{
+  "name": "flintrail-bench",
+  "private": true,
+  "type": "module",
+  "description": "Benchmark harness, not published.",
+  "dependencies": {
+    "@playwright/mcp": "0.0.83"
+  }
+}
