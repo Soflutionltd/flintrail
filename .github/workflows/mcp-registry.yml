@@ -12,6 +12,10 @@ on:
         description: Release tag to bundle and publish (for example v1.2.0)
         required: true
         type: string
+      version:
+        description: Registry version, only to republish a tag under a new version (for example 1.2.0-1)
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -27,42 +31,59 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ inputs.tag || github.ref_name }}
+      VERSION_OVERRIDE: ${{ inputs.version }}
     steps:
+      - name: Skip a version the registry already has
+        id: check
+        run: |
+          V="${VERSION_OVERRIDE:-${TAG#v}}"
+          echo "V=$V" >> "$GITHUB_ENV"
+          code=$(curl -s -m 120 -o /dev/null -w '%{http_code}' "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.Soflutionltd%2Fflintrail/versions/$V" || true)
+          # Published versions are immutable: never rebuild their bundle (its SHA-256 would change).
+          if [ "$code" = "200" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "$V is already in the registry"; fi
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Use the packaging files of the default branch
+        if: steps.check.outputs.skip != 'true'
         run: git checkout ${{ github.sha }} -- .mcp scripts/build-mcpb.mjs
 
       - uses: actions/setup-node@v4
+        if: steps.check.outputs.skip != 'true'
         with:
           node-version: '22'
 
       - name: Build
+        if: steps.check.outputs.skip != 'true'
         run: |
           npm ci
           npm run build --if-present
 
       - name: Bundle
+        if: steps.check.outputs.skip != 'true'
         run: |
           node scripts/build-mcpb.mjs "$TAG"
           mv flintrail-*.mcpb flintrail.mcpb
           echo "SHA=$(sha256sum flintrail.mcpb | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       - name: Attach to the release
+        if: steps.check.outputs.skip != 'true'
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "flintrail $TAG" --generate-notes
           gh release upload "$TAG" flintrail.mcpb --clobber
 
       - name: Write server.json
+        if: steps.check.outputs.skip != 'true'
         run: |
-          jq --arg v "${TAG#v}" --arg u "https://github.com/${{ github.repository }}/releases/download/$TAG/flintrail.mcpb" --arg s "$SHA" \
+          jq --arg v "$V" --arg u "https://github.com/${{ github.repository }}/releases/download/$TAG/flintrail.mcpb" --arg s "$SHA" \
             '.version=$v | .packages[0].identifier=$u | .packages[0].fileSha256=$s' .mcp/server.json > server.json
           cat server.json
 
       - name: Publish to the MCP Registry
+        if: steps.check.outputs.skip != 'true'
         run: |
           curl -fsSL https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz | tar xz mcp-publisher
           ./mcp-publisher login github-oidc
