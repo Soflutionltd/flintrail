@@ -115,18 +115,19 @@ fl_run("paybyphone-renew", { "plate": "AB-123-CD" })
 
 The flow now runs without you, without the LLM, in milliseconds per step.
 
-Limits in extension mode: browser-level CDP (download folder, permissions, window size) is not available to extensions, so `download` saves through the browser's normal download flow.
+Limits in extension mode: browser-level CDP (download folder, permissions, window size) is not available to extensions, so `download` saves through the browser's normal download flow. Chrome dismisses dialogs of background tabs driven by `chrome.debugger` before anyone can answer, so in this mode `{do:"dialog"}` answers the next `alert` / `confirm` / `prompt` from inside the page instead.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
 | `fl_open` | Open a URL in a background tab, return a compact snapshot with `[eN]` refs. |
-| `fl_act` | Run many actions in one call: `click`, `fill`, `type`, `select`, `check`, `press`, `download`, `goto`, `wait`, `scroll`, `eval`, `request`. |
+| `fl_act` | Run many actions in one call: `click`, `dblclick`, `hover`, `fill`, `type`, `select`, `check`, `press`, `upload`, `download`, `goto`, `back`, `wait`, `scroll`, `mouse`, `dialog`, `resize`, `eval`, `request`. |
 | `fl_snapshot` | Re-read a page: interactive elements, headings, text excerpt, same-origin frames. |
 | `fl_extract` | Run JavaScript in the page and return the result. |
 | `fl_network` | List the site's own API calls with timing, body and a JSON sample. |
-| `fl_screenshot` | JPEG screenshot when layout matters. |
+| `fl_screenshot` | JPEG screenshot of the tab, or of one element (`ref` / `selector`), in CSS pixels usable by `mouse`. |
+| `fl_console` | Console errors and uncaught exceptions of a tab (`level: "all"` adds warnings and logs). `fl_act` says when new ones appear. |
 | `fl_record_start` / `fl_record_stop` | Record a flow; `repairFrom` keeps the good steps and re-records the rest. |
 | `fl_run` | Replay a flow with variables, no LLM. |
 | `fl_run_many` | Replay a flow for many variable sets in parallel tabs. |
@@ -149,6 +150,19 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 ```
 
 Then `fl_run("permit", { "plate": "ZZ-999-ZZ" })` repeats it in under a second.
+
+```jsonc
+// files, native dialogs, coordinates, mobile width
+{ "tool": "fl_act", "tab": "t1", "actions": [
+  { "do": "upload", "ref": "e4", "files": ["/Users/me/statement.csv"], "var": "statement" },
+  { "do": "dialog", "accept": true },
+  { "do": "click", "role": "button", "name": "Delete" },
+  { "do": "mouse", "x": 640, "y": 380 },
+  { "do": "resize", "width": 390, "height": 844 }
+]}
+```
+
+`upload` works on a file input, even a hidden one, and on a button or drop zone that opens the file chooser. Dialogs are dismissed by default and every one is reported in the result, as are new console errors.
 
 ## How replay finds elements again
 
@@ -180,7 +194,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 12 end-to-end tests over real MCP, extension included
+npm test                               # build + 19 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```

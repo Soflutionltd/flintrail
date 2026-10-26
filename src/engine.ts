@@ -1,15 +1,15 @@
 // Live driving: tabs, compact snapshots, batched actions, smart waits, network capture.
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Frame, Locator, Page, Request } from 'playwright-core';
+import type { Dialog, Frame, Locator, Page, Request } from 'playwright-core';
 import { getAttachedBrowser, getContext } from './browser.js';
 import { config } from './config.js';
-import { describeScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
+import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
 
 export type ActionKind =
-  | 'click' | 'dblclick' | 'hover' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'press' | 'download'
-  | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request';
+  | 'click' | 'dblclick' | 'hover' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'press' | 'download' | 'upload'
+  | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request' | 'mouse' | 'dialog' | 'resize';
 
 export interface Action {
   do: ActionKind;
@@ -26,7 +26,13 @@ export interface Action {
   key?: string;
   url?: string;
   ms?: number;
+  x?: number;
   y?: number;
+  count?: number;
+  width?: number;
+  height?: number;
+  accept?: boolean;
+  files?: string[];
   js?: string;
   method?: string;
   body?: string;
@@ -41,6 +47,41 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const tabs = new Map<string, Page>();
 let nextTab = 1;
 
+interface ConsoleEntry { level: 'error' | 'warning' | 'info' | 'pageerror'; text: string; at: string }
+interface PageState {
+  console: ConsoleEntry[];
+  unseenErrors: number;
+  dialogs: string[];
+  nextDialog?: { accept: boolean; value?: string };
+}
+const states = new WeakMap<Page, PageState>();
+function stateOf(page: Page): PageState {
+  let s = states.get(page);
+  if (!s) states.set(page, (s = { console: [], unseenErrors: 0, dialogs: [] }));
+  return s;
+}
+
+function logConsole(page: Page, level: ConsoleEntry['level'], text: string) {
+  const s = stateOf(page);
+  s.console.push({ level, text: text.slice(0, 2000), at: new Date().toISOString().slice(11, 23) });
+  if (s.console.length > 300) s.console.shift();
+  if (level === 'error' || level === 'pageerror') s.unseenErrors++;
+}
+
+async function onDialog(page: Page, d: Dialog) {
+  const s = stateOf(page);
+  const policy = s.nextDialog;
+  s.nextDialog = undefined;
+  const accept = policy ? policy.accept : d.type() === 'beforeunload';
+  const label = `dialog ${d.type()} "${d.message().slice(0, 200)}" -> ${accept ? 'accepted' : 'dismissed'}`;
+  try {
+    await (accept ? d.accept(policy?.value ?? d.defaultValue()) : d.dismiss());
+    s.dialogs.push(label);
+  } catch (e) {
+    s.dialogs.push(`${label} FAILED: ${(e as Error).message.split('\n')[0]}`);
+  }
+}
+
 function register(page: Page): string {
   for (const [id, p] of tabs) if (p === page) return id;
   const id = 't' + nextTab++;
@@ -48,7 +89,35 @@ function register(page: Page): string {
   page.on('close', () => tabs.delete(id));
   page.on('request', (r) => recorder.onRequest(r));
   page.on('response', (r) => recorder.onResponse(r));
+  page.on('console', (m) => {
+    const t = m.type();
+    const level = t === 'error' ? 'error' : t === 'warning' ? 'warning' : 'info';
+    logConsole(page, level, m.text());
+  });
+  page.on('pageerror', (e) => logConsole(page, 'pageerror', e.message));
+  page.on('dialog', (d) => void onDialog(page, d));
   return id;
+}
+
+/** Console messages and uncaught exceptions of a tab, errors only unless level is "all". */
+export function consoleLog(page: Page, level: 'errors' | 'all' = 'errors', clear = false): string {
+  const s = stateOf(page);
+  const list = s.console.filter((c) => level === 'all' || c.level === 'error' || c.level === 'pageerror');
+  s.unseenErrors = 0;
+  if (clear) s.console = [];
+  if (!list.length) return level === 'all' ? 'Console is empty.' : 'No console errors.';
+  return list.map((c) => `${c.at} ${c.level}: ${c.text}`).join('\n');
+}
+
+/** Notes about dialogs handled and new console errors since the last report. */
+function pageNotes(page: Page): string[] {
+  const s = stateOf(page);
+  const notes = s.dialogs.splice(0);
+  if (s.unseenErrors) {
+    notes.push(`${s.unseenErrors} new console error${s.unseenErrors > 1 ? 's' : ''}, see fl_console`);
+    s.unseenErrors = 0;
+  }
+  return notes;
 }
 
 export async function newPage(): Promise<Page> {
@@ -120,22 +189,20 @@ async function withNavigation<T>(page: Page, fn: () => Promise<T>): Promise<T> {
 
 export async function snapshot(page: Page, opts: { max?: number; text?: number } = {}): Promise<string> {
   const frames = page.frames().filter((f) => !f.isDetached()).slice(0, 6);
+  // Frames are read in parallel: one round trip instead of one per frame.
+  const reads = await Promise.all(frames.map((f, i) => f.evaluate(snapshotScript, {
+    max: i === 0 ? opts.max ?? 150 : 40,
+    text: i === 0 ? opts.text ?? 600 : 0,
+    prefix: i === 0 ? '' : `f${i}:`,
+  }).catch(() => null)));
+  const head = reads[0];
   const extra: string[] = [];
-  let head: Awaited<ReturnType<typeof snapshotScript>> | null = null;
-  for (let i = 0; i < frames.length; i++) {
-    const f = frames[i]!;
-    try {
-      const s = await f.evaluate(snapshotScript, {
-        max: i === 0 ? opts.max ?? 150 : 40,
-        text: i === 0 ? opts.text ?? 600 : 0,
-        prefix: i === 0 ? '' : `f${i}:`,
-      });
-      if (i === 0) head = s;
-      else if (s.lines.length) extra.push(`-- frame ${i} (${f.url().slice(0, 80)})`, ...s.lines);
-    } catch { /* cross-origin or detached */ }
-  }
-  if (!head) return `URL: ${page.url()} (page not readable yet)`;
-  const out = [`URL: ${head.url}`, `Title: ${head.title}`, ...head.heads, '', ...head.lines, ...extra];
+  reads.forEach((s, i) => {
+    if (i > 0 && s?.lines.length) extra.push(`-- frame ${i} (${frames[i]!.url().slice(0, 80)})`, ...s.lines);
+  });
+  const notes = pageNotes(page);
+  if (!head) return [...notes, `URL: ${page.url()} (page not readable yet)`].join('\n');
+  const out = [...notes, `URL: ${head.url}`, `Title: ${head.title}`, ...head.heads, '', ...head.lines, ...extra];
   if (head.more) out.push('(list truncated, raise max if needed)');
   if (head.body) out.push('', 'Text: ' + head.body);
   return out.join('\n');
@@ -149,6 +216,11 @@ function fromRef(page: Page, ref: string): { frame: Frame; key: string } {
     return { frame, key: m[2]! };
   }
   return { frame: page.mainFrame(), key: ref };
+}
+
+export function elementByRef(page: Page, ref: string): Locator {
+  const { frame, key } = fromRef(page, ref);
+  return frame.locator(`[data-fl="${key}"]`).first();
 }
 
 function liveLocator(page: Page, a: Action): { loc: Locator; frame: Frame } | null {
@@ -218,6 +290,21 @@ export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record
     await dl.saveAs(path);
     return { download: path };
   }
+  if (a.do === 'upload') {
+    const files = (a.files || []).map((f) => fillVars(f, vars)!);
+    if (!files.length) throw new Error('upload needs files: absolute paths on this machine.');
+    const absent = files.find((f) => !existsSync(f));
+    if (absent) throw new Error(`File not found: ${absent}`);
+    const isFileInput = await loc.evaluate((el) => el instanceof HTMLInputElement && el.type === 'file', undefined, { timeout: TIMEOUT });
+    if (isFileInput) {
+      await loc.setInputFiles(files, { timeout: TIMEOUT });
+    } else {
+      // A button or drop zone that opens the native file chooser: answer the chooser instead.
+      const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: TIMEOUT }), loc.click({ timeout: TIMEOUT })]);
+      await chooser.setFiles(files);
+    }
+    return {};
+  }
   await withNavigation(page, async () => {
     switch (a.do) {
       case 'click': return loc.click({ timeout: TIMEOUT });
@@ -235,7 +322,7 @@ export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record
   return {};
 }
 
-export const PAGE_ACTIONS = new Set<ActionKind>(['goto', 'back', 'wait', 'scroll', 'eval', 'request']);
+export const PAGE_ACTIONS = new Set<ActionKind>(['goto', 'back', 'wait', 'scroll', 'eval', 'request', 'mouse', 'dialog', 'resize']);
 
 /** Performs an action that needs no element. Returns a value for eval/request. */
 export async function performPage(page: Page, a: Step, vars?: Record<string, string>): Promise<unknown> {
@@ -244,6 +331,28 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
     case 'back': await page.goBack({ waitUntil: 'domcontentloaded' }); return undefined;
     case 'press': await withNavigation(page, () => page.keyboard.press(a.key || 'Enter')); return undefined;
     case 'scroll': await page.mouse.wheel(0, a.y ?? 800); await sleep(120); return undefined;
+    case 'mouse': {
+      if (typeof a.x !== 'number' || typeof a.y !== 'number') throw new Error('mouse needs x and y (CSS pixels of the viewport, as in fl_screenshot).');
+      await withNavigation(page, () => page.mouse.click(a.x!, a.y!, { clickCount: a.count ?? 1 }));
+      return undefined;
+    }
+    case 'dialog': {
+      const policy = { accept: a.accept !== false, value: fillVars(a.value, vars) };
+      if (config.mode !== 'extension') {
+        stateOf(page).nextDialog = policy;
+        return undefined;
+      }
+      // Chrome auto-dismisses dialogs of background tabs driven by chrome.debugger before CDP can answer,
+      // so in extension mode the next dialog is answered inside the page instead.
+      await page.mainFrame().evaluate(dialogOverrideScript, policy);
+      stateOf(page).dialogs.push(`next dialog will be ${policy.accept ? 'accepted' : 'dismissed'} in the page (extension mode)`);
+      return undefined;
+    }
+    case 'resize': {
+      if (!a.width || !a.height) throw new Error('resize needs width and height.');
+      await page.setViewportSize({ width: a.width, height: a.height });
+      return undefined;
+    }
     case 'wait':
       if (a.text) await page.getByText(fillVars(a.text, vars)!).first().waitFor({ timeout: a.ms || 15000 });
       else if (a.url) await page.waitForURL(new RegExp(fillVars(a.url, vars)!), { timeout: a.ms || 15000 });
@@ -321,7 +430,7 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
       break;
     }
   }
-  if (opts.snapshot === false) return (notes.length ? notes.join('\n') + '\n' : '') + `URL: ${page.url()}`;
+  if (opts.snapshot === false) return [...notes, ...pageNotes(page), `URL: ${page.url()}`].join('\n');
   await domQuiet(page);
   return (notes.length ? notes.join('\n') + '\n\n' : '') + (await snapshot(page, opts));
 }

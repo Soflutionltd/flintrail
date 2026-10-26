@@ -196,3 +196,16 @@ export async function fetchScript(args: {
   const text = await r.text();
   return { status: r.status, contentType: r.headers.get('content-type') || '', body: text.slice(0, args.max) };
 }
+
+/** Answers the next alert / confirm / prompt of the page itself, then restores the native functions. */
+export function dialogOverrideScript(policy: { accept: boolean; value?: string }): void {
+  const w = window as unknown as Record<'alert' | 'confirm' | 'prompt', (...args: unknown[]) => unknown>;
+  const native = { alert: w.alert, confirm: w.confirm, prompt: w.prompt };
+  const restore = () => Object.assign(w, native);
+  w.alert = () => { restore(); };
+  w.confirm = () => { restore(); return policy.accept; };
+  w.prompt = (_message: unknown, initial: unknown) => {
+    restore();
+    return policy.accept ? (policy.value ?? (typeof initial === 'string' ? initial : '')) : null;
+  };
+}

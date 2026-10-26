@@ -1,13 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { act, closeTab, getTab, listTabs, openTab, snapshot, type Action } from './engine.js';
+import { act, closeTab, consoleLog, elementByRef, getTab, listTabs, openTab, snapshot, type Action } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
 import { getRelay } from './relay.js';
 import { listFlows, loadFlow, saveFlow } from './store.js';
 
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 
 type ToolResult = { content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]; isError?: boolean };
 const text = (t: string): ToolResult => ({ content: [{ type: 'text', text: t }] });
@@ -20,7 +20,8 @@ const guard = <A>(fn: (a: A) => Promise<string>) => async (a: A): Promise<ToolRe
 };
 
 const actionSchema = z.object({
-  do: z.enum(['click', 'dblclick', 'hover', 'fill', 'type', 'select', 'check', 'uncheck', 'press', 'download', 'goto', 'back', 'wait', 'scroll', 'eval', 'request']),
+  do: z.enum(['click', 'dblclick', 'hover', 'fill', 'type', 'select', 'check', 'uncheck', 'press', 'download', 'upload', 'goto', 'back', 'wait', 'scroll', 'eval', 'request', 'mouse', 'dialog', 'resize'])
+    .describe('upload: files into a file input, or a button / drop zone that opens the file chooser. mouse: click at x,y (escape hatch for canvas, shadow DOM, extension overlays). dialog: how to answer the NEXT alert/confirm/prompt (default dismiss). resize: viewport width x height.'),
   ref: z.string().optional().describe('Element ref from the latest snapshot, e.g. e12 or f1:e3. Fastest way to target.'),
   selector: z.string().optional().describe('CSS or Playwright selector.'),
   role: z.string().optional(), name: z.string().optional(),
@@ -29,7 +30,13 @@ const actionSchema = z.object({
   var: z.string().optional().describe('While recording: store this value as variable {{var}} instead of the literal.'),
   key: z.string().optional().describe('Key for press, e.g. Enter, Tab, Escape.'),
   url: z.string().optional().describe('URL for goto / request, or a regex for wait.'),
-  ms: z.number().optional(), y: z.number().optional(),
+  ms: z.number().optional(),
+  x: z.number().optional().describe('mouse: x in CSS pixels of the viewport, same scale as fl_screenshot.'),
+  y: z.number().optional().describe('mouse: y in CSS pixels. scroll: pixels to scroll (default 800).'),
+  count: z.number().int().optional().describe('mouse: 2 for a double click.'),
+  width: z.number().int().optional(), height: z.number().int().optional(),
+  accept: z.boolean().optional().describe('dialog: true to accept (OK), false to dismiss. value is the prompt answer.'),
+  files: z.array(z.string()).optional().describe('upload: absolute file paths. With var, a single file becomes {{var}}.'),
   js: z.string().optional().describe('Function body for eval, must return a value.'),
   method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(),
 });
@@ -70,12 +77,20 @@ export function buildServer(): McpServer {
     inputSchema: { filter: z.string().optional().describe('Substring the URL must contain.'), limit: z.number().optional() },
   }, guard(async ({ filter, limit }) => recorder.apiCalls(filter, limit)));
 
+  s.registerTool('fl_console', {
+    description: 'Console errors and uncaught exceptions of a tab (level "all" adds warnings and logs). fl_act and fl_snapshot already say when new errors appeared.',
+    inputSchema: { tab: z.string(), level: z.enum(['errors', 'all']).optional(), clear: z.boolean().optional() },
+  }, guard(async ({ tab, level, clear }) => consoleLog(getTab(tab), level, !!clear)));
+
   s.registerTool('fl_screenshot', {
-    description: 'Screenshot of a tab. Only when the visual layout matters: snapshots are much cheaper.',
-    inputSchema: { tab: z.string(), full: z.boolean().optional() },
-  }, async ({ tab, full }): Promise<ToolResult> => {
+    description: 'Screenshot of a tab, or of one element with ref / selector. Only when the visual layout matters: snapshots are much cheaper. Pixels are CSS pixels, usable as x / y for {do:"mouse"}.',
+    inputSchema: { tab: z.string(), full: z.boolean().optional(), ref: z.string().optional(), selector: z.string().optional() },
+  }, async ({ tab, full, ref, selector }): Promise<ToolResult> => {
     try {
-      const buf = await getTab(tab).screenshot({ type: 'jpeg', quality: 55, fullPage: !!full });
+      const page = getTab(tab);
+      const opts = { type: 'jpeg' as const, quality: 55, scale: 'css' as const };
+      const target = ref ? elementByRef(page, ref) : selector ? page.locator(selector).first() : null;
+      const buf = target ? await target.screenshot({ ...opts, timeout: 8000 }) : await page.screenshot({ ...opts, fullPage: !!full });
       return { content: [{ type: 'image', data: buf.toString('base64'), mimeType: 'image/jpeg' }] };
     } catch (e) {
       return { ...text(`Error: ${(e as Error).message}`), isError: true };
@@ -123,9 +138,12 @@ export function buildServer(): McpServer {
     const f = loadFlow(name);
     const st = f.steps[step];
     if (!st) throw new Error(`Flow "${name}" has no step ${step}.`);
-    if (st.value === undefined && st.url === undefined) throw new Error(`Step ${step} (${st.do}) has no value to parametrize.`);
-    const was = st.value ?? st.url;
-    if (st.value !== undefined) st.value = `{{${v}}}`; else st.url = `{{${v}}}`;
+    if (st.files) {
+      if (st.files.length !== 1) throw new Error(`Step ${step} uploads ${st.files.length} files, a file variable needs exactly one.`);
+    } else if (st.value === undefined && st.url === undefined) throw new Error(`Step ${step} (${st.do}) has no value to parametrize.`);
+    const was = st.files?.[0] ?? st.value ?? st.url;
+    if (st.files) st.files = [`{{${v}}}`];
+    else if (st.value !== undefined) st.value = `{{${v}}}`; else st.url = `{{${v}}}`;
     f.vars = [...new Set([...f.vars, v])];
     f.updatedAt = new Date().toISOString();
     saveFlow(f);

@@ -45,6 +45,28 @@ export function startFixture(port = 0) {
           first.replaceWith(clone); bind(clone); clone.focus();
         }, { once: true });
       </script>`);
+    if (url.pathname === '/upload') return html('Upload', `<h1>Import</h1>
+      <input type="file" id="file" multiple hidden>
+      <button type="button" onclick="document.getElementById('file').click()">Choose files</button>
+      <p id="got"></p>
+      <script>
+        document.getElementById('file').onchange = (e) => {
+          document.getElementById('got').textContent = 'Got ' + [...e.target.files].map((f) => f.name + ':' + f.size).join(',');
+        };
+      </script>`);
+    if (url.pathname === '/dialogs') return html('Dialogs', `<h1>Dialogs</h1>
+      <button type="button" onclick="out.textContent = confirm('Really delete?') ? 'Deleted' : 'Kept'">Delete</button>
+      <button type="button" onclick="out.textContent = 'Hello ' + prompt('Your name?')">Greet</button>
+      <p id="out"></p>`);
+    if (url.pathname === '/canvas') return html('Canvas', `<h1>Canvas</h1>
+      <div id="zone" style="position:fixed;left:100px;top:200px;width:120px;height:60px;background:#eee"></div>
+      <p id="hit"></p>
+      <script>
+        document.getElementById('zone').onclick = (e) => { document.getElementById('hit').textContent = 'Hit ' + e.clientX + ',' + e.clientY; };
+        console.error('boom from the page');
+        console.warn('careful');
+        setTimeout(() => { throw new Error('uncaught kaboom'); }, 0);
+      </script>`);
     if (url.pathname === '/api/order' && req.method === 'POST') {
       let b = '';
       req.on('data', (c) => (b += c));

@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -125,4 +125,26 @@ test('passwords are never recorded', async () => {
   const flow = await mcp.call('fl_flow', { name: 'demo-secret' });
   assert.doesNotMatch(flow, /hunter2/);
   await page.close();
+});
+
+test('upload, dialogs and coordinate clicks work through the extension too', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fl-ext-up-'));
+  const file = join(dir, 'releve.csv');
+  writeFileSync(file, 'abc');
+  const up = await mcp.call('fl_open', { url: site.url + '/upload', text: 0 });
+  const upTab = /Tab (t\d+)/.exec(up)[1];
+  assert.match(await mcp.call('fl_act', { tab: upTab, actions: [{ do: 'upload', selector: '#file', files: [file] }] }), /Got releve\.csv:3/);
+  assert.match(await mcp.call('fl_act', { tab: upTab, actions: [{ do: 'upload', ref: refOf(up, /Choose files/), files: [file] }] }), /Got releve\.csv:3/);
+  await mcp.call('fl_close', { tab: upTab });
+
+  const dlg = await mcp.call('fl_open', { url: site.url + '/dialogs', text: 0 });
+  const dlgTab = /Tab (t\d+)/.exec(dlg)[1];
+  const accepted = await mcp.call('fl_act', { tab: dlgTab, actions: [{ do: 'dialog', accept: true }, { do: 'click', role: 'button', name: 'Delete' }] });
+  assert.match(accepted, /Deleted/);
+  await mcp.call('fl_close', { tab: dlgTab });
+
+  const cv = await mcp.call('fl_open', { url: site.url + '/canvas', text: 0 });
+  const cvTab = /Tab (t\d+)/.exec(cv)[1];
+  assert.match(await mcp.call('fl_act', { tab: cvTab, actions: [{ do: 'mouse', x: 150, y: 230 }] }), /Hit 150,230/);
+  await mcp.call('fl_close', { tab: cvTab });
 });

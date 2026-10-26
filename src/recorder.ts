@@ -87,10 +87,17 @@ class Recorder {
     if (!this.rec) return null;
     if (target.type === 'password') return 'password NOT recorded (keep the session logged in instead)';
     const step: Step = { do: a.do, target };
-    if (a.value !== undefined) step.value = a.var ? `{{${a.var}}}` : a.value;
+    let warning: string | null = null;
+    if (a.files) {
+      if (a.var && a.files.length === 1) step.files = [`{{${a.var}}}`];
+      else {
+        step.files = a.files;
+        if (a.var) warning = `var "${a.var}" ignored: a file variable needs exactly one file`;
+      }
+    } else if (a.value !== undefined) step.value = a.var ? `{{${a.var}}}` : a.value;
     if (a.key) step.key = a.key;
     this.rec.steps.push(step);
-    return null;
+    return warning;
   }
 
   /** A step captured by the extension while the user performs the task by hand. */
