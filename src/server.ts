@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { act, closeTab, consoleLog, elementByRef, getTab, listTabs, openTab, snapshot, type Action } from './engine.js';
+import { act, adoptTab, closeTab, consoleLog, elementByRef, getTab, listTabs, openTab, snapshot, type Action } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
@@ -54,6 +54,14 @@ export function buildServer(): McpServer {
     inputSchema: { url: z.string(), ...snapOpts },
   }, guard(async ({ url, text: t, max }) => {
     const id = await openTab(url);
+    return `Tab ${id}\n` + (await snapshot(getTab(id), { text: t, max }));
+  }));
+
+  s.registerTool('fl_adopt', {
+    description: 'Take control of a tab the user already has open in the browser (first match on a URL substring), e.g. a site they just signed in to by hand. Returns its snapshot.',
+    inputSchema: { url: z.string().describe('Substring of the tab URL'), ...snapOpts },
+  }, guard(async ({ url, text: t, max }) => {
+    const id = await adoptTab(url);
     return `Tab ${id}\n` + (await snapshot(getTab(id), { text: t, max }));
   }));
 

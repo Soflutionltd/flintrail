@@ -134,6 +134,7 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_flows` / `fl_flow` | List flows, inspect one. |
 | `fl_flow_set_var` | Turn a recorded value into a `{{variable}}`, for flows taught by demonstration. |
 | `fl_extension` | Extension connection status. |
+| `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand. |
 | `fl_tabs` / `fl_close` | Manage tabs. |
 
 ### Example

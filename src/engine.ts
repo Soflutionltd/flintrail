@@ -129,7 +129,15 @@ export async function newPage(): Promise<Page> {
     try {
       const cdp = await browser.newBrowserCDPSession();
       const waitPage = ctx.waitForEvent('page', { timeout: 8000 });
-      await cdp.send('Target.createTarget', { url: 'about:blank', background: true });
+      // Open it in the profile the user is actually using: with several Chrome profiles, the CDP default
+      // context can be a profile that is signed out of everything.
+      const { targetInfos } = (await cdp.send('Target.getTargets')) as { targetInfos: { type: string; url: string; browserContextId?: string }[] };
+      const count = new Map<string, number>();
+      for (const t of targetInfos) {
+        if (t.type === 'page' && /^https?:/.test(t.url) && t.browserContextId) count.set(t.browserContextId, (count.get(t.browserContextId) || 0) + 1);
+      }
+      const browserContextId = [...count].sort((a, b) => b[1] - a[1])[0]?.[0];
+      await cdp.send('Target.createTarget', { url: 'about:blank', background: true, ...(browserContextId ? { browserContextId } : {}) });
       const page = await waitPage;
       await cdp.detach().catch(() => {});
       return page;
@@ -146,6 +154,15 @@ export async function openTab(url?: string): Promise<string> {
     recorder.onOpen(url);
   }
   return id;
+}
+
+/** Take over a tab the user already has open, for example one where they just signed in by hand. */
+export async function adoptTab(match: string): Promise<string> {
+  const ctx = await getContext();
+  const owned = new Set(tabs.values());
+  const page = ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
+  if (!page) throw new Error(`No open tab whose URL contains "${match}".`);
+  return register(page);
 }
 
 export function getTab(id: string): Page {
