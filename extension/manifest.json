@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Flintrail",
+  "version": "1.1.0",
+  "description": "Let your AI agent drive this browser through Flintrail, and teach it a task by doing it once yourself.",
+  "homepage_url": "https://github.com/Soflutionltd/flintrail",
+  "minimum_chrome_version": "125",
+  "permissions": ["debugger", "tabs", "storage", "alarms", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Flintrail",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }
+  },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["fingerprint.js", "content.js"],
+    "all_frames": true,
+    "run_at": "document_start"
+  }]
+}

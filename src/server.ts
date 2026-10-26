@@ -3,9 +3,11 @@ import { z } from 'zod';
 import { act, closeTab, getTab, listTabs, openTab, snapshot, type Action } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { recorder } from './recorder.js';
-import { listFlows, loadFlow } from './store.js';
+import { config } from './config.js';
+import { getRelay } from './relay.js';
+import { listFlows, loadFlow, saveFlow } from './store.js';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 
 type ToolResult = { content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]; isError?: boolean };
 const text = (t: string): ToolResult => ({ content: [{ type: 'text', text: t }] });
@@ -113,6 +115,32 @@ export function buildServer(): McpServer {
 
   s.registerTool('fl_flow', { description: 'Show a flow with all its steps and element fingerprints.', inputSchema: { name: z.string() } },
     guard(async ({ name }) => JSON.stringify(loadFlow(name), null, 1)));
+
+  s.registerTool('fl_flow_set_var', {
+    description: 'Turn the literal value of one step into a variable {{var}}, e.g. after recording by demonstration.',
+    inputSchema: { name: z.string(), step: z.number().describe('Step index, as shown by fl_flow (0-based).'), var: z.string().regex(/^\w+$/) },
+  }, guard(async ({ name, step, var: v }) => {
+    const f = loadFlow(name);
+    const st = f.steps[step];
+    if (!st) throw new Error(`Flow "${name}" has no step ${step}.`);
+    if (st.value === undefined && st.url === undefined) throw new Error(`Step ${step} (${st.do}) has no value to parametrize.`);
+    const was = st.value ?? st.url;
+    if (st.value !== undefined) st.value = `{{${v}}}`; else st.url = `{{${v}}}`;
+    f.vars = [...new Set([...f.vars, v])];
+    f.updatedAt = new Date().toISOString();
+    saveFlow(f);
+    return `Step ${step} of "${name}" now uses {{${v}}} (recorded value was "${was}").`;
+  }));
+
+  s.registerTool('fl_extension', { description: 'Status of the Flintrail browser extension (extension mode).', inputSchema: {} },
+    guard(async () => {
+      if (config.mode !== 'extension') return `Mode is "${config.mode}". Set FLINTRAIL_MODE=extension to drive the browser through the extension.`;
+      const r = getRelay();
+      if (!r) return `Relay not running (port ${config.relayPort} owned by another Flintrail process?).`;
+      return r.connected
+        ? `Extension connected: ${r.info.browser || 'browser'} ${r.info.version || ''}. Recording: ${recorder.status() || 'none'}.`
+        : `Relay listening on 127.0.0.1:${config.relayPort}, extension not connected. Token: ${config.home}/token.`;
+    }));
 
   return s;
 }

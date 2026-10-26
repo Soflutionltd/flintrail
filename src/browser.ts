@@ -2,12 +2,15 @@
 //  - attach (default): connect over CDP to a dedicated Chrome for Testing that keeps your logged-in sessions.
 //    On macOS Flintrail finds it, starts it with a local debugging port, and refuses any other browser.
 //  - launch: start its own Chromium with a persistent profile (servers, CI, headless).
+//  - extension: drive the browser where the Flintrail extension is installed, through the local relay.
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { config } from './config.js';
+import { loadToken } from './auth.js';
+import { startRelay } from './relay.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -96,6 +99,17 @@ let ctxPromise: Promise<BrowserContext> | null = null;
 let browserRef: Browser | null = null;
 
 async function connect(): Promise<BrowserContext> {
+  if (config.mode === 'extension') {
+    const relay = await startRelay(loadToken());
+    if (!relay) throw new Error(`Another Flintrail process owns the extension relay on port ${config.relayPort}.`);
+    await relay.waitForExtension(config.extensionWaitMs);
+    const browser = await chromium.connectOverCDP(relay.cdpUrl, { timeout: 15000 });
+    browserRef = browser;
+    browser.on('disconnected', () => { ctxPromise = null; browserRef = null; });
+    const ctx = browser.contexts()[0];
+    if (!ctx) throw new Error('Extension browser exposes no context.');
+    return ctx;
+  }
   if (config.mode === 'launch') {
     const ctx = await chromium.launchPersistentContext(config.profileDir, {
       headless: config.headless,

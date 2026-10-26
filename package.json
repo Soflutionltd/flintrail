@@ -1,6 +1,6 @@
 {
   "name": "flintrail",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The fastest browser MCP server: drive a real Chrome live, record a flow once, replay it in milliseconds without an LLM, or skip the UI entirely and replay the site's own API calls.",
   "type": "module",
   "bin": {
@@ -9,16 +9,18 @@
   "main": "dist/server.js",
   "files": [
     "dist",
+    "extension",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-extension.mjs",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "npm run build && node --test test/*.test.mjs",
     "bench": "npm run build && npm --prefix bench install --no-audit --no-fund && node bench/bench.mjs && node bench/chart.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pack:extension": "npm run build && node scripts/build-extension.mjs --zip"
   },
   "keywords": [
     "mcp",
@@ -45,10 +47,12 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "playwright-core": "1.64.1",
+    "ws": "^8.22.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.0.0",
     "typescript": "^5.9.0"
   }

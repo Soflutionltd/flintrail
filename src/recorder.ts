@@ -93,6 +93,19 @@ class Recorder {
     return null;
   }
 
+  /** A step captured by the extension while the user performs the task by hand. */
+  addDemoStep(step: Step) {
+    if (!this.rec || !step || !step.do) return;
+    if (step.target?.type === 'password') return;
+    const last = this.rec.steps.at(-1);
+    // Typing produces several change events on the same field: keep only the final value.
+    if (step.do === 'fill' && last?.do === 'fill' && JSON.stringify(last.target) === JSON.stringify(step.target)) {
+      last.value = step.value;
+      return;
+    }
+    this.rec.steps.push({ do: step.do, target: step.target, value: step.value, key: step.key });
+  }
+
   onRequest(r: Request) {
     const type = r.resourceType();
     if (type !== 'fetch' && type !== 'xhr') return;

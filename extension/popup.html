@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#0E1116; --card:#161B23; --line:#262E3B; --text:#E8ECF2; --muted:#8B95A7; --accent:#FF6A1A; --rec:#E5262B; --ok:#2FBF71; }
+  * { box-sizing: border-box; }
+  body { margin:0; width:320px; background:var(--bg); color:var(--text); font:13px/1.4 Inter,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+  header { display:flex; align-items:center; gap:10px; padding:14px 16px 10px; }
+  header img { width:28px; height:28px; }
+  header b { font-size:16px; letter-spacing:-.3px; color:var(--accent); }
+  header b span { color:var(--muted); }
+  #dot { margin-left:auto; width:9px; height:9px; border-radius:50%; background:#555; }
+  #dot.connected { background:var(--ok); } #dot.connecting { background:#FFB020; } #dot.error { background:var(--rec); }
+  section { margin:0 12px 10px; padding:12px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+  h2 { margin:0 0 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  input { width:100%; padding:7px 9px; margin-bottom:8px; background:var(--bg); border:1px solid var(--line); border-radius:7px; color:var(--text); font:inherit; }
+  input:focus { outline:none; border-color:var(--accent); }
+  .row { display:flex; gap:8px; }
+  .row input.port { width:76px; flex:none; }
+  button { flex:1; padding:8px 10px; border:0; border-radius:7px; background:var(--accent); color:#fff; font:600 13px inherit; font-family:inherit; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--text); }
+  button.rec { background:var(--rec); }
+  button:disabled { opacity:.45; cursor:default; }
+  #status, #msg { color:var(--muted); font-size:12px; margin-top:6px; min-height:16px; }
+  #recinfo { color:var(--rec); font-weight:600; font-size:12px; margin-top:6px; }
+  .hidden { display:none; }
+  footer { padding:2px 16px 12px; color:var(--muted); font-size:11px; }
+  footer a { color:var(--muted); }
+</style>
+</head>
+<body>
+  <header><img src="icons/48.png" alt=""><b>Flint<span>rail</span></b><div id="dot" title="status"></div></header>
+
+  <section id="connectBox">
+    <h2>Connection</h2>
+    <div class="row"><input id="token" type="password" placeholder="Token (~/.flintrail/token)" autocomplete="off"><input id="port" class="port" placeholder="8932"></div>
+    <div class="row"><button id="connect">Connect</button><button id="disconnect" class="ghost hidden">Disconnect</button></div>
+    <div id="status"></div>
+  </section>
+
+  <section>
+    <h2>This tab</h2>
+    <div class="row"><button id="share" class="ghost">Share with agent</button></div>
+  </section>
+
+  <section>
+    <h2>Teach by demonstration</h2>
+    <input id="flow" placeholder="Flow name, e.g. paybyphone-renew">
+    <div class="row"><button id="recStart" class="rec">Start recording</button><button id="recStop" class="ghost hidden">Stop and save</button></div>
+    <div id="recinfo"></div>
+    <div id="msg"></div>
+  </section>
+
+  <footer>Passwords are never recorded. <a href="https://github.com/Soflutionltd/flintrail" target="_blank">Docs</a></footer>
+  <script src="popup.js"></script>
+</body>
+</html>

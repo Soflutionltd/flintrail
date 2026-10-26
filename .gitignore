@@ -5,3 +5,4 @@ docs/*.preview.png
 *.log
 .DS_Store
 bench/.playwright-mcp/
+*.zip

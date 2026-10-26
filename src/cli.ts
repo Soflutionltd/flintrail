@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 // flintrail            -> MCP over stdio (Claude Desktop, Claude Code, Cursor...)
 // flintrail --http     -> MCP over Streamable HTTP with a bearer token (remote agents, servers)
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
 import { join } from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { loadToken } from './auth.js';
 import { shutdown } from './browser.js';
 import { config } from './config.js';
+import { startRelay } from './relay.js';
 import { buildServer, VERSION } from './server.js';
 
 const args = process.argv.slice(2);
@@ -29,7 +30,7 @@ if (flag('help')) {
   flintrail --http          MCP over HTTP (default 127.0.0.1:8931, path /mcp)
     --host <h> --port <p>   listen address
     --token <t>             bearer token (default: FLINTRAIL_TOKEN or ~/.flintrail/token)
-Environment: FLINTRAIL_MODE=attach|launch, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0`);
+Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0`);
   process.exit(0);
 }
 
@@ -37,16 +38,9 @@ const stop = async () => { await shutdown(); process.exit(0); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
-function loadToken(): string {
-  const given = opt('token', process.env.FLINTRAIL_TOKEN || '');
-  if (given) return given;
-  const f = join(config.home, 'token');
-  if (existsSync(f)) return readFileSync(f, 'utf8').trim();
-  mkdirSync(config.home, { recursive: true });
-  const t = randomBytes(24).toString('base64url');
-  writeFileSync(f, t, { mode: 0o600 });
-  return t;
-}
+// In extension mode the relay starts right away, so the extension can connect (and record by
+// demonstration) even before the agent makes its first call.
+if (config.mode === 'extension') await startRelay(loadToken(opt('token', '')));
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -58,7 +52,7 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 if (flag('http')) {
   const host = opt('host', '127.0.0.1');
   const port = Number(opt('port', '8931'));
-  const token = Buffer.from(loadToken());
+  const token = Buffer.from(loadToken(opt('token', '')));
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const http = createServer(async (req, res) => {
     try {

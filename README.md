@@ -12,6 +12,7 @@
 <p align="center">
   <a href="https://github.com/Soflutionltd/flintrail/actions/workflows/ci.yml"><img src="https://github.com/Soflutionltd/flintrail/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-FF6A1A" alt="MCP">
+  <img src="https://img.shields.io/badge/Chrome-extension-4285F4" alt="Chrome extension">
   <img src="https://img.shields.io/badge/node-%E2%89%A520-3FB950" alt="Node 20+">
   <img src="https://img.shields.io/badge/license-MIT-8B95A7" alt="MIT">
 </p>
@@ -84,8 +85,37 @@ Clients connect to `http://host:8931/mcp` with `Authorization: Bearer <token>`. 
 |---|---|---|
 | `attach` (default) | Your desktop. Keep your logged-in sessions. | Connects over CDP to a dedicated **Chrome for Testing**. On macOS Flintrail finds it, restarts it with a local debugging port if needed (tabs are restored) and opens its own tabs in the background. |
 | `launch` | Servers, CI, Docker. | `FLINTRAIL_MODE=launch` starts Chromium with a persistent profile in `~/.flintrail/profile`, headless by default. |
+| `extension` | Anyone, any Chromium browser, no debugging port. | `FLINTRAIL_MODE=extension` and the Flintrail extension installed. See below. |
 
 Flintrail refuses to attach to a personal browser (Brave, Edge, Opera, or on macOS anything that is not Chrome for Testing) unless `FLINTRAIL_ALLOW_ANY_BROWSER=1`. Your everyday browser stays yours.
+
+## Browser extension
+
+The extension is the easiest way in: no command-line flags, no debugging port, works in Chrome, Edge, Brave, Arc or any Chromium 125+.
+
+<p align="center"><img src="docs/extension-popup.png" alt="Flintrail extension popup" width="320"></p>
+
+1. **Install.** Download `flintrail-extension-<version>.zip` from the [latest release](https://github.com/Soflutionltd/flintrail/releases/latest), unzip it, open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and pick the folder. (Chrome Web Store listing in progress.)
+2. **Run Flintrail in extension mode**, for example in Claude Desktop:
+   ```json
+   { "mcpServers": { "flintrail": { "command": "npx", "args": ["-y", "flintrail"], "env": { "FLINTRAIL_MODE": "extension" } } } }
+   ```
+3. **Connect.** Click the Flintrail icon, paste the token from `~/.flintrail/token`, click *Connect*. The extension reconnects by itself afterwards.
+
+How it works: Flintrail starts a relay on `127.0.0.1:8932`. The extension connects to it with the token and executes CDP commands with `chrome.debugger`, one tab at a time. Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged. The agent only sees tabs it opened itself or tabs you share with *Share with agent*. Chrome shows its "started debugging this browser" bar while a tab is driven, by design.
+
+### Teach by demonstration
+
+You do not have to explain a task to the agent. Type a flow name in the popup, click *Start recording*, do the task yourself in the tab, click *Stop and save*. The extension records clicks, typing, selects, checkboxes and Enter with the same element fingerprints the engine uses, and never records password fields. Then:
+
+```text
+fl_flow_set_var("paybyphone-renew", 0, "plate")   # turn the typed plate into {{plate}}
+fl_run("paybyphone-renew", { "plate": "AB-123-CD" })
+```
+
+The flow now runs without you, without the LLM, in milliseconds per step.
+
+Limits in extension mode: browser-level CDP (download folder, permissions, window size) is not available to extensions, so `download` saves through the browser's normal download flow.
 
 ## Tools
 
@@ -101,6 +131,8 @@ Flintrail refuses to attach to a personal browser (Brave, Edge, Opera, or on mac
 | `fl_run` | Replay a flow with variables, no LLM. |
 | `fl_run_many` | Replay a flow for many variable sets in parallel tabs. |
 | `fl_flows` / `fl_flow` | List flows, inspect one. |
+| `fl_flow_set_var` | Turn a recorded value into a `{{variable}}`, for flows taught by demonstration. |
+| `fl_extension` | Extension connection status. |
 | `fl_tabs` / `fl_close` | Manage tabs. |
 
 ### Example
@@ -133,26 +165,29 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 
 | Variable | Default | |
 |---|---|---|
-| `FLINTRAIL_MODE` | `attach` | `attach` or `launch` |
+| `FLINTRAIL_MODE` | `attach` | `attach`, `launch` or `extension` |
+| `FLINTRAIL_RELAY_PORT` | `8932` | Local port the extension connects to |
 | `FLINTRAIL_CDP_URL` | `http://127.0.0.1:9222` | Browser to attach to |
 | `FLINTRAIL_PORT` | `9222` | Debugging port used when Flintrail starts Chrome for Testing |
 | `FLINTRAIL_CHROME` | auto | Browser executable |
 | `FLINTRAIL_HEADLESS` | `1` | `0` to see the window in launch mode |
 | `FLINTRAIL_HOME` | `~/.flintrail` | Flows, profile, token |
 | `FLINTRAIL_DOWNLOADS` | `~/Downloads/Flintrail` | Where downloads land |
-| `FLINTRAIL_TOKEN` | generated | HTTP bearer token |
+| `FLINTRAIL_TOKEN` | generated | HTTP bearer token and extension token |
 
 ## Develop
 
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 9 end-to-end tests over real MCP
+npm test                               # build + 12 end-to-end tests over real MCP, extension included
+npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```
 
 ## Roadmap
 
+- Chrome Web Store and Edge Add-ons listings for the extension.
 - Automatic promotion of recorded UI steps to API steps when the captured call is replay-safe.
 - Shared flow library for common sites.
 - Visual diff on replay failure.
@@ -160,6 +195,8 @@ npm run bench                          # benchmark vs Playwright MCP
 ## En français
 
 Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,4 s avec Playwright MCP et 0,11 s avec Flintrail en mode API.
+
+L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, on colle le jeton, et l'agent pilote le navigateur. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
 
 ## License
 
