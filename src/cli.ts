@@ -83,4 +83,7 @@ if (flag('http')) {
   });
 } else {
   await buildServer().connect(new StdioServerTransport());
+  // An attached browser keeps the event loop alive: leave when the client goes away, or the process lingers.
+  process.stdin.on('end', stop);
+  process.stdin.on('close', stop);
 }
