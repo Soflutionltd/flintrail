@@ -1,17 +1,18 @@
 {
   "name": "flintrail",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "The fastest browser MCP server: drive a real Chrome live, record a flow once, replay it in milliseconds without an LLM, or skip the UI entirely and replay the site's own API calls.",
   "type": "module",
   "bin": {
-    "flintrail": "dist/cli.js"
+    "flintrail": "bin/supervise.cjs"
   },
   "main": "dist/server.js",
   "files": [
     "dist",
     "extension",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "bin"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-extension.mjs",
@@ -56,5 +57,8 @@
     "@types/ws": "^8.18.2",
     "tsx": "^4.0.0",
     "typescript": "^5.9.0"
+  },
+  "bugs": {
+    "url": "https://github.com/Soflutionltd/flintrail/issues"
   }
 }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Flintrail",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Let your AI agent drive this browser through Flintrail, and teach it a task by doing it once yourself.",
   "homepage_url": "https://github.com/Soflutionltd/flintrail",
   "minimum_chrome_version": "125",
