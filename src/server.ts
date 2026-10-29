@@ -118,7 +118,7 @@ export function buildServer(): McpServer {
       const buf = target ? await target.screenshot({ ...opts, timeout: 8000 }) : await page.screenshot({ ...opts, fullPage: !!full });
       return { content: [{ type: 'image', data: buf.toString('base64'), mimeType: 'image/jpeg' }] };
     } catch (e) {
-      return { ...text(`Error: ${(e as Error).message}`), isError: true };
+      return { ...text(redact(`Error: ${(e as Error).message}`)), isError: true };
     }
   });
 

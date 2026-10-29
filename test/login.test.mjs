@@ -6,7 +6,7 @@ import { connect, testEnv } from './helpers.mjs';
 
 const fakeOp = new URL('./fake-op.mjs', import.meta.url).pathname;
 const SECRET = 'S3cret pass&"42';
-const leaks = (out) => [SECRET, JSON.stringify(SECRET).slice(1, -1), encodeURIComponent(SECRET)].some((s) => out.includes(s));
+const leaks = (out) => [SECRET, JSON.stringify(SECRET).slice(1, -1), encodeURIComponent(SECRET), '123456'].some((s) => out.includes(s));
 
 let site, mcp;
 
@@ -39,7 +39,7 @@ test('signs in from 1Password and never returns the password', async () => {
   assert.match(net, /•••/);
   assert.ok(!leaks(net), 'request body must be masked');
 
-  const read = await mcp.call('fl_extract', { tab, js: 'return document.querySelector("[name=password]").value' });
+  const read = await mcp.call('fl_extract', { tab, js: 'return [f.password.value, f.otp.value]' });
   assert.ok(!leaks(read), 'page reads must be masked');
   await mcp.call('fl_close', { tab });
 });

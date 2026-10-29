@@ -19,12 +19,21 @@ interface Marked { user: boolean; pass: boolean; otp: 'one' | 'split' | null }
 const LIST_TTL = 10 * 60_000;
 const TIMEOUT = 8000;
 const lists = new Map<string, { at: number; items: Candidate[] }>();
-const secrets = new Set<string>();
+/** Secret -> time after which it is no longer masked. One-time codes expire fast and look like ordinary numbers. */
+const secrets = new Map<string, number>();
+const CODE_MASK_MS = 3 * 60_000;
+const remember = (s: string, ttl: number) => {
+  if (s.length >= 4) secrets.set(s, Date.now() + ttl);
+};
 
-/** Masks every password fl_login filled, raw or encoded as a form, URL or JSON value would carry it. */
+/** Masks every password and one-time code fl_login filled, raw or encoded as a form, URL or JSON value would carry it. */
 export function redact(text: string): string {
   let out = text;
-  for (const s of secrets) {
+  for (const [s, until] of secrets) {
+    if (until < Date.now()) {
+      secrets.delete(s);
+      continue;
+    }
     const forms = [s, encodeURIComponent(s), new URLSearchParams({ v: s }).toString().slice(2), JSON.stringify(s).slice(1, -1)];
     for (const f of new Set(forms)) out = out.split(f).join('•••');
   }
@@ -107,12 +116,10 @@ async function credentials(item: Candidate) {
   const raw = await op(item.cli, ['item', 'get', item.id, '--vault', item.vault.id, '--reveal', '--format', 'json']);
   const fields = (JSON.parse(raw) as { fields?: OpField[] }).fields || [];
   const password = fields.find((f) => f.purpose === 'PASSWORD')?.value || '';
-  if (password.length >= 4) secrets.add(password);
-  return {
-    username: fields.find((f) => f.purpose === 'USERNAME')?.value || '',
-    password,
-    totp: fields.find((f) => f.type === 'OTP')?.totp || '',
-  };
+  const totp = fields.find((f) => f.type === 'OTP')?.totp || '';
+  remember(password, Infinity);
+  remember(totp, CODE_MASK_MS);
+  return { username: fields.find((f) => f.purpose === 'USERNAME')?.value || '', password, totp };
 }
 
 /** Runs in the page: tags the visible username, password and one-time-code inputs with data-fl-login. */
