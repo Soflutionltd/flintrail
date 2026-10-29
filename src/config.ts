@@ -20,6 +20,8 @@ export const config = {
   relayPort: Number(env.FLINTRAIL_RELAY_PORT || 8932),
   extensionWaitMs: Number(env.FLINTRAIL_EXTENSION_WAIT || 15000),
   downloadsDir: env.FLINTRAIL_DOWNLOADS || join(homedir(), 'Downloads', 'Flintrail'),
-  /** 1Password CLI commands tried in order by fl_login, e.g. a service-account wrapper first, then "op". Empty: fl_login is off. */
-  opClis: (env.FLINTRAIL_OP || '').split(',').map((c) => c.trim()).filter(Boolean),
+  /** Password sources fl_login tries in order: browser, 1password[:bin], bitwarden[:bin], command:bin. "off" disables it. */
+  passwordSources: (env.FLINTRAIL_PASSWORDS ?? 'browser').trim().toLowerCase() === 'off'
+    ? []
+    : (env.FLINTRAIL_PASSWORDS || 'browser').split(',').map((c) => c.trim()).filter(Boolean),
 };

@@ -31,7 +31,7 @@ if (flag('help')) {
     --host <h> --port <p>   listen address
     --token <t>             bearer token (default: FLINTRAIL_TOKEN or ~/.flintrail/token)
 Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0,
-  FLINTRAIL_OP=<1Password CLI command[,fallback]> enables fl_login`);
+  FLINTRAIL_PASSWORDS=browser,1password[:path],bitwarden[:path],command:path   sources for fl_login, in order (default browser, "off" to disable)`);
   process.exit(0);
 }
 

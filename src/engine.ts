@@ -37,7 +37,8 @@ export interface Action {
   method?: string;
   body?: string;
   headers?: Record<string, string>;
-  /** login steps: 1Password item ID, and whether to press Enter after filling. */
+  /** login steps: password source, login ID in that source, and whether to press Enter after filling. */
+  source?: string;
   item?: string;
   submit?: boolean;
 }

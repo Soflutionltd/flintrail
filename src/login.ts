@@ -1,27 +1,20 @@
-// Signs in with a 1Password item. Flintrail reads the item through 1Password CLI and fills the form itself:
-// the password and the one-time code never reach the agent, only the list of fields filled does.
-import { execFile } from 'node:child_process';
+// Signs in on the open sign-in form. Either the browser's own password manager has filled it (Flintrail only
+// confirms with a real click), or Flintrail reads a password manager CLI and fills the form itself. Either way
+// the agent only gets the list of fields filled: passwords and one-time codes are masked in every tool result.
 import type { Frame, Locator, Page } from 'playwright-core';
 import { config } from './config.js';
 import { withNavigation } from './engine.js';
+import { hostOf, parseSources, type Account, type CliSource, type SourceSpec } from './passwords.js';
 
-interface OpItem {
-  id: string;
-  title: string;
-  vault: { id: string; name: string };
-  urls?: { href: string }[];
-  additional_information?: string;
-}
-interface Candidate extends OpItem { cli: string; hosts: string[]; sites: string[] }
-interface OpField { type?: string; purpose?: string; value?: string; totp?: string }
-interface Marked { user: boolean; pass: boolean; otp: 'one' | 'split' | null }
+interface Marked { user: boolean; pass: boolean; otp: 'one' | 'split' | null; autofilled: boolean }
 
-const LIST_TTL = 10 * 60_000;
 const TIMEOUT = 8000;
-const lists = new Map<string, { at: number; items: Candidate[] }>();
+const BROWSER_FILL_WAIT = 1500;
+const CODE_MASK_MS = 3 * 60_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** Secret -> time after which it is no longer masked. One-time codes expire fast and look like ordinary numbers. */
 const secrets = new Map<string, number>();
-const CODE_MASK_MS = 3 * 60_000;
 const remember = (s: string, ttl: number) => {
   if (s.length >= 4) secrets.set(s, Date.now() + ttl);
 };
@@ -40,15 +33,7 @@ export function redact(text: string): string {
   return out;
 }
 
-const hostOf = (url: string) => {
-  try {
-    return new URL(url.includes('://') ? url : `https://${url}`).hostname.toLowerCase();
-  } catch {
-    return '';
-  }
-};
-
-/** Registrable domain, close enough for matching a page to a vault item: accounts.google.com -> google.com. */
+/** Registrable domain, close enough for matching a page to a saved login: accounts.google.com -> google.com. */
 export function siteOf(host: string): string {
   const h = host.replace(/\.$/, '');
   if (!h.includes('.') || h.includes(':') || /^[\d.]+$/.test(h)) return h;
@@ -57,70 +42,12 @@ export function siteOf(host: string): string {
   return p.slice(twoPart ? -3 : -2).join('.');
 }
 
-function op(cli: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cli, args, { timeout: 90_000, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(`1Password CLI (${cli}): ${(stderr || err.message).trim().split('\n')[0]}`));
-      else resolve(stdout);
-    });
-  });
-}
-
-async function itemsOf(cli: string, fresh: boolean): Promise<Candidate[]> {
-  const hit = lists.get(cli);
-  if (hit && !fresh && Date.now() - hit.at < LIST_TTL) return hit.items;
-  const raw = JSON.parse(await op(cli, ['item', 'list', '--categories', 'Login', '--format', 'json'])) as OpItem[];
-  const items = raw.map((i) => {
-    const hosts = (i.urls || []).map((u) => hostOf(u.href)).filter(Boolean);
-    return { ...i, cli, hosts, sites: [...new Set(hosts.map(siteOf))] };
-  });
-  lists.set(cli, { at: Date.now(), items });
-  return items;
-}
+let sources: SourceSpec[] | null = null;
+const getSources = () => (sources ??= parseSources(config.passwordSources));
 
 const liveFrames = (page: Page) => page.frames().filter((f) => !f.isDetached() && /^https?:/.test(f.url()));
-const label = (i: Candidate) => `"${i.title}" (${[i.additional_information, `vault ${i.vault.name}`, `id ${i.id}`].filter(Boolean).join(', ')})`;
-
-/** The item to use: the one asked for, or the only Login whose website matches the page. Sources are tried in order. */
-async function findItem(page: Page, wanted?: string): Promise<Candidate> {
-  const frames = liveFrames(page);
-  const pageHosts = new Set(frames.map((f) => hostOf(f.url())));
-  const pageSites = new Set([...pageHosts].map(siteOf));
-  const matchOf = (items: Candidate[]) => wanted
-    ? items.filter((i) => i.id === wanted || i.title.toLowerCase() === wanted.toLowerCase())
-    : items.filter((i) => i.sites.some((s) => pageSites.has(s)));
-  for (const cli of config.opClis) {
-    let found = matchOf(await itemsOf(cli, false));
-    if (!found.length) found = matchOf(await itemsOf(cli, true));
-    if (!found.length) continue;
-    if (wanted) {
-      const here = found.filter((i) => i.sites.some((s) => pageSites.has(s)));
-      if (!here.length) {
-        const where = found[0]!.sites.join(', ') || 'no website';
-        throw new Error(`Refused: 1Password item ${label(found[0]!)} is for ${where}, this tab is on ${[...pageSites].join(', ')}. Add this website to the item in 1Password if it is really the same account.`);
-      }
-      found = here;
-    } else {
-      const exact = found.filter((i) => i.hosts.some((h) => pageHosts.has(h)));
-      if (exact.length === 1) found = exact;
-    }
-    if (found.length > 1) throw new Error(`Several 1Password items match, pass item with one of these ids: ${found.map(label).join('; ')}`);
-    return found[0]!;
-  }
-  throw new Error(wanted
-    ? `No 1Password Login item "${wanted}" in the vaults Flintrail can read.`
-    : `No 1Password Login item for ${[...pageSites].join(', ')}. Pass item, or add this website to the right item in 1Password.`);
-}
-
-async function credentials(item: Candidate) {
-  const raw = await op(item.cli, ['item', 'get', item.id, '--vault', item.vault.id, '--reveal', '--format', 'json']);
-  const fields = (JSON.parse(raw) as { fields?: OpField[] }).fields || [];
-  const password = fields.find((f) => f.purpose === 'PASSWORD')?.value || '';
-  const totp = fields.find((f) => f.type === 'OTP')?.totp || '';
-  remember(password, Infinity);
-  remember(totp, CODE_MASK_MS);
-  return { username: fields.find((f) => f.purpose === 'USERNAME')?.value || '', password, totp };
-}
+const label = (a: Account) => `"${a.title}" (${[a.username, a.where, `id ${a.ref}`].filter(Boolean).join(', ')})`;
+const sitesOf = (a: Account) => [...new Set(a.hosts.map(siteOf))];
 
 /** Runs in the page: tags the visible username, password and one-time-code inputs with data-fl-login. */
 function markLoginFields(): Marked {
@@ -130,6 +57,13 @@ function markLoginFields(): Marked {
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0;
+  };
+  const filledByBrowser = (el: HTMLInputElement) => {
+    try {
+      return el.matches(':autofill');
+    } catch {
+      return el.matches(':-webkit-autofill');
+    }
   };
   const inputs = [...document.querySelectorAll('input')].filter(shown);
   const hint = (i: HTMLInputElement) =>
@@ -156,58 +90,140 @@ function markLoginFields(): Marked {
   if (!user && pass) user = users.filter((i) => i.compareDocumentPosition(pass) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1) ?? null;
   if (user) user.dataset.flLogin = 'user';
   if (pass) pass.dataset.flLogin = 'pass';
-  return { user: !!user, pass: !!pass, otp };
+  const autofilled = [user, pass].some((el) => !!el && filledByBrowser(el) && el.value !== '');
+  return { user: !!user, pass: !!pass, otp, autofilled };
 }
 
-/**
- * Fills the sign-in fields visible on the page (username, password, one-time code) from a 1Password item,
- * only in frames whose domain matches the item's website. Call it again on each step of a multi-step sign-in.
- */
-export async function signIn(page: Page, opts: { item?: string; submit?: boolean }): Promise<{ item: string; text: string }> {
-  if (!config.opClis.length) throw new Error('fl_login is off: set FLINTRAIL_OP to the 1Password CLI command to use.');
-  const item = await findItem(page, opts.item);
-  const frames = liveFrames(page).filter((f) => item.sites.includes(siteOf(hostOf(f.url()))));
-  const marks = await Promise.all(frames.map((f) => f.evaluate(markLoginFields).catch(() => null)));
+const markAll = (frames: Frame[]) => Promise.all(frames.map((f) => f.evaluate(markLoginFields).catch(() => null)));
+const field = (frame: Frame, k: string) => frame.locator(`[data-fl-login="${k}"]`).first();
+
+/** The browser's password manager already filled the form: confirm with a real click so the page can read it. */
+async function useBrowserFill(page: Page): Promise<{ text: string; last: Locator; codeWanted: boolean } | null> {
+  const frames = liveFrames(page);
+  let marks = await markAll(frames);
+  if (!marks.some((m) => m?.user || m?.pass)) return null;
+  for (let waited = 0; !marks.some((m) => m?.autofilled) && waited < BROWSER_FILL_WAIT; waited += 250) {
+    await sleep(250);
+    marks = await markAll(frames);
+  }
+  const i = marks.findIndex((m) => m?.autofilled);
+  if (i < 0) return null;
+  const m = marks[i]!;
+  const frame = frames[i]!;
+  const last = field(frame, m.pass ? 'pass' : 'user');
+  await last.click({ timeout: TIMEOUT });
+  if (m.pass) remember(await field(frame, 'pass').inputValue({ timeout: TIMEOUT }), Infinity);
+  const filled = [m.user && 'username', m.pass && 'password'].filter(Boolean).join(', ');
+  return { text: `Browser password manager: filled ${filled}`, last, codeWanted: !!m.otp };
+}
+
+/** The account to use from one CLI source: the one asked for, or the only one whose website matches the page. */
+async function findAccount(page: Page, source: CliSource, wanted?: string): Promise<Account | null> {
+  const pageHosts = new Set(liveFrames(page).map((f) => hostOf(f.url())));
+  const pageSites = new Set([...pageHosts].map(siteOf));
+  const w = wanted?.toLowerCase();
+  const matchOf = (all: Account[]) => w
+    ? all.filter((a) => a.ref === wanted || a.title.toLowerCase() === w || a.username.toLowerCase() === w)
+    : all.filter((a) => sitesOf(a).some((s) => pageSites.has(s)));
+  let found = matchOf(await source.accounts(page.url(), false));
+  if (!found.length) found = matchOf(await source.accounts(page.url(), true));
+  if (!found.length) return null;
+  if (w) {
+    const here = found.filter((a) => sitesOf(a).some((s) => pageSites.has(s)));
+    if (!here.length) {
+      const where = sitesOf(found[0]!).join(', ') || 'no website';
+      throw new Error(`Refused: login ${label(found[0]!)} is for ${where}, this tab is on ${[...pageSites].join(', ')}. Add this website to the saved login if it is really the same account.`);
+    }
+    found = here;
+  } else {
+    const exact = found.filter((a) => a.hosts.some((h) => pageHosts.has(h)));
+    if (exact.length === 1) found = exact;
+  }
+  if (found.length > 1) throw new Error(`Several saved logins match, pass item with one of these ids: ${found.map(label).join('; ')}`);
+  return found[0]!;
+}
+
+/** Fills the form from a CLI source, only in frames whose domain matches the account's website. */
+async function useAccount(page: Page, account: Account) {
+  const sites = sitesOf(account);
+  const frames = liveFrames(page).filter((f) => sites.includes(siteOf(hostOf(f.url()))));
+  const marks = await markAll(frames);
   if (!marks.some((m) => m && (m.user || m.pass || m.otp))) {
     throw new Error(`No sign-in field visible on ${page.url()}. Open the sign-in form first (often a "Sign in" button).`);
   }
-  const creds = await credentials(item);
+  const creds = await account.reveal();
+  remember(creds.password, Infinity);
+  remember(creds.totp, CODE_MASK_MS);
   const filled: string[] = [];
   let last: Locator | null = null;
   let codeWanted = false;
   for (let i = 0; i < frames.length; i++) {
     const m = marks[i];
     if (!m) continue;
-    const field = (k: string) => (frames[i] as Frame).locator(`[data-fl-login="${k}"]`).first();
+    const frame = frames[i]!;
     if (m.user && creds.username) {
-      await field('user').fill(creds.username, { timeout: TIMEOUT });
+      last = field(frame, 'user');
+      await last.fill(creds.username, { timeout: TIMEOUT });
       filled.push('username');
-      last = field('user');
     }
     if (m.pass) {
-      if (!creds.password) throw new Error(`1Password item ${label(item)} has no password.`);
-      await field('pass').fill(creds.password, { timeout: TIMEOUT });
+      if (!creds.password) throw new Error(`Login ${label(account)} has no password.`);
+      last = field(frame, 'pass');
+      await last.fill(creds.password, { timeout: TIMEOUT });
       filled.push('password');
-      last = field('pass');
     }
     if (m.otp && !creds.totp) codeWanted = true;
     if (m.otp && creds.totp) {
-      const box = field('otp');
+      last = field(frame, 'otp');
       if (m.otp === 'split') {
-        await box.click({ timeout: TIMEOUT });
+        await last.click({ timeout: TIMEOUT });
         await page.keyboard.type(creds.totp, { delay: 40 });
-      } else await box.fill(creds.totp, { timeout: TIMEOUT });
+      } else await last.fill(creds.totp, { timeout: TIMEOUT });
       filled.push('one-time code');
-      last = box;
     }
   }
   if (!last) {
     throw new Error(codeWanted
-      ? `The page asks for a code that 1Password does not hold for ${label(item)} (SMS, e-mail or phone prompt): ask the user for it.`
-      : `Nothing to fill: item ${label(item)} has no username for this field.`);
+      ? `The page asks for a code that ${account.source} does not hold for ${label(account)} (SMS, e-mail or phone prompt): ask the user for it.`
+      : `Nothing to fill: login ${label(account)} has no username for this field.`);
+  }
+  return { text: `${account.source} login ${label(account)}: filled ${filled.join(', ')}`, last, codeWanted };
+}
+
+/**
+ * Signs in on the visible step of a sign-in form. Sources are tried in the configured order; item (an ID, title or
+ * username) or source restrict the choice. Returns what to record in a flow: the source and the account ref, never a secret.
+ */
+export async function signIn(page: Page, opts: { item?: string; source?: string; submit?: boolean }): Promise<{ text: string; source: string; item?: string }> {
+  const all = getSources().filter((s) => !opts.source || s.kind === opts.source);
+  if (!all.length) throw new Error(opts.source ? `Password source "${opts.source}" is not configured in FLINTRAIL_PASSWORDS.` : 'fl_login is off (FLINTRAIL_PASSWORDS=off).');
+  let done: { text: string; last: Locator; codeWanted: boolean } | null = null;
+  let source = '';
+  let item: string | undefined;
+  for (const s of all) {
+    if (s.kind === 'browser') {
+      if (opts.item) continue;
+      done = await useBrowserFill(page);
+      source = 'browser';
+    } else {
+      const account = await findAccount(page, s, opts.item);
+      if (!account) continue;
+      done = await useAccount(page, account);
+      source = account.source;
+      item = account.ref;
+    }
+    if (done) break;
+  }
+  if (!done) {
+    const tried = all.map((s) => s.kind).join(', ');
+    const sites = [...new Set(liveFrames(page).map((f) => siteOf(hostOf(f.url()))))].join(', ');
+    throw new Error(opts.item
+      ? `No saved login "${opts.item}" in ${tried}.`
+      : `No saved login for ${sites} (tried ${tried}), or no sign-in field visible yet. Open the sign-in form first; for the browser source, sign in by hand once and let the browser save the password; or add a password manager to FLINTRAIL_PASSWORDS (1password, bitwarden, command).`);
   }
   const submit = opts.submit !== false;
-  if (submit) await withNavigation(page, () => last!.press('Enter', { timeout: TIMEOUT }));
-  const extra = codeWanted ? ' The page also asks for a code 1Password does not hold: ask the user for it.' : '';
-  return { item: item.id, text: `1Password item ${label(item)}: filled ${filled.join(', ')}${submit ? ', submitted' : ''}.${extra}` };
+  if (submit) await withNavigation(page, () => done!.last.press('Enter', { timeout: TIMEOUT }));
+  const extra = done.codeWanted && source === 'browser' ? ' The page also asks for a one-time code: ask the user for it.'
+    : done.codeWanted ? ' The page also asks for a code the password manager does not hold: ask the user for it.' : '';
+  return { text: `${done.text}${submit ? ', submitted' : ''}.${extra}`, source, item };
 }

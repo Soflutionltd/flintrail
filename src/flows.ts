@@ -25,7 +25,7 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
     const s = flow.steps[i]!;
     try {
       if (s.do === 'login') {
-        await signIn(page, { item: s.item, submit: s.submit });
+        await signIn(page, { item: s.item, source: s.source, submit: s.submit });
         continue;
       }
       if (!s.target) {

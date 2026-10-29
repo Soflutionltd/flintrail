@@ -71,18 +71,19 @@ export function buildServer(): McpServer {
     inputSchema: { tab: z.string(), actions: z.array(actionSchema).min(1), snapshot: z.boolean().optional(), ...snapOpts },
   }, guard(async ({ tab, actions, snapshot: snap, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, text: t, max })));
 
-  if (config.opClis.length) s.registerTool('fl_login', {
-    description: 'Sign in on the open sign-in form with a 1Password item: Flintrail fills username, password and one-time code itself, the secrets never reach you. Refuses when the page domain does not match the item website. On a multi-step sign-in (e-mail page, then password page), call it on each step. Without item, uses the only Login whose website matches the tab. While recording, the flow stores the item ID, never the secret.',
+  if (config.passwordSources.length) s.registerTool('fl_login', {
+    description: 'Sign in on the open sign-in form with the user\'s saved password: from the browser\'s own password manager, or from a password manager CLI the user configured (1Password, Bitwarden, custom command). Flintrail fills username, password and one-time code itself; the secrets never reach you. A CLI login is only filled when the page domain matches its website. On a multi-step sign-in (e-mail page, then password page), call it on each step. While recording, the flow stores the source and login ID, never a secret.',
     inputSchema: {
       tab: z.string(),
-      item: z.string().optional().describe('1Password item ID or exact title, when several items match the site.'),
+      item: z.string().optional().describe('Login ID, title or username in a password manager CLI, when several match the site.'),
+      source: z.string().optional().describe('Only this source: browser, 1password, bitwarden or command.'),
       submit: z.boolean().optional().describe('Press Enter after filling (default true).'),
       ...snapOpts,
     },
-  }, guard(async ({ tab, item, submit, text: t, max }) => {
+  }, guard(async ({ tab, item, source, submit, text: t, max }) => {
     const page = getTab(tab);
-    const r = await signIn(page, { item, submit });
-    recorder.addStep(page, { do: 'login', item: r.item, ...(submit === false ? { submit } : {}) } as Step);
+    const r = await signIn(page, { item, source, submit });
+    recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(submit === false ? { submit } : {}) } as Step);
     await domQuiet(page);
     return `${r.text}\n\n${await snapshot(page, { text: t, max })}`;
   }));

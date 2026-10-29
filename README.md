@@ -135,7 +135,7 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_flow_set_var` | Turn a recorded value into a `{{variable}}`, for flows taught by demonstration. |
 | `fl_extension` | Extension connection status. |
 | `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand. |
-| `fl_login` | Sign in with a 1Password item: Flintrail fills username, password and one-time code itself, the agent never sees them. Only when `FLINTRAIL_OP` is set. |
+| `fl_login` | Sign in with your saved password (browser password manager, 1Password, Bitwarden or your own command). Flintrail fills it, the agent never sees it. See [Sign in](#sign-in). |
 | `fl_tabs` / `fl_close` | Manage tabs. |
 
 ### Example
@@ -166,6 +166,27 @@ Then `fl_run("permit", { "plate": "ZZ-999-ZZ" })` repeats it in under a second.
 
 `upload` works on a file input, even a hidden one, and on a button or drop zone that opens the file chooser. Dialogs are dismissed by default and every one is reported in the result, as are new console errors.
 
+## Sign in
+
+`fl_login` signs the agent in with the passwords you already have, without ever showing them to the agent: it only learns which fields were filled. Passwords and one-time codes are masked in every tool result, including captured request bodies and page reads, and a recorded flow stores a reference to the login, never the secret. On a multi-step sign-in (e-mail page, then password page) the agent calls it on each step.
+
+Sources are tried in the order of `FLINTRAIL_PASSWORDS` (default `browser`):
+
+| Source | Setup | Notes |
+|---|---|---|
+| `browser` | None. Save the password in Chrome, Edge or Brave as usual. | The browser fills the form itself; Flintrail confirms with a real click and submits. Works in extension mode and in attach mode, on the profile that holds your passwords. With several saved accounts for a site, the browser picks one: use a CLI source to choose. |
+| `1password[:path]` | [1Password CLI](https://developer.1password.com/docs/cli/) signed in, or `OP_SERVICE_ACCOUNT_TOKEN` in Flintrail's environment for unattended use. | One-time codes stored in 1Password are filled too. A service account never asks for Touch ID; scope it to a vault that holds only what the agent needs. |
+| `bitwarden[:path]` | [Bitwarden CLI](https://bitwarden.com/help/cli/) unlocked, `BW_SESSION` in Flintrail's environment. | One-time codes through `bw get totp`. |
+| `command:path` | Any program: Flintrail runs it with the page URL as only argument. | It prints `[{ "url", "username", "password", "totp"?, "title"? }]`. Use it for KeePassXC, Dashlane, `pass` or a company vault. |
+
+Logins from a CLI source are only filled in frames whose domain matches the login's website, so a look-alike page gets nothing. Several matches: the agent passes `item` (ID, title or username). Example for Claude Desktop:
+
+```json
+"env": { "FLINTRAIL_PASSWORDS": "browser,1password" }
+```
+
+Not supported: Apple Passwords (iCloud Keychain) has no command-line access. One-time codes sent by SMS, e-mail or phone prompt: `fl_login` says so and the agent asks you.
+
 ## How replay finds elements again
 
 Each recorded step stores a fingerprint, not a fragile selector: test id, stable id, `name` attribute, ARIA role and accessible name, placeholder, link target, visible text and a short CSS path. At replay time Flintrail tries them from most to least stable and takes the first that matches exactly one element, waiting only for that element, never for the network to go idle.
@@ -173,7 +194,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 ## Security
 
 - No password is ever written to a flow. Password fields are skipped during recording; keep the session logged in instead.
-- `fl_login` reads 1Password through its CLI and fills the form inside Flintrail. It only fills frames whose domain matches the item's website, records the item ID in flows (never the secret) and masks the password in every tool result, including captured request bodies and page reads. Point `FLINTRAIL_OP` at a service-account wrapper for unattended use, scoped to a vault that holds only the logins the agent needs.
+- `fl_login` never returns a password or a one-time code to the agent and masks them in every tool result. CLI logins are only filled on their own website. Password manager programs are chosen in the configuration, never by the agent, and run without a shell.
 - Flows are plain JSON in `~/.flintrail/flows`, easy to review and version.
 - The HTTP transport requires a bearer token (constant-time comparison) and binds to `127.0.0.1` by default.
 - `eval` and `request` run inside the page with the page's own privileges, nothing more.
@@ -191,14 +212,14 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 | `FLINTRAIL_HOME` | `~/.flintrail` | Flows, profile, token |
 | `FLINTRAIL_DOWNLOADS` | `~/Downloads/Flintrail` | Where downloads land |
 | `FLINTRAIL_TOKEN` | generated | HTTP bearer token and extension token |
-| `FLINTRAIL_OP` | unset | 1Password CLI command(s) for `fl_login`, comma-separated and tried in order, e.g. a wrapper exporting `OP_SERVICE_ACCOUNT_TOKEN`, then `op` |
+| `FLINTRAIL_PASSWORDS` | `browser` | Password sources for `fl_login`, in order: `browser`, `1password[:path]`, `bitwarden[:path]`, `command:path`. `off` removes the tool. |
 
 ## Develop
 
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 23 end-to-end tests over real MCP, extension included
+npm test                               # build + 26 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```
@@ -215,6 +236,8 @@ npm run bench                          # benchmark vs Playwright MCP
 Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,4 s avec Playwright MCP et 0,11 s avec Flintrail en mode API.
 
 L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, on colle le jeton, et l'agent pilote le navigateur. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
+
+Pour se connecter, l'agent utilise `fl_login` avec vos mots de passe habituels : ceux enregistrés dans le navigateur (sans réglage), ou 1Password, Bitwarden ou tout autre gestionnaire par sa ligne de commande. Flintrail remplit le formulaire lui-même, l'agent ne voit jamais ni le mot de passe ni le code.
 
 ## License
 

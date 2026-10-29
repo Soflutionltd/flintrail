@@ -21,10 +21,9 @@ after(async () => {
 test('lists every tool', async () => {
   const { tools } = await mcp.client.listTools();
   const names = tools.map((t) => t.name);
-  for (const n of ['fl_open', 'fl_act', 'fl_snapshot', 'fl_extract', 'fl_network', 'fl_record_start', 'fl_record_stop', 'fl_run', 'fl_run_many', 'fl_flows', 'fl_console']) {
+  for (const n of ['fl_open', 'fl_act', 'fl_snapshot', 'fl_extract', 'fl_network', 'fl_record_start', 'fl_record_stop', 'fl_run', 'fl_run_many', 'fl_flows', 'fl_console', 'fl_login']) {
     assert.ok(names.includes(n), `missing ${n}`);
   }
-  assert.ok(!names.includes('fl_login'), 'fl_login needs FLINTRAIL_OP');
 });
 
 test('live: batched actions across pages and a client-rendered step', async () => {
