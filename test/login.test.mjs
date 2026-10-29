@@ -123,6 +123,16 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
     assert.match(done, /Welcome ann@example.com/);
     assert.ok(!leaks(out + done + (await mcp.call('fl_network', { filter: '/api/login' }))), 'what the browser filled is masked too');
 
+    await mcp.call('fl_record_start', { name: 'browser-signin' });
+    const rec = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
+    await mcp.call('fl_login', { tab: rec });
+    await mcp.call('fl_act', { tab: rec, actions: [{ do: 'wait', text: 'Welcome' }] });
+    await mcp.call('fl_record_stop', {});
+    const flow = await mcp.call('fl_flow', { name: 'browser-signin' });
+    assert.match(flow, /"source": "browser"/);
+    assert.doesNotMatch(flow, /"item"|S3cret/);
+    assert.match(await mcp.call('fl_run', { name: 'browser-signin' }), /Welcome ann@example.com/);
+
     const blank = tabOf(await mcp.call('fl_open', { url: `${site.url}/` }));
     await assert.rejects(mcp.call('fl_login', { tab: blank }), /No saved login for 127\.0\.0\.1 \(tried browser\)/);
   } finally {
