@@ -17,7 +17,7 @@ const run = (cmd, cwd = root) => execSync(cmd, { cwd, stdio: 'inherit' });
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
-for (const f of ['dist', 'README.md', 'LICENSE', 'vendor']) {
+for (const f of ['dist', 'bin', 'README.md', 'LICENSE', 'vendor']) {
   if (existsSync(join(root, f))) cpSync(join(root, f), join(out, f), { recursive: true });
 }
 if (existsSync(join(root, '.mcp/icon.png'))) {

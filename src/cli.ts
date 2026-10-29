@@ -12,6 +12,7 @@ import { shutdown } from './browser.js';
 import { config } from './config.js';
 import { startRelay } from './relay.js';
 import { buildServer, VERSION } from './server.js';
+import { attachUpdateNotice, startUpdateCheck } from './update-notice.js';
 
 const args = process.argv.slice(2);
 const flag = (n: string) => args.includes(`--${n}`);
@@ -83,7 +84,8 @@ if (flag('http')) {
     console.error(`flintrail ${VERSION} listening on http://${host}:${port}/mcp (bearer token in ${join(config.home, 'token')})`);
   });
 } else {
-  await buildServer().connect(new StdioServerTransport());
+  startUpdateCheck('flintrail', VERSION, 'https://github.com/Soflutionltd/flintrail');
+  await buildServer().connect(attachUpdateNotice(new StdioServerTransport()));
   // An attached browser keeps the event loop alive: leave when the client goes away, or the process lingers.
   process.stdin.on('end', stop);
   process.stdin.on('close', stop);

@@ -50,10 +50,7 @@ Reproduce it: `npm run bench` (installs nothing global; Playwright MCP is a depe
 
 ## Install
 
-```bash
-git clone https://github.com/Soflutionltd/flintrail.git
-cd flintrail && npm install && npm run build
-```
+**Claude Desktop:** download [`flintrail.mcpb`](https://github.com/Soflutionltd/flintrail/releases/latest/download/flintrail.mcpb) and double-click it.
 
 ### Claude Desktop, Claude Code, Cursor (stdio)
 
@@ -61,14 +58,22 @@ cd flintrail && npm install && npm run build
 {
   "mcpServers": {
     "flintrail": {
-      "command": "node",
-      "args": ["/absolute/path/to/flintrail/dist/cli.js"]
+      "command": "npx",
+      "args": ["-y", "flintrail@latest"]
     }
   }
 }
 ```
 
-Claude Code: `claude mcp add flintrail -- node /absolute/path/to/flintrail/dist/cli.js`
+Claude Code: `claude mcp add flintrail -- npx -y flintrail@latest`
+
+From a local clone (`git clone https://github.com/Soflutionltd/flintrail.git && cd flintrail && npm install && npm run build`), start `node /absolute/path/to/flintrail/bin/supervise.cjs`.
+
+### Automatic updates
+
+Every install below keeps itself up to date, without restarting Claude or Cursor. The MCP client talks to a small supervisor (`bin/supervise.cjs`) that stays connected while the server runs behind it. At start-up and every 6 hours it asks npm for the latest `flintrail`, installs it in the background in `~/.soflution/mcp/flintrail/`, and switches over as soon as no request is in flight (the client is told the tool list may have changed). A version that fails to start is rolled back at once and never picked again on that machine. npm checks the integrity of every download, and releases are published from GitHub Actions with provenance.
+
+The only network call is that version check to `registry.npmjs.org`; nothing about your machine or your use is sent. Turn it off with `NO_UPDATE_NOTIFIER=1` (or `SOFLUTION_AUTO_UPDATE=0`). Started directly with `node dist/...`, flintrail does not update itself and only mentions a newer version in its first tool result.
 
 ### Any agent, any machine (HTTP)
 
@@ -98,7 +103,7 @@ The extension is the easiest way in: no command-line flags, no debugging port, w
 1. **Install.** Download `flintrail-extension-<version>.zip` from the [latest release](https://github.com/Soflutionltd/flintrail/releases/latest), unzip it, open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and pick the folder. (Chrome Web Store listing in progress.)
 2. **Run Flintrail in extension mode**, for example in Claude Desktop:
    ```json
-   { "mcpServers": { "flintrail": { "command": "npx", "args": ["-y", "github:Soflutionltd/flintrail"], "env": { "FLINTRAIL_MODE": "extension" } } } }
+   { "mcpServers": { "flintrail": { "command": "npx", "args": ["-y", "flintrail@latest"], "env": { "FLINTRAIL_MODE": "extension" } } } }
    ```
 3. **Connect.** Click the Flintrail icon, paste the token from `~/.flintrail/token`, click *Connect*. The extension reconnects by itself afterwards.
 

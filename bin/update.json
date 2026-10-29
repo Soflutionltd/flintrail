@@ -1,0 +1,9 @@
+{
+  "package": "flintrail",
+  "server": "dist/cli.js",
+  "passthrough": [
+    "--http",
+    "--version",
+    "--help"
+  ]
+}

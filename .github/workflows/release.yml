@@ -1,0 +1,78 @@
+# Ships a new version as soon as the version in package.json changes on main:
+#   1. builds and publishes the package to npm (with provenance), unless that version is already there;
+#   2. creates the vX.Y.Z tag and GitHub release;
+#   3. starts the MCP Registry workflow (when the repository has one), which builds the .mcpb bundle.
+# Everyone installed with `npx -y <package>@latest` or with the .mcpb extension then updates on their own.
+#
+# npm needs the NPM_TOKEN secret (an npm "Automation" granular token with publish rights).
+# Without it, step 1 is skipped with a warning and the rest still runs; run this workflow by hand
+# (Actions > Release > Run workflow) once the secret exists to publish the missing version.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [package.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Read the version
+        run: |
+          echo "NAME=$(node -p "require('./package.json').name")" >> "$GITHUB_ENV"
+          echo "V=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build --if-present
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm view "$NAME@$V" version >/dev/null 2>&1; then
+            echo "$NAME@$V is already on npm"
+          elif [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN is not set: $NAME@$V was not published to npm"
+          else
+            npm publish --provenance --access public
+          fi
+
+      - name: Tag and GitHub release
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            echo "v$V already exists"
+            echo "NEW_TAG=false" >> "$GITHUB_ENV"
+          else
+            git tag "v$V"
+            git push origin "v$V"
+            gh release create "v$V" --title "$NAME v$V" --generate-notes
+            echo "NEW_TAG=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the .mcpb bundle and publish to the MCP Registry
+        if: env.NEW_TAG == 'true' && hashFiles('.github/workflows/mcp-registry.yml') != ''
+        run: gh workflow run mcp-registry.yml -f tag="v$V"
