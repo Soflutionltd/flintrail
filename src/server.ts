@@ -8,7 +8,7 @@ import { config } from './config.js';
 import { getRelay } from './relay.js';
 import { listFlows, loadFlow, saveFlow } from './store.js';
 
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 
 type ToolResult = { content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]; isError?: boolean };
 const text = (t: string): ToolResult => ({ content: [{ type: 'text', text: t }] });

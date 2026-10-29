@@ -1,6 +1,6 @@
 {
   "name": "flintrail",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "The fastest browser MCP server: drive a real Chrome live, record a flow once, replay it in milliseconds without an LLM, or skip the UI entirely and replay the site's own API calls.",
   "type": "module",
   "bin": {
