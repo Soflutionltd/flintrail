@@ -80,20 +80,21 @@ function onePassword(bin: string): CliSource {
 function bitwarden(bin: string): CliSource {
   interface BwItem { id: string; name: string; type: number; login?: { username?: string; password?: string; totp?: string; uris?: { uri?: string }[] } }
   const list = cachedList(async () => {
+    // bw list returns passwords too: keep only the metadata, so the cache holds no secret.
     const items = JSON.parse(await run(bin, ['list', 'items'])) as BwItem[];
-    return items.filter((i) => i.type === 1 && i.login).map((i) => ({
+    return items.filter((i) => i.type === 1 && i.login).map(({ id, name, login }) => ({
       source: 'bitwarden',
-      ref: i.id,
-      title: i.name,
-      username: i.login!.username || '',
+      ref: id,
+      title: name,
+      username: login!.username || '',
       where: 'Bitwarden',
-      hosts: (i.login!.uris || []).map((u) => hostOf(u.uri || '')).filter(Boolean),
+      hosts: (login!.uris || []).map((u) => hostOf(u.uri || '')).filter(Boolean),
       async reveal() {
-        const item = JSON.parse(await run(bin, ['get', 'item', i.id])) as BwItem;
+        const item = JSON.parse(await run(bin, ['get', 'item', id])) as BwItem;
         return {
           username: item.login?.username || '',
           password: item.login?.password || '',
-          totp: item.login?.totp ? (await run(bin, ['get', 'totp', i.id])).trim() : '',
+          totp: item.login?.totp ? (await run(bin, ['get', 'totp', id])).trim() : '',
         };
       },
     }));
