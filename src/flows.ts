@@ -1,5 +1,6 @@
 // Replays recorded flows at browser speed, with no LLM in the loop.
 import { fillVars, getTab, gotoFast, openTab, performOn, performPage, resolveTarget, snapshot, closeTab } from './engine.js';
+import { signIn } from './login.js';
 import { loadFlow, saveFlow } from './store.js';
 
 export interface RunResult {
@@ -23,6 +24,10 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
   for (let i = 0; i < flow.steps.length; i++) {
     const s = flow.steps[i]!;
     try {
+      if (s.do === 'login') {
+        await signIn(page, { item: s.item, submit: s.submit });
+        continue;
+      }
       if (!s.target) {
         const v = await performPage(page, s, vars);
         if (v !== undefined) outputs.push(`#${i} ${s.do} -> ${JSON.stringify(v).slice(0, 4000)}`);

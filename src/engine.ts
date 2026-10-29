@@ -9,7 +9,7 @@ import { recorder } from './recorder.js';
 
 export type ActionKind =
   | 'click' | 'dblclick' | 'hover' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'press' | 'download' | 'upload'
-  | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request' | 'mouse' | 'dialog' | 'resize';
+  | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request' | 'mouse' | 'dialog' | 'resize' | 'login';
 
 export interface Action {
   do: ActionKind;
@@ -37,6 +37,9 @@ export interface Action {
   method?: string;
   body?: string;
   headers?: Record<string, string>;
+  /** login steps: 1Password item ID, and whether to press Enter after filling. */
+  item?: string;
+  submit?: boolean;
 }
 
 export interface Step extends Omit<Action, 'ref'> {
@@ -189,7 +192,7 @@ export async function domQuiet(page: Page, idle = 25, quiet = 80, max = 1200) {
 }
 
 /** Runs an interaction and waits for a navigation only if that interaction actually started one. */
-async function withNavigation<T>(page: Page, fn: () => Promise<T>): Promise<T> {
+export async function withNavigation<T>(page: Page, fn: () => Promise<T>): Promise<T> {
   let navigated = false;
   const onReq = (r: Request) => {
     if (r.isNavigationRequest() && r.frame() === page.mainFrame()) navigated = true;

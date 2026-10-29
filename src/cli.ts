@@ -30,7 +30,8 @@ if (flag('help')) {
   flintrail --http          MCP over HTTP (default 127.0.0.1:8931, path /mcp)
     --host <h> --port <p>   listen address
     --token <t>             bearer token (default: FLINTRAIL_TOKEN or ~/.flintrail/token)
-Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0`);
+Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0,
+  FLINTRAIL_OP=<1Password CLI command[,fallback]> enables fl_login`);
   process.exit(0);
 }
 

@@ -135,6 +135,7 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_flow_set_var` | Turn a recorded value into a `{{variable}}`, for flows taught by demonstration. |
 | `fl_extension` | Extension connection status. |
 | `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand. |
+| `fl_login` | Sign in with a 1Password item: Flintrail fills username, password and one-time code itself, the agent never sees them. Only when `FLINTRAIL_OP` is set. |
 | `fl_tabs` / `fl_close` | Manage tabs. |
 
 ### Example
@@ -172,6 +173,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 ## Security
 
 - No password is ever written to a flow. Password fields are skipped during recording; keep the session logged in instead.
+- `fl_login` reads 1Password through its CLI and fills the form inside Flintrail. It only fills frames whose domain matches the item's website, records the item ID in flows (never the secret) and masks the password in every tool result, including captured request bodies and page reads. Point `FLINTRAIL_OP` at a service-account wrapper for unattended use, scoped to a vault that holds only the logins the agent needs.
 - Flows are plain JSON in `~/.flintrail/flows`, easy to review and version.
 - The HTTP transport requires a bearer token (constant-time comparison) and binds to `127.0.0.1` by default.
 - `eval` and `request` run inside the page with the page's own privileges, nothing more.
@@ -189,13 +191,14 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 | `FLINTRAIL_HOME` | `~/.flintrail` | Flows, profile, token |
 | `FLINTRAIL_DOWNLOADS` | `~/Downloads/Flintrail` | Where downloads land |
 | `FLINTRAIL_TOKEN` | generated | HTTP bearer token and extension token |
+| `FLINTRAIL_OP` | unset | 1Password CLI command(s) for `fl_login`, comma-separated and tried in order, e.g. a wrapper exporting `OP_SERVICE_ACCOUNT_TOKEN`, then `op` |
 
 ## Develop
 
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 19 end-to-end tests over real MCP, extension included
+npm test                               # build + 23 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```

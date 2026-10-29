@@ -67,6 +67,34 @@ export function startFixture(port = 0) {
         console.warn('careful');
         setTimeout(() => { throw new Error('uncaught kaboom'); }, 0);
       </script>`);
+    if (url.pathname === '/login') return html('Sign in', `<h1>Sign in</h1>
+      <form id="f">
+        <label>Email <input name="email" type="email" autocomplete="username"></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password"></label>
+        <label>Code <input name="otp" autocomplete="one-time-code" inputmode="numeric"></label>
+        <button>Sign in</button>
+      </form>
+      <p id="out"></p>
+      <script>
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: f.email.value, password: f.password.value, otp: f.otp.value }) });
+          const j = await r.json();
+          out.textContent = j.ok ? 'Welcome ' + j.email : 'Wrong credentials';
+        };
+      </script>`);
+    if (url.pathname === '/api/login' && req.method === 'POST') {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => {
+        const o = JSON.parse(b || '{}');
+        const ok = o.email === 'ann@example.com' && o.password === 'S3cret pass&"42' && o.otp === '123456';
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok, email: o.email }));
+      });
+      return;
+    }
     if (url.pathname === '/api/order' && req.method === 'POST') {
       let b = '';
       req.on('data', (c) => (b += c));

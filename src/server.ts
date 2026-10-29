@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { act, adoptTab, closeTab, consoleLog, elementByRef, getTab, listTabs, openTab, snapshot, type Action } from './engine.js';
+import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, listTabs, openTab, snapshot, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
+import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
 import { getRelay } from './relay.js';
@@ -13,9 +14,9 @@ type ToolResult = { content: ({ type: 'text'; text: string } | { type: 'image'; 
 const text = (t: string): ToolResult => ({ content: [{ type: 'text', text: t }] });
 const guard = <A>(fn: (a: A) => Promise<string>) => async (a: A): Promise<ToolResult> => {
   try {
-    return text(await fn(a));
+    return text(redact(await fn(a)));
   } catch (e) {
-    return { ...text(`Error: ${(e as Error).message.split('\n')[0]}`), isError: true };
+    return { ...text(redact(`Error: ${(e as Error).message.split('\n')[0]}`)), isError: true };
   }
 };
 
@@ -69,6 +70,22 @@ export function buildServer(): McpServer {
     description: 'Run SEVERAL actions in one call (fill a whole form, click, submit, wait, extract) and get one fresh snapshot back. Always batch as many actions as possible: one call beats ten.',
     inputSchema: { tab: z.string(), actions: z.array(actionSchema).min(1), snapshot: z.boolean().optional(), ...snapOpts },
   }, guard(async ({ tab, actions, snapshot: snap, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, text: t, max })));
+
+  if (config.opClis.length) s.registerTool('fl_login', {
+    description: 'Sign in on the open sign-in form with a 1Password item: Flintrail fills username, password and one-time code itself, the secrets never reach you. Refuses when the page domain does not match the item website. On a multi-step sign-in (e-mail page, then password page), call it on each step. Without item, uses the only Login whose website matches the tab. While recording, the flow stores the item ID, never the secret.',
+    inputSchema: {
+      tab: z.string(),
+      item: z.string().optional().describe('1Password item ID or exact title, when several items match the site.'),
+      submit: z.boolean().optional().describe('Press Enter after filling (default true).'),
+      ...snapOpts,
+    },
+  }, guard(async ({ tab, item, submit, text: t, max }) => {
+    const page = getTab(tab);
+    const r = await signIn(page, { item, submit });
+    recorder.addStep(page, { do: 'login', item: r.item, ...(submit === false ? { submit } : {}) } as Step);
+    await domQuiet(page);
+    return `${r.text}\n\n${await snapshot(page, { text: t, max })}`;
+  }));
 
   s.registerTool('fl_snapshot', {
     description: 'Re-read a tab: interactive elements with refs, headings and the start of the text.',

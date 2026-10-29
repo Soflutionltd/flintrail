@@ -24,6 +24,7 @@ test('lists every tool', async () => {
   for (const n of ['fl_open', 'fl_act', 'fl_snapshot', 'fl_extract', 'fl_network', 'fl_record_start', 'fl_record_stop', 'fl_run', 'fl_run_many', 'fl_flows', 'fl_console']) {
     assert.ok(names.includes(n), `missing ${n}`);
   }
+  assert.ok(!names.includes('fl_login'), 'fl_login needs FLINTRAIL_OP');
 });
 
 test('live: batched actions across pages and a client-rendered step', async () => {
