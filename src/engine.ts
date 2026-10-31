@@ -6,10 +6,11 @@ import { getAttachedBrowser, getContext } from './browser.js';
 import { config } from './config.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
+import type { DesktopStep } from './desktop.js';
 
 export type ActionKind =
   | 'click' | 'dblclick' | 'hover' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'press' | 'download' | 'upload'
-  | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request' | 'mouse' | 'dialog' | 'resize' | 'login';
+  | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request' | 'mouse' | 'dialog' | 'resize' | 'login' | 'desktop';
 
 export interface Action {
   do: ActionKind;
@@ -45,6 +46,8 @@ export interface Action {
 
 export interface Step extends Omit<Action, 'ref'> {
   target?: TargetDescriptor;
+  /** do: 'desktop' steps act on a native app instead of the browser. */
+  desktop?: DesktopStep;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
