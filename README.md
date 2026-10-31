@@ -142,6 +142,8 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand. |
 | `fl_login` | Sign in with your saved password (browser password manager, 1Password, Bitwarden or your own command). Flintrail fills it, the agent never sees it. See [Sign in](#sign-in). |
 | `fl_tabs` / `fl_close` | Manage tabs. |
+| `fl_desktop` | Snapshot a native desktop app (Finder, Mail, Preview, Notes, any app) with `[dN]` refs, through the OS accessibility tree. Without `app`, lists running apps. See [Desktop apps](#desktop-apps). |
+| `fl_desktop_act` | Run many actions on a desktop app in one call: `click`, `dblclick`, `rightclick`, `fill`, `type`, `clear`, `press`, `select`, `check`, `uncheck`, `toggle`, `expand`, `collapse`, `focus`, `scroll`, `get`, `wait`, `launch`, `quit`. Recorded like browser actions. |
 
 ### Example
 
@@ -191,6 +193,27 @@ Logins from a CLI source are only filled in frames whose domain matches the logi
 ```
 
 Not supported: Apple Passwords (iCloud Keychain) has no command-line access. One-time codes sent by SMS, e-mail or phone prompt: `fl_login` says so and the agent asks you.
+
+## Desktop apps
+
+Flintrail also drives native apps on macOS, Windows and Linux, through the operating system's accessibility tree rather than screenshots, using [agent-desktop](https://github.com/vercel-labs/agent-desktop) (Apache-2.0, installed as an optional dependency). It is headless: actions go through the accessibility API, the pointer does not move and no window comes to the front, so you keep working while the agent does.
+
+The same record and replay engine applies, so **one flow can mix web and desktop steps**: download an invoice on a supplier's site, then file it in a desktop app, replayed in about a second with no model in the loop.
+
+```jsonc
+{ "tool": "fl_desktop", "app": "Calculator" }          // localized, English name or bundle id
+{ "tool": "fl_desktop_act", "app": "Calculator", "actions": [
+  { "do": "click", "ref": "d6" },
+  { "do": "click", "role": "button", "name": "Ajouter" },
+  { "do": "fill",  "ref": "d12", "value": "invoice", "var": "query" },
+  { "do": "press", "key": "return" },
+  { "do": "get",   "ref": "d1" }
+]}
+```
+
+Each recorded desktop step stores the app and a fingerprint of the element: native automation id when it is stable (ids that carry live state are skipped), then role and exact accessible name, and its rank among equal matches. Replay tries the id first, then role and name, and waits for the element. A stale ref during a live session is healed the same way, once.
+
+macOS asks for the Accessibility permission on first use, for the app that runs Flintrail (Claude, Cursor, a terminal). On Linux it needs `at-spi2-core` in the graphical session. To use your own build, set `FLINTRAIL_AGENT_DESKTOP` to its path. Flows with desktop steps run one at a time in `fl_run_many`, since they share the app.
 
 ## How replay finds elements again
 
@@ -243,6 +266,8 @@ Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chr
 L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, on colle le jeton, et l'agent pilote le navigateur. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
 
 Pour se connecter, l'agent utilise `fl_login` avec vos mots de passe habituels : ceux enregistrés dans le navigateur (sans réglage), ou 1Password, Bitwarden ou tout autre gestionnaire par sa ligne de commande. Flintrail remplit le formulaire lui-même, l'agent ne voit jamais ni le mot de passe ni le code.
+
+Flintrail pilote aussi les applications du bureau (Finder, Mail, Aperçu, Notes, n'importe quelle app) avec `fl_desktop` et `fl_desktop_act`, par l'arbre d'accessibilité du système et non par captures d'écran, sans bouger la souris ni passer la fenêtre au premier plan. Un même parcours enregistré peut enchaîner des étapes web et des étapes desktop, et se rejouer sans IA.
 
 ## License
 

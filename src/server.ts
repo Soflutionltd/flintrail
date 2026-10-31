@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, listTabs, openTab, snapshot, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
+import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
@@ -40,6 +41,23 @@ const actionSchema = z.object({
   files: z.array(z.string()).optional().describe('upload: absolute file paths. With var, a single file becomes {{var}}.'),
   js: z.string().optional().describe('Function body for eval, must return a value.'),
   method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(),
+});
+
+const desktopActionSchema = z.object({
+  do: z.enum(['click', 'dblclick', 'rightclick', 'fill', 'type', 'clear', 'press', 'select', 'check', 'uncheck', 'toggle', 'expand', 'collapse', 'focus', 'scroll', 'get', 'wait', 'launch', 'quit'])
+    .describe('fill: set the whole value of a field. type: insert text. press: key combo like return, escape, cmd+s (to the app\'s window, focused on ref if given). get: read the text of ref (text "value" reads its value). wait: ms, or until text appears. launch / quit: the app.'),
+  ref: z.string().optional().describe('Element ref from the latest fl_desktop snapshot of this app, e.g. d12.'),
+  role: z.string().optional().describe('Instead of ref: accessibility role (button, textfield, checkbox, menuitem ...).'),
+  name: z.string().optional().describe('Instead of ref: exact accessible name, with role.'),
+  nativeId: z.string().optional().describe('Instead of ref: native automation id.'),
+  app: z.string().optional().describe('Switch to another app from this action on.'),
+  value: z.string().optional().describe('Value for fill / type / select.'),
+  var: z.string().optional().describe('While recording: store this value as variable {{var}} instead of the literal.'),
+  key: z.string().optional().describe('Key combo for press: return, tab, escape, cmd+s, shift+tab ...'),
+  text: z.string().optional().describe('wait: text to wait for. get: "value" to read the value instead of the text.'),
+  ms: z.number().optional().describe('wait: milliseconds (or timeout when waiting for text).'),
+  direction: z.enum(['up', 'down', 'left', 'right']).optional(),
+  amount: z.number().int().optional().describe('scroll: units (default 3).'),
 });
 
 const snapOpts = {
@@ -129,8 +147,34 @@ export function buildServer(): McpServer {
   s.registerTool('fl_close', { description: 'Close a Flintrail tab.', inputSchema: { tab: z.string() } },
     guard(async ({ tab }) => { await closeTab(tab); return `Tab ${tab} closed.`; }));
 
+  s.registerTool('fl_desktop', {
+    description: 'Snapshot a native desktop app (Finder, Mail, Preview, Notes, any app) through the OS accessibility tree: its elements with [dN] refs for fl_desktop_act. No pixels, no pointer move, no window raised. Without app, lists the running apps. The app name can be localized ("Calculatrice"), English ("Calculator") or a bundle id.',
+    inputSchema: {
+      app: z.string().optional(),
+      window: z.string().optional().describe('Window id when the app has several windows (the error lists them).'),
+      all: z.boolean().optional().describe('Include static text, not only interactive elements (default false).'),
+      root: z.string().optional().describe('Snapshot only the subtree of this ref, for dense apps.'),
+      skeleton: z.boolean().optional().describe('Shallow overview of a dense app, then drill down with root.'),
+      surface: z.string().optional().describe('menubar, menu, sheet, popover, alert, dock ... instead of the window.'),
+      max: z.number().optional().describe('Max elements listed (default 150).'),
+    },
+  }, guard(async ({ app, window, all, root, skeleton, surface, max }) =>
+    app ? snapshotApp(app, { window, interactive: !all, root, skeleton, surface, max }) : listApps()));
+
+  s.registerTool('fl_desktop_act', {
+    description: 'Run SEVERAL actions on a native desktop app in one call, then get a fresh snapshot of it. Target elements by ref from fl_desktop, or by role + name. Headless: the user keeps working in the foreground. Recorded by fl_record_start like browser actions, so a flow can mix web and desktop steps and replay them without an LLM.',
+    inputSchema: {
+      app: z.string(),
+      actions: z.array(desktopActionSchema).min(1),
+      snapshot: z.boolean().optional(),
+      all: z.boolean().optional().describe('Snapshot with static text too.'),
+      max: z.number().optional(),
+    },
+  }, guard(async ({ app, actions, snapshot: snap, all, max }) =>
+    actDesktop(app, actions as DesktopAction[], { snapshot: snap, interactive: !all, max, record: (st) => recorder.addDesktopStep(st) })));
+
   s.registerTool('fl_record_start', {
-    description: 'Start recording a flow. Every fl_open / fl_act after this is captured with robust element fingerprints so fl_run can replay it without an LLM. repairFrom keeps steps before that index and replaces the rest.',
+    description: 'Start recording a flow. Every fl_open / fl_act / fl_desktop_act after this is captured with robust element fingerprints so fl_run can replay it without an LLM. repairFrom keeps steps before that index and replaces the rest.',
     inputSchema: { name: z.string(), description: z.string().optional(), startUrl: z.string().optional(), repairFrom: z.number().optional() },
   }, guard(async ({ name, description, startUrl, repairFrom }) => recorder.start(name, description, startUrl, repairFrom)));
 
@@ -164,6 +208,15 @@ export function buildServer(): McpServer {
     const f = loadFlow(name);
     const st = f.steps[step];
     if (!st) throw new Error(`Flow "${name}" has no step ${step}.`);
+    if (st.do === 'desktop' && st.desktop) {
+      if (st.desktop.value === undefined) throw new Error(`Step ${step} (desktop ${st.desktop.do}) has no value to parametrize.`);
+      const was = st.desktop.value;
+      st.desktop.value = `{{${v}}}`;
+      f.vars = [...new Set([...f.vars, v])];
+      f.updatedAt = new Date().toISOString();
+      saveFlow(f);
+      return `Step ${step} of "${name}" now uses {{${v}}} (recorded value was "${was}").`;
+    }
     if (st.files) {
       if (st.files.length !== 1) throw new Error(`Step ${step} uploads ${st.files.length} files, a file variable needs exactly one.`);
     } else if (st.value === undefined && st.url === undefined) throw new Error(`Step ${step} (${st.do}) has no value to parametrize.`);
