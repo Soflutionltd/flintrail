@@ -92,7 +92,7 @@ Clients connect to `http://host:8931/mcp` with `Authorization: Bearer <token>`. 
 | `launch` | Servers, CI, Docker. | `FLINTRAIL_MODE=launch` starts Chromium with a persistent profile in `~/.flintrail/profile`, headless by default. |
 | `extension` | Anyone, any Chromium browser, no debugging port. | `FLINTRAIL_MODE=extension` and the Flintrail extension installed. See below. |
 
-Flintrail refuses to attach to a personal browser (Brave, Edge, Opera, or on macOS anything that is not Chrome for Testing) unless `FLINTRAIL_ALLOW_ANY_BROWSER=1`. Your everyday browser stays yours.
+Flintrail refuses to attach to a personal browser (Brave, Edge, Opera, or on macOS anything that is not Chrome for Testing) unless `FLINTRAIL_ALLOW_ANY_BROWSER=1`. Your everyday browser stays yours. To drive a regular Chrome instead (for example so a password manager can connect to it), start it with its own `--user-data-dir` and set `FLINTRAIL_DEDICATED_PROFILE` to that same path: only a browser running that profile is accepted.
 
 ## Browser extension
 

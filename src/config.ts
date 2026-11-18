@@ -14,6 +14,8 @@ export const config = {
   chromePath: env.FLINTRAIL_CHROME || '',
   headless: env.FLINTRAIL_HEADLESS !== '0',
   allowAnyBrowser: env.FLINTRAIL_ALLOW_ANY_BROWSER === '1',
+  /** user-data-dir of a dedicated automation profile in a regular Chrome (e.g. one 1Password can connect to). */
+  dedicatedProfile: env.FLINTRAIL_DEDICATED_PROFILE || '',
   home,
   flowsDir: join(home, 'flows'),
   profileDir: env.FLINTRAIL_PROFILE || join(home, 'profile'),

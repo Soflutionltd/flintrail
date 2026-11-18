@@ -53,8 +53,9 @@ function assertDedicatedBrowser(version: Record<string, string>) {
     try {
       const pid = execFileSync('lsof', ['-nP', `-iTCP:${config.port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).trim().split('\n')[0];
       const cmd = pid ? execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }) : '';
-      if (!cmd.includes('Google Chrome for Testing')) {
-        throw new Error(`Refusing to attach: port ${config.port} is not owned by Chrome for Testing (set FLINTRAIL_ALLOW_ANY_BROWSER=1 to override).`);
+      const ownsDedicatedProfile = !!config.dedicatedProfile && cmd.includes(`--user-data-dir=${config.dedicatedProfile}`);
+      if (!cmd.includes('Google Chrome for Testing') && !ownsDedicatedProfile) {
+        throw new Error(`Refusing to attach: port ${config.port} is not owned by Chrome for Testing or by FLINTRAIL_DEDICATED_PROFILE (set FLINTRAIL_ALLOW_ANY_BROWSER=1 to override).`);
       }
     } catch (e) {
       if (e instanceof Error && e.message.startsWith('Refusing')) throw e;
