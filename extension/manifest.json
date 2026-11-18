@@ -5,19 +5,46 @@
   "description": "Let your AI agent drive this browser through Flintrail, and teach it a task by doing it once yourself.",
   "homepage_url": "https://github.com/Soflutionltd/flintrail",
   "minimum_chrome_version": "125",
-  "permissions": ["debugger", "tabs", "storage", "alarms", "webNavigation"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js" },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0lYCQAYiSV7aWOwTg5uN/TPIXHYK5RlFr/pfV0QwOlPu4xnzBRgvGi4OszBdOoJCBfsmM7EJVivkWePbHWDZ1aF6fzqlizYAeTBfZQqw3BSRNKBetAiHzSO5/SNjx0XIeftJbeoto4nFyA8UnXje2hOz1PG6SijtdT5ImM7IfmnoJ73DUm1KSVdV5rF76HkPnQVZlMLfXEhiAT37O44gKdzjHdrjMZGXLRzlvNS8Ed/OolModbYZDK79QoCZtIpnp3D4v5lYQw2bmqTqKrvnUDo4H8l3ioY4NTNpdPg7HR5PQx9toyBBOdjAvcEHJBV/TjsYVNIq0GPvtrkoHjSBHQIDAQAB",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "storage",
+    "alarms",
+    "webNavigation",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Flintrail",
-    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png"
+    }
   },
-  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
-  "content_scripts": [{
-    "matches": ["<all_urls>"],
-    "js": ["fingerprint.js", "content.js"],
-    "all_frames": true,
-    "run_at": "document_start"
-  }]
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "fingerprint.js",
+        "content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ]
 }

@@ -35,16 +35,51 @@ function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
-async function connect() {
-  const { token, port = 8932 } = await store.get(['token', 'port']);
-  if (!token) { await setStatus('idle', 'Paste the token from ~/.flintrail/token'); return; }
+const HOST_NAME = 'com.soflution.flintrail';
+
+// Ask the local Flintrail for its token through native messaging. The browser only starts the host
+// for this extension's ID, so no other extension or web page can read the token this way.
+async function pair() {
+  try {
+    const r = await chrome.runtime.sendNativeMessage(HOST_NAME, { type: 'pair' });
+    if (r?.type !== 'paired' || !r.token) return false;
+    await store.set({ token: r.token, port: Number(r.port) || 8932, paired: true });
+    return true;
+  } catch {
+    return false; // Flintrail never ran on this computer, or pairing is turned off: manual token still works.
+  }
+}
+
+// Stable per-browser id, so a reconnecting browser keeps its name on the Flintrail side.
+async function instanceId() {
+  const { instance } = await store.get('instance');
+  if (instance) return instance;
+  const fresh = crypto.randomUUID();
+  await store.set({ instance: fresh });
+  return fresh;
+}
+
+// One connection attempt at a time: install, startup and the alarm can all fire together, and two
+// parallel attempts would open two sockets that answer each other's requests.
+let connecting = null;
+function connect() {
+  if (!connecting) connecting = openConnection().finally(() => { connecting = null; });
+  return connecting;
+}
+
+async function openConnection() {
+  let { token } = await store.get('token');
+  if (!token && await pair()) ({ token } = await store.get('token'));
+  if (!token) { await setStatus('idle', 'Start Flintrail once on this computer, or paste the token from ~/.flintrail/token'); return; }
+  const { port = 8932 } = await store.get('port');
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  const instance = await instanceId();
   await setStatus('connecting');
   const sock = new WebSocket(`ws://127.0.0.1:${port}/extension`);
   ws = sock;
   sock.onopen = () => {
     sock.send(JSON.stringify({
-      type: 'hello', token, version: VERSION, userAgent: navigator.userAgent,
+      type: 'hello', token, version: VERSION, userAgent: navigator.userAgent, instance,
       browser: (navigator.userAgentData?.brands || []).map((b) => b.brand).filter((b) => !/Not.A.Brand|Chromium/i.test(b))[0] || 'Chromium',
     }));
   };
@@ -55,6 +90,8 @@ async function connect() {
     clearInterval(pingTimer);
     for (const tabId of [...attached]) await detach(tabId);
     const bad = ev.code === 4401;
+    // The token changed on the Flintrail side (new install, new computer): pair again, then retry.
+    if (bad && await pair() && (await store.get('token')).token !== token) { connect(); return; }
     await setStatus(bad ? 'error' : 'disconnected', bad ? 'Wrong token' : 'Flintrail is not running (it starts with your agent).');
   };
   sock.onerror = () => {};
@@ -215,7 +252,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return reply({ recording: !!recording && sender.tab?.id === recording.tabId });
       }
       case 'connect':
-        await store.set({ token: msg.token.trim(), port: Number(msg.port) || 8932, autoConnect: true });
+        // An empty token field means "pair automatically".
+        if (msg.token.trim()) await store.set({ token: msg.token.trim(), port: Number(msg.port) || 8932, autoConnect: true });
+        else { await chrome.storage.local.remove('token'); await store.set({ autoConnect: true }); }
         ws?.close();
         ws = null;
         await connect();
@@ -248,13 +287,14 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 
 // Reconnect automatically: on browser start, on install, and every 30 s while Flintrail is down.
 async function autoConnect() {
-  const { autoConnect: on = true, token } = await store.get(['autoConnect', 'token']);
-  if (on && token) connect();
+  const { autoConnect: on = true } = await store.get('autoConnect');
+  if (on) connect();
 }
-chrome.runtime.onStartup.addListener(autoConnect);
+const ensureAlarm = () => chrome.alarms.create('flintrail-reconnect', { periodInMinutes: 0.5 });
+chrome.runtime.onStartup.addListener(() => { ensureAlarm(); autoConnect(); });
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.storage.local.remove('recording');
-  chrome.alarms.create('flintrail-reconnect', { periodInMinutes: 0.5 });
+  ensureAlarm();
   autoConnect();
 });
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'flintrail-reconnect') autoConnect(); });

@@ -1,8 +1,10 @@
-// Browser connection. Two modes:
+// Browser connections. The dedicated browser ("agent") depends on the mode:
 //  - attach (default): connect over CDP to a dedicated Chrome for Testing that keeps your logged-in sessions.
 //    On macOS Flintrail finds it, starts it with a local debugging port, and refuses any other browser.
 //  - launch: start its own Chromium with a persistent profile (servers, CI, headless).
-//  - extension: drive the browser where the Flintrail extension is installed, through the local relay.
+//  - extension: no dedicated browser, only the browsers below.
+// In every mode, the user's own browsers where the Flintrail extension is installed are reachable by
+// name ("brave", "chrome", "edge"...) through the local relay, several at once.
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -10,7 +12,7 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { config } from './config.js';
 import { loadToken } from './auth.js';
-import { startRelay } from './relay.js';
+import { getRelay, startRelay } from './relay.js';
 import { startCdpFilter, type CdpFilter } from './cdp-filter.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -97,22 +99,35 @@ async function startChromeForTesting() {
   throw new Error('Chrome for Testing did not open its debugging port in time.');
 }
 
-let ctxPromise: Promise<BrowserContext> | null = null;
-let browserRef: Browser | null = null;
+/** A browser Flintrail drives: the dedicated one ("agent") or a user browser through the extension. */
+export interface Driven {
+  name: string;
+  ctx: BrowserContext;
+  /** CDP-attached browser handle, null in launch mode. */
+  browser: Browser | null;
+  viaExtension: boolean;
+}
+
+/** Name of the dedicated automation browser (attach or launch mode). */
+export const AGENT = 'agent';
+
+const driven = new Map<string, Promise<Driven>>();
 let filter: CdpFilter | null = null;
 
-async function connect(): Promise<BrowserContext> {
-  if (config.mode === 'extension') {
-    const relay = await startRelay(loadToken());
-    if (!relay) throw new Error(`Another Flintrail process owns the extension relay on port ${config.relayPort}.`);
-    await relay.waitForExtension(config.extensionWaitMs);
-    const browser = await chromium.connectOverCDP(relay.cdpUrl, { timeout: 15000 });
-    browserRef = browser;
-    browser.on('disconnected', () => { ctxPromise = null; browserRef = null; });
-    const ctx = browser.contexts()[0];
-    if (!ctx) throw new Error('Extension browser exposes no context.');
-    return ctx;
-  }
+async function connectExtension(name: string | undefined): Promise<Driven> {
+  const relay = await startRelay(loadToken());
+  if (!relay) throw new Error(`Another Flintrail process owns the extension relay on port ${config.relayPort}.`);
+  const bridge = await relay.waitFor(name, config.extensionWaitMs);
+  const browser = await chromium.connectOverCDP(bridge.cdpUrl, { timeout: 15000 });
+  const forget = () => driven.delete(bridge.key);
+  browser.on('disconnected', forget);
+  bridge.onClose(forget);
+  const ctx = browser.contexts()[0];
+  if (!ctx) throw new Error(`${bridge.key}: the extension exposes no context.`);
+  return { name: bridge.key, ctx, browser, viaExtension: true };
+}
+
+async function connectAgent(): Promise<Driven> {
   if (config.mode === 'launch') {
     const ctx = await chromium.launchPersistentContext(config.profileDir, {
       headless: config.headless,
@@ -120,8 +135,8 @@ async function connect(): Promise<BrowserContext> {
       viewport: { width: 1280, height: 860 },
       acceptDownloads: true,
     });
-    ctx.on('close', () => { ctxPromise = null; });
-    return ctx;
+    ctx.on('close', () => { driven.delete(AGENT); });
+    return { name: AGENT, ctx, browser: null, viaExtension: false };
   }
   let version = await cdpVersion();
   if (!version) {
@@ -136,27 +151,41 @@ async function connect(): Promise<BrowserContext> {
   filter?.close();
   filter = wsUrl ? await startCdpFilter(wsUrl) : null;
   const browser = await chromium.connectOverCDP(filter ? filter.url : config.cdpUrl, { timeout: 15000 });
-  browserRef = browser;
-  browser.on('disconnected', () => { ctxPromise = null; browserRef = null; });
+  browser.on('disconnected', () => { driven.delete(AGENT); });
   const ctx = browser.contexts()[0];
   if (!ctx) throw new Error('Connected browser exposes no context.');
-  return ctx;
+  return { name: AGENT, ctx, browser, viaExtension: false };
 }
 
-export async function getContext(): Promise<BrowserContext> {
-  if (!ctxPromise) ctxPromise = connect().catch((e) => { ctxPromise = null; throw e; });
-  return ctxPromise;
-}
-
-/** Attached browser handle (null in launch mode). */
-export function getAttachedBrowser(): Browser | null {
-  return browserRef;
+/**
+ * The browser to drive. name: "agent" for the dedicated browser, or a connected extension browser
+ * ("brave", "chrome", "edge"...). Without a name: the dedicated browser, or in extension mode the first
+ * connected browser.
+ */
+export async function getDriven(name?: string): Promise<Driven> {
+  const wanted = name?.trim().toLowerCase() || (config.mode === 'extension' ? undefined : AGENT);
+  if (wanted === AGENT) {
+    if (config.mode === 'extension') throw new Error('Mode is "extension": there is no dedicated browser. Name a connected browser (see fl_extension).');
+    if (!driven.has(AGENT)) driven.set(AGENT, connectAgent().catch((e) => { driven.delete(AGENT); throw e; }));
+    return driven.get(AGENT)!;
+  }
+  if (wanted && driven.has(wanted)) return driven.get(wanted)!;
+  if (!wanted) {
+    const first = getRelay()?.list()[0];
+    if (first && driven.has(first.key)) return driven.get(first.key)!;
+  }
+  const pending = connectExtension(wanted);
+  const settled = await pending;
+  // Cache under the real name (an unnamed request resolves to whichever browser is connected).
+  if (!driven.has(settled.name)) driven.set(settled.name, pending);
+  return driven.get(settled.name)!;
 }
 
 export async function shutdown() {
-  if (config.mode === 'launch' && ctxPromise) {
-    const ctx = await ctxPromise.catch(() => null);
-    await ctx?.close().catch(() => {});
+  const agent = driven.get(AGENT);
+  if (config.mode === 'launch' && agent) {
+    const d = await agent.catch(() => null);
+    await d?.ctx.close().catch(() => {});
   }
-  ctxPromise = null;
+  driven.clear();
 }

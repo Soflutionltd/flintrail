@@ -90,7 +90,9 @@ Clients connect to `http://host:8931/mcp` with `Authorization: Bearer <token>`. 
 |---|---|---|
 | `attach` (default) | Your desktop. Keep your logged-in sessions. | Connects over CDP to a dedicated **Chrome for Testing**. On macOS Flintrail finds it, restarts it with a local debugging port if needed (tabs are restored) and opens its own tabs in the background. |
 | `launch` | Servers, CI, Docker. | `FLINTRAIL_MODE=launch` starts Chromium with a persistent profile in `~/.flintrail/profile`, headless by default. |
-| `extension` | Anyone, any Chromium browser, no debugging port. | `FLINTRAIL_MODE=extension` and the Flintrail extension installed. See below. |
+| `extension` | Anyone, any Chromium browser, no debugging port. | `FLINTRAIL_MODE=extension`: no dedicated browser, only the user's browsers through the extension. See below. |
+
+In every mode, the browsers where the Flintrail extension is installed are also reachable, several at once: `fl_open` takes `browser: "brave"`, `"chrome"`, `"edge"`... (`fl_extension` lists them), and without it uses the dedicated browser (`"agent"`).
 
 Flintrail refuses to attach to a personal browser (Brave, Edge, Opera, or on macOS anything that is not Chrome for Testing) unless `FLINTRAIL_ALLOW_ANY_BROWSER=1`. Your everyday browser stays yours. To drive a regular Chrome instead (for example so a password manager can connect to it), start it with its own `--user-data-dir` and set `FLINTRAIL_DEDICATED_PROFILE` to that same path: only a browser running that profile is accepted.
 
@@ -101,13 +103,15 @@ The extension is the easiest way in: no command-line flags, no debugging port, w
 <p align="center"><img src="docs/extension-popup.png" alt="Flintrail extension popup" width="320"></p>
 
 1. **Install.** Download `flintrail-extension-<version>.zip` from the [latest release](https://github.com/Soflutionltd/flintrail/releases/latest), unzip it, open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and pick the folder. (Chrome Web Store listing in progress.)
-2. **Run Flintrail in extension mode**, for example in Claude Desktop:
+2. **Run Flintrail**, for example in Claude Desktop (any mode works; `extension` if you have no dedicated browser):
    ```json
    { "mcpServers": { "flintrail": { "command": "npx", "args": ["-y", "flintrail@latest"], "env": { "FLINTRAIL_MODE": "extension" } } } }
    ```
-3. **Connect.** Click the Flintrail icon, paste the token from `~/.flintrail/token`, click *Connect*. The extension reconnects by itself afterwards.
+3. **That's it.** The extension pairs with Flintrail by itself and reconnects whenever both are running. Ask the agent to "open this in Brave" and it drives Brave.
 
-How it works: Flintrail starts a relay on `127.0.0.1:8932`. The extension connects to it with the token and executes CDP commands with `chrome.debugger`, one tab at a time. Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged. The agent only sees tabs it opened itself or tabs you share with *Share with agent*. Chrome shows its "started debugging this browser" bar while a tab is driven, by design.
+Pairing: at startup Flintrail registers a native messaging host (`com.soflution.flintrail`) in every Chromium browser installed for your user account (macOS and Linux). The browser lets only the Flintrail extension start it, and it hands the extension the relay token, so you never copy it. On Windows, or with `FLINTRAIL_PAIRING=off`, paste the token from `~/.flintrail/token` in the extension popup instead.
+
+How it works: Flintrail starts a relay on `127.0.0.1:8932`. Each extension connects to it with the token and executes CDP commands with `chrome.debugger`, one tab at a time. Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged. The agent only sees tabs it opened itself or tabs you share with *Share with agent*. Chrome shows its "started debugging this browser" bar while a tab is driven, by design.
 
 ### Teach by demonstration
 
@@ -138,7 +142,7 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_run_many` | Replay a flow for many variable sets in parallel tabs. |
 | `fl_flows` / `fl_flow` | List flows, inspect one. |
 | `fl_flow_set_var` | Turn a recorded value into a `{{variable}}`, for flows taught by demonstration. |
-| `fl_extension` | Extension connection status. |
+| `fl_extension` | Browsers Flintrail can drive: the dedicated one and every connected user browser, by name. |
 | `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand. |
 | `fl_login` | Sign in with your saved password (browser password manager, 1Password, Bitwarden or your own command). Flintrail fills it, the agent never sees it. See [Sign in](#sign-in). |
 | `fl_tabs` / `fl_close` | Manage tabs. |
@@ -226,6 +230,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 - Flows are plain JSON in `~/.flintrail/flows`, easy to review and version.
 - The HTTP transport requires a bearer token (constant-time comparison) and binds to `127.0.0.1` by default.
 - `eval` and `request` run inside the page with the page's own privileges, nothing more.
+- The pairing host only answers the Flintrail extension ID (the browser enforces `allowed_origins`), and the relay only listens on `127.0.0.1`.
 
 ## Configuration
 
@@ -233,6 +238,10 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 |---|---|---|
 | `FLINTRAIL_MODE` | `attach` | `attach`, `launch` or `extension` |
 | `FLINTRAIL_RELAY_PORT` | `8932` | Local port the extension connects to |
+| `FLINTRAIL_RELAY` | on | `off` to not start the extension relay |
+| `FLINTRAIL_PAIRING` | on | `off` to not register the pairing host in the browsers |
+| `FLINTRAIL_EXTENSION_IDS` | | Extra extension IDs allowed to pair, comma separated |
+| `FLINTRAIL_DEDICATED_PROFILE` | | `--user-data-dir` of a regular Chrome accepted as the dedicated browser |
 | `FLINTRAIL_CDP_URL` | `http://127.0.0.1:9222` | Browser to attach to |
 | `FLINTRAIL_PORT` | `9222` | Debugging port used when Flintrail starts Chrome for Testing |
 | `FLINTRAIL_CHROME` | auto | Browser executable |
@@ -247,7 +256,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 26 end-to-end tests over real MCP, extension included
+npm test                               # build + 32 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```
@@ -263,7 +272,7 @@ npm run bench                          # benchmark vs Playwright MCP
 
 Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,4 s avec Playwright MCP et 0,11 s avec Flintrail en mode API.
 
-L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, on colle le jeton, et l'agent pilote le navigateur. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
+L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, elle se jumelle toute seule avec Flintrail, et l'agent pilote le navigateur qu'on lui nomme (Brave, Chrome, Edge…), plusieurs à la fois. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
 
 Pour se connecter, l'agent utilise `fl_login` avec vos mots de passe habituels : ceux enregistrés dans le navigateur (sans réglage), ou 1Password, Bitwarden ou tout autre gestionnaire par sa ligne de commande. Flintrail remplit le formulaire lui-même, l'agent ne voit jamais ni le mot de passe ni le code.
 

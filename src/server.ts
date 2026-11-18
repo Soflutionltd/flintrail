@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, listTabs, openTab, snapshot, type Action, type Step } from './engine.js';
+import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { redact, signIn } from './login.js';
@@ -60,6 +60,8 @@ const desktopActionSchema = z.object({
   amount: z.number().int().optional().describe('scroll: units (default 3).'),
 });
 
+const browserOpt = z.string().optional().describe('Which browser: "agent" (dedicated browser, default) or a user browser connected through the Flintrail extension, e.g. "brave", "chrome", "edge" (list with fl_extension).');
+
 const snapOpts = {
   text: z.number().optional().describe('Characters of page text to include (default 600, 0 for none).'),
   max: z.number().optional().describe('Max interactive elements listed (default 150).'),
@@ -69,19 +71,19 @@ export function buildServer(): McpServer {
   const s = new McpServer({ name: 'flintrail', version: VERSION });
 
   s.registerTool('fl_open', {
-    description: 'Open a URL in a background tab of the dedicated browser (logged-in sessions kept). Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
-    inputSchema: { url: z.string(), ...snapOpts },
-  }, guard(async ({ url, text: t, max }) => {
-    const id = await openTab(url);
-    return `Tab ${id}\n` + (await snapshot(getTab(id), { text: t, max }));
+    description: 'Open a URL in a background tab (logged-in sessions kept). By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead ("brave", "chrome"... see fl_extension). Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    inputSchema: { url: z.string(), browser: browserOpt, ...snapOpts },
+  }, guard(async ({ url, browser, text: t, max }) => {
+    const id = await openTab(url, browser);
+    return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max }));
   }));
 
   s.registerTool('fl_adopt', {
     description: 'Take control of a tab the user already has open in the browser (first match on a URL substring), e.g. a site they just signed in to by hand. Returns its snapshot.',
-    inputSchema: { url: z.string().describe('Substring of the tab URL'), ...snapOpts },
-  }, guard(async ({ url, text: t, max }) => {
-    const id = await adoptTab(url);
-    return `Tab ${id}\n` + (await snapshot(getTab(id), { text: t, max }));
+    inputSchema: { url: z.string().describe('Substring of the tab URL'), browser: browserOpt, ...snapOpts },
+  }, guard(async ({ url, browser, text: t, max }) => {
+    const id = await adoptTab(url, browser);
+    return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max }));
   }));
 
   s.registerTool('fl_act', {
@@ -185,13 +187,13 @@ export function buildServer(): McpServer {
 
   s.registerTool('fl_run', {
     description: 'Replay a recorded flow at browser speed, no LLM. On failure (site changed) it stops at the failing step and returns the page so the flow can be repaired.',
-    inputSchema: { name: z.string(), vars: z.record(z.string(), z.string()).optional(), tab: z.string().optional() },
-  }, guard(async ({ name, vars, tab }) => (await runFlow(name, vars || {}, tab)).text));
+    inputSchema: { name: z.string(), vars: z.record(z.string(), z.string()).optional(), tab: z.string().optional(), browser: browserOpt },
+  }, guard(async ({ name, vars, tab, browser }) => (await runFlow(name, vars || {}, tab, { browser })).text));
 
   s.registerTool('fl_run_many', {
     description: 'Replay the same flow for many variable sets in parallel, each in its own background tab.',
-    inputSchema: { name: z.string(), runs: z.array(z.record(z.string(), z.string())).min(1), concurrency: z.number().optional(), keepTabs: z.boolean().optional() },
-  }, guard(async ({ name, runs, concurrency, keepTabs }) => runMany(name, runs, concurrency ?? 4, !!keepTabs)));
+    inputSchema: { name: z.string(), runs: z.array(z.record(z.string(), z.string())).min(1), concurrency: z.number().optional(), keepTabs: z.boolean().optional(), browser: browserOpt },
+  }, guard(async ({ name, runs, concurrency, keepTabs, browser }) => runMany(name, runs, concurrency ?? 4, !!keepTabs, browser)));
 
   s.registerTool('fl_flows', { description: 'List recorded flows with their variables and last timing.', inputSchema: {} },
     guard(async () => listFlows()
@@ -229,15 +231,21 @@ export function buildServer(): McpServer {
     return `Step ${step} of "${name}" now uses {{${v}}} (recorded value was "${was}").`;
   }));
 
-  s.registerTool('fl_extension', { description: 'Status of the Flintrail browser extension (extension mode).', inputSchema: {} },
-    guard(async () => {
-      if (config.mode !== 'extension') return `Mode is "${config.mode}". Set FLINTRAIL_MODE=extension to drive the browser through the extension.`;
-      const r = getRelay();
-      if (!r) return `Relay not running (port ${config.relayPort} owned by another Flintrail process?).`;
-      return r.connected
-        ? `Extension connected: ${r.info.browser || 'browser'} ${r.info.version || ''}. Recording: ${recorder.status() || 'none'}.`
-        : `Relay listening on 127.0.0.1:${config.relayPort}, extension not connected. Token: ${config.home}/token.`;
-    }));
+  s.registerTool('fl_extension', {
+    description: 'Browsers Flintrail can drive: the dedicated one ("agent") and every user browser where the Flintrail extension is connected ("brave", "chrome"...). Pass the name as browser to fl_open.',
+    inputSchema: {},
+  }, guard(async () => {
+    const lines = [config.mode === 'extension' ? 'agent: none (extension mode)' : `agent: dedicated browser (${config.mode} mode)`];
+    const r = getRelay();
+    if (!r) lines.push(`Relay not running (port ${config.relayPort} owned by another Flintrail process?).`);
+    else {
+      const list = r.list();
+      for (const b of list) lines.push(`${b.key}: Extension connected (${b.info.browser || 'browser'}, extension ${b.info.version || '?'})`);
+      if (!list.length) lines.push(`No user browser connected. The Flintrail extension pairs and connects by itself once installed (relay 127.0.0.1:${config.relayPort}).`);
+    }
+    lines.push(`Recording: ${recorder.status() || 'none'}.`);
+    return lines.join('\n');
+  }));
 
   return s;
 }

@@ -15,7 +15,7 @@ export interface RunResult {
   text: string;
 }
 
-export async function runFlow(name: string, vars: Record<string, string> = {}, tab?: string, opts: { snapshot?: boolean } = {}): Promise<RunResult> {
+export async function runFlow(name: string, vars: Record<string, string> = {}, tab?: string, opts: { snapshot?: boolean; browser?: string } = {}): Promise<RunResult> {
   const flow = loadFlow(name);
   const missing = flow.vars.filter((v) => !(v in vars) && v !== 'password');
   if (missing.length) throw new Error(`Missing variables for "${name}": ${missing.join(', ')}`);
@@ -23,7 +23,7 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
   let id = tab || '';
   let page: Page | null = tab ? getTab(tab) : null;
   const web = async (): Promise<Page> => {
-    if (!page) { id = await openTab(); page = getTab(id); }
+    if (!page) { id = await openTab(undefined, opts.browser); page = getTab(id); }
     return page;
   };
   const outputs: string[] = [];
@@ -84,7 +84,7 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
 }
 
 /** Runs the same flow for many variable sets in parallel, each in its own background tab. */
-export async function runMany(name: string, runs: Record<string, string>[], concurrency = 4, keepTabs = false): Promise<string> {
+export async function runMany(name: string, runs: Record<string, string>[], concurrency = 4, keepTabs = false, browser?: string): Promise<string> {
   const flow = loadFlow(name);
   // Desktop steps drive one shared app: run them one at a time.
   if (flow.steps.some((s) => s.do === 'desktop')) concurrency = 1;
@@ -96,7 +96,7 @@ export async function runMany(name: string, runs: Record<string, string>[], conc
     while (next < runs.length) {
       const i = next++;
       try {
-        const r = await runFlow(name, runs[i]!, undefined, { snapshot: false });
+        const r = await runFlow(name, runs[i]!, undefined, { snapshot: false, browser });
         if (r.ok) ok++;
         results[i] = `[${i}] ${r.ok ? 'OK' : `FAILED step ${r.failedStep}`} ${r.ms} ms ${JSON.stringify(runs[i])}${r.outputs.length ? '\n   ' + r.outputs.join('\n   ') : ''}`;
         if (r.ok && r.tab && !keepTabs) await closeTab(r.tab).catch(() => {});
