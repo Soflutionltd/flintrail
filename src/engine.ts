@@ -136,6 +136,9 @@ export async function newPage(): Promise<Page> {
     try {
       const cdp = await browser.newBrowserCDPSession();
       const waitPage = ctx.waitForEvent('page', { timeout: 8000 });
+      // If a CDP call below throws first, this wait would time out later with nobody awaiting it and
+      // crash the whole process: mark it handled, it is still awaited on the success path.
+      waitPage.catch(() => {});
       // Open it in the profile the user is actually using: with several Chrome profiles, the CDP default
       // context can be a profile that is signed out of everything.
       const { targetInfos } = (await cdp.send('Target.getTargets')) as { targetInfos: { type: string; url: string; browserContextId?: string }[] };
