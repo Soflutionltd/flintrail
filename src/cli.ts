@@ -10,6 +10,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { loadToken } from './auth.js';
 import { shutdown } from './browser.js';
 import { config } from './config.js';
+import { installNativeHost } from './pairing.js';
 import { startRelay } from './relay.js';
 import { buildServer, VERSION } from './server.js';
 import { attachUpdateNotice, startUpdateCheck } from './update-notice.js';
@@ -31,7 +32,8 @@ if (flag('help')) {
   flintrail --http          MCP over HTTP (default 127.0.0.1:8931, path /mcp)
     --host <h> --port <p>   listen address
     --token <t>             bearer token (default: FLINTRAIL_TOKEN or ~/.flintrail/token)
-Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0,
+Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_RELAY=off, FLINTRAIL_PAIRING=off,
+  FLINTRAIL_EXTENSION_IDS, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0,
   FLINTRAIL_PASSWORDS=browser,1password[:path],bitwarden[:path],command:path   sources for fl_login, in order (default browser, "off" to disable)`);
   process.exit(0);
 }
@@ -40,9 +42,12 @@ const stop = async () => { await shutdown(); process.exit(0); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
-// In extension mode the relay starts right away, so the extension can connect (and record by
-// demonstration) even before the agent makes its first call.
-if (config.mode === 'extension') await startRelay(loadToken(opt('token', '')));
+// The relay starts right away in every mode, so the user's browsers (Brave, Chrome...) connect through
+// the extension, and can record by demonstration, before the agent makes its first call. Pairing lets the
+// extension fetch the token by itself.
+if (process.env.FLINTRAIL_RELAY !== 'off') {
+  if (await startRelay(loadToken(opt('token', '')))) installNativeHost(config.dedicatedProfile ? [config.dedicatedProfile] : []);
+}
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];

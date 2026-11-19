@@ -2,14 +2,15 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Dialog, Frame, Locator, Page, Request } from 'playwright-core';
-import { getAttachedBrowser, getContext } from './browser.js';
+import { AGENT, getDriven, type Driven } from './browser.js';
 import { config } from './config.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
+import type { DesktopStep } from './desktop.js';
 
 export type ActionKind =
   | 'click' | 'dblclick' | 'hover' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'press' | 'download' | 'upload'
-  | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request' | 'mouse' | 'dialog' | 'resize' | 'login';
+  | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request' | 'mouse' | 'dialog' | 'resize' | 'login' | 'desktop';
 
 export interface Action {
   do: ActionKind;
@@ -45,6 +46,8 @@ export interface Action {
 
 export interface Step extends Omit<Action, 'ref'> {
   target?: TargetDescriptor;
+  /** do: 'desktop' steps act on a native app instead of the browser. */
+  desktop?: DesktopStep;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -57,11 +60,14 @@ interface PageState {
   unseenErrors: number;
   dialogs: string[];
   nextDialog?: { accept: boolean; value?: string };
+  /** Browser the tab lives in ("agent", "brave"...) and whether it is driven through the extension. */
+  browser: string;
+  viaExtension: boolean;
 }
 const states = new WeakMap<Page, PageState>();
 function stateOf(page: Page): PageState {
   let s = states.get(page);
-  if (!s) states.set(page, (s = { console: [], unseenErrors: 0, dialogs: [] }));
+  if (!s) states.set(page, (s = { console: [], unseenErrors: 0, dialogs: [], browser: AGENT, viaExtension: false }));
   return s;
 }
 
@@ -86,10 +92,11 @@ async function onDialog(page: Page, d: Dialog) {
   }
 }
 
-function register(page: Page): string {
+function register(page: Page, where: Driven): string {
   for (const [id, p] of tabs) if (p === page) return id;
   const id = 't' + nextTab++;
   tabs.set(id, page);
+  Object.assign(stateOf(page), { browser: where.name, viaExtension: where.viaExtension });
   page.on('close', () => tabs.delete(id));
   page.on('request', (r) => recorder.onRequest(r));
   page.on('response', (r) => recorder.onResponse(r));
@@ -125,14 +132,16 @@ function pageNotes(page: Page): string[] {
   return notes;
 }
 
-export async function newPage(): Promise<Page> {
-  const ctx = await getContext();
-  const browser = getAttachedBrowser();
+async function newPage(where: Driven): Promise<Page> {
+  const { ctx, browser } = where;
   if (browser) {
     // Open the tab in the background so the window never steals focus.
     try {
       const cdp = await browser.newBrowserCDPSession();
       const waitPage = ctx.waitForEvent('page', { timeout: 8000 });
+      // If a CDP call below throws first, this wait would time out later with nobody awaiting it and
+      // crash the whole process: mark it handled, it is still awaited on the success path.
+      waitPage.catch(() => {});
       // Open it in the profile the user is actually using: with several Chrome profiles, the CDP default
       // context can be a profile that is signed out of everything.
       const { targetInfos } = (await cdp.send('Target.getTargets')) as { targetInfos: { type: string; url: string; browserContextId?: string }[] };
@@ -150,9 +159,11 @@ export async function newPage(): Promise<Page> {
   return ctx.newPage();
 }
 
-export async function openTab(url?: string): Promise<string> {
-  const page = await newPage();
-  const id = register(page);
+/** Opens a background tab in the named browser (see getDriven), optionally on a URL. */
+export async function openTab(url?: string, browserName?: string): Promise<string> {
+  const where = await getDriven(browserName);
+  const page = await newPage(where);
+  const id = register(page, where);
   if (url) {
     await gotoFast(page, url);
     recorder.onOpen(url);
@@ -161,22 +172,27 @@ export async function openTab(url?: string): Promise<string> {
 }
 
 /** Take over a tab the user already has open, for example one where they just signed in by hand. */
-export async function adoptTab(match: string): Promise<string> {
-  const ctx = await getContext();
+export async function adoptTab(match: string, browserName?: string): Promise<string> {
+  const where = await getDriven(browserName);
   const owned = new Set(tabs.values());
-  const page = ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
-  if (!page) throw new Error(`No open tab whose URL contains "${match}".`);
-  return register(page);
+  const page = where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
+  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}".`);
+  return register(page, where);
+}
+
+/** Browser a Flintrail tab lives in. */
+export function tabBrowser(id: string): string {
+  return stateOf(getTab(id)).browser;
 }
 
 export function getTab(id: string): Page {
   const p = tabs.get(id);
-  if (!p || p.isClosed()) throw new Error(`Tab ${id} not found. Use fl_open first.`);
+  if (!p || p.isClosed()) throw new Error(`Tab ${id} not found: closed, or released by the extension after 5 minutes without use. Use fl_open, or fl_adopt to take an open tab back.`);
   return p;
 }
 
 export function listTabs(): string[] {
-  return [...tabs].filter(([, p]) => !p.isClosed()).map(([id, p]) => `${id}  ${p.url()}`);
+  return [...tabs].filter(([, p]) => !p.isClosed()).map(([id, p]) => `${id}  [${stateOf(p).browser}]  ${p.url()}`);
 }
 
 export async function closeTab(id: string) {
@@ -360,7 +376,7 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
     }
     case 'dialog': {
       const policy = { accept: a.accept !== false, value: fillVars(a.value, vars) };
-      if (config.mode !== 'extension') {
+      if (!stateOf(page).viaExtension) {
         stateOf(page).nextDialog = policy;
         return undefined;
       }

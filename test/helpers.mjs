@@ -14,6 +14,9 @@ export function testEnv(extra = {}) {
     FLINTRAIL_HOME: home,
     FLINTRAIL_DOWNLOADS: join(home, 'downloads'),
     FLINTRAIL_HEADLESS: '1',
+    // Never touch the real browsers of the machine running the tests.
+    FLINTRAIL_RELAY: 'off',
+    FLINTRAIL_PAIRING: 'off',
     ...(process.env.FLINTRAIL_CHROME ? { FLINTRAIL_CHROME: process.env.FLINTRAIL_CHROME } : {}),
     ...extra,
   };

@@ -22,7 +22,7 @@
   button.ghost { background:transparent; border:1px solid var(--line); color:var(--text); }
   button.rec { background:var(--rec); }
   button:disabled { opacity:.45; cursor:default; }
-  #status, #msg { color:var(--muted); font-size:12px; margin-top:6px; min-height:16px; }
+  #status, #msg, #windowInfo { color:var(--muted); font-size:12px; margin-top:6px; min-height:16px; }
   #recinfo { color:var(--rec); font-weight:600; font-size:12px; margin-top:6px; }
   .hidden { display:none; }
   footer { padding:2px 16px 12px; color:var(--muted); font-size:11px; }
@@ -34,9 +34,15 @@
 
   <section id="connectBox">
     <h2>Connection</h2>
-    <div class="row"><input id="token" type="password" placeholder="Token (~/.flintrail/token)" autocomplete="off"><input id="port" class="port" placeholder="8932"></div>
+    <div class="row"><input id="token" type="password" placeholder="Token (optional, paired automatically)" autocomplete="off"><input id="port" class="port" placeholder="8932"></div>
     <div class="row"><button id="connect">Connect</button><button id="disconnect" class="ghost hidden">Disconnect</button></div>
     <div id="status"></div>
+  </section>
+
+  <section>
+    <h2>Agent window</h2>
+    <div class="row"><button id="agentWindow" class="ghost">Use this window for the agent</button></div>
+    <div id="windowInfo"></div>
   </section>
 
   <section>
