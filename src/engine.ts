@@ -187,7 +187,7 @@ export function tabBrowser(id: string): string {
 
 export function getTab(id: string): Page {
   const p = tabs.get(id);
-  if (!p || p.isClosed()) throw new Error(`Tab ${id} not found. Use fl_open first.`);
+  if (!p || p.isClosed()) throw new Error(`Tab ${id} not found: closed, or released by the extension after 5 minutes without use. Use fl_open, or fl_adopt to take an open tab back.`);
   return p;
 }
 

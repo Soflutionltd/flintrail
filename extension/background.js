@@ -143,24 +143,57 @@ async function attach(tabId) {
     attached.add(tabId);
     refreshBadge();
   }
+  lastUsed.set(tabId, Date.now());
   return targetInfoFor(tabId);
 }
 
 async function detach(tabId) {
+  lastUsed.delete(tabId);
   if (!attached.delete(tabId)) return;
   try { await chrome.debugger.detach({ tabId }); } catch { /* already gone */ }
   refreshBadge();
 }
 
+// ---------- agent window ----------
+// The agent opens its tabs only in the window the user picked in the popup, never in the window the
+// user works in. Window ids change when the browser restarts, so the choice lives in session storage
+// and is forgotten on restart rather than pointing at the wrong window.
+async function agentWindow() {
+  const { agentWindow: id } = await chrome.storage.session.get('agentWindow');
+  if (typeof id === 'number') {
+    try { await chrome.windows.get(id); return { windowId: id }; } catch { /* closed since */ }
+  }
+  // No window picked, or it was closed: open one for the agent, without taking the focus.
+  const win = await chrome.windows.create({ focused: false, url: 'about:blank' });
+  await chrome.storage.session.set({ agentWindow: win.id });
+  return { windowId: win.id, blankTabId: win.tabs?.[0]?.id };
+}
+
+// The debugging bar shows in every window while any tab is driven: release tabs left idle.
+const IDLE_RELEASE_MS = 5 * 60 * 1000;
+const lastUsed = new Map();
+async function releaseIdleTabs() {
+  const now = Date.now();
+  for (const tabId of [...attached]) {
+    if (now - (lastUsed.get(tabId) ?? now) < IDLE_RELEASE_MS) continue;
+    await detach(tabId);
+    send({ type: 'detached', tabId });
+  }
+}
+
 async function handle(method, p) {
   switch (method) {
     case 'createTab': {
-      const tab = await chrome.tabs.create({ url: 'about:blank', active: !p.background });
+      const { windowId, blankTabId } = await agentWindow();
+      const tab = blankTabId !== undefined
+        ? await chrome.tabs.get(blankTabId)
+        : await chrome.tabs.create({ windowId, url: 'about:blank', active: !p.background });
       const targetInfo = await attach(tab.id);
       if (p.url && p.url !== 'about:blank') chrome.tabs.update(tab.id, { url: p.url });
       return { tabId: tab.id, targetInfo };
     }
     case 'send':
+      lastUsed.set(p.tabId, Date.now());
       return chrome.debugger.sendCommand(p.sessionId ? { tabId: p.tabId, sessionId: p.sessionId } : { tabId: p.tabId }, p.method, p.params);
     case 'closeTab':
       await chrome.tabs.remove(p.tabId).catch(() => {});
@@ -276,6 +309,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return reply({ text: 'Tab released.' });
       case 'isShared':
         return reply({ shared: attached.has(msg.tabId) });
+      case 'setAgentWindow':
+        await chrome.storage.session.set({ agentWindow: msg.windowId });
+        return reply({ text: 'The agent will open its tabs in this window only.' });
+      case 'getAgentWindow': {
+        const { agentWindow: id } = await chrome.storage.session.get('agentWindow');
+        return reply({ windowId: typeof id === 'number' ? id : null });
+      }
       case 'demoStart':
         return reply({ text: await startDemo(msg.name, msg.tab) });
       case 'demoStop':
@@ -297,5 +337,9 @@ chrome.runtime.onInstalled.addListener(async () => {
   ensureAlarm();
   autoConnect();
 });
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'flintrail-reconnect') autoConnect(); });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name !== 'flintrail-reconnect') return;
+  autoConnect();
+  releaseIdleTabs();
+});
 autoConnect();

@@ -111,7 +111,9 @@ The extension is the easiest way in: no command-line flags, no debugging port, w
 
 Pairing: at startup Flintrail registers a native messaging host (`com.soflution.flintrail`) in every Chromium browser installed for your user account (macOS and Linux). The browser lets only the Flintrail extension start it, and it hands the extension the relay token, so you never copy it. On Windows, or with `FLINTRAIL_PAIRING=off`, paste the token from `~/.flintrail/token` in the extension popup instead.
 
-How it works: Flintrail starts a relay on `127.0.0.1:8932`. Each extension connects to it with the token and executes CDP commands with `chrome.debugger`, one tab at a time. Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged. The agent only sees tabs it opened itself or tabs you share with *Share with agent*. Chrome shows its "started debugging this browser" bar while a tab is driven, by design.
+How it works: Flintrail starts a relay on `127.0.0.1:8932`. Each extension connects to it with the token and executes CDP commands with `chrome.debugger`, one tab at a time. Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged. The agent only sees tabs it opened itself or tabs you share with *Share with agent*.
+
+Agent window: the agent never opens tabs in the window you work in. Click *Use this window for the agent* in the popup of the window you leave to it; without a choice, or once that window is closed, it opens a window of its own in the background. Chrome shows its "started debugging this browser" bar in every window while a tab is driven (the browser enforces this, extensions cannot hide it), so the extension releases tabs left unused for 5 minutes; the agent takes one back with `fl_adopt`.
 
 ### Teach by demonstration
 
@@ -256,7 +258,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 32 end-to-end tests over real MCP, extension included
+npm test                               # build + 33 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```

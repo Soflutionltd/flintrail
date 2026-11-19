@@ -66,6 +66,27 @@ test('the extension pairs by itself and is listed by name', async () => {
   await mcp.call('fl_close', { tab: /Tab (t\d+)/.exec(snap)[1] });
 });
 
+test('agent tabs open only in the agent window, never in the user\'s window', async () => {
+  // The user works in one window and picks another one for the agent.
+  const userWindow = await sw.evaluate(async () => (await chrome.windows.getAll())[0].id);
+  const agentWindowId = await sw.evaluate(async () => (await chrome.windows.create({ focused: false, url: 'about:blank' })).id);
+  await sw.evaluate((id) => chrome.storage.session.set({ agentWindow: id }), agentWindowId);
+  const snap = await mcp.call('fl_open', { url: site.url, text: 0 });
+  const tab = /Tab (t\d+)/.exec(snap)[1];
+  const windowOf = () => sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '/*' })).map((t) => t.windowId), site.url);
+  assert.deepEqual(await windowOf(), [agentWindowId]);
+  assert.notEqual(agentWindowId, userWindow);
+  await mcp.call('fl_close', { tab });
+
+  // The agent window was closed: the agent opens a window of its own instead of using the user's.
+  await sw.evaluate((id) => chrome.windows.remove(id), agentWindowId);
+  const again = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url, text: 0 }))[1];
+  const [w] = await windowOf();
+  assert.notEqual(w, userWindow);
+  assert.notEqual(w, agentWindowId);
+  await mcp.call('fl_close', { tab: again });
+});
+
 test('agent drives the browser through the extension', async () => {
   const snap = await mcp.call('fl_open', { url: site.url });
   const tab = /Tab (t\d+)/.exec(snap)[1];
