@@ -20,7 +20,9 @@ export const config = {
   flowsDir: join(home, 'flows'),
   profileDir: env.FLINTRAIL_PROFILE || join(home, 'profile'),
   relayPort: Number(env.FLINTRAIL_RELAY_PORT || 8932),
-  extensionWaitMs: Number(env.FLINTRAIL_EXTENSION_WAIT || 15000),
+  /** How long a call waits for a browser to connect. Above 30 s: after Flintrail restarts, the extension
+   * only notices on its next reconnect alarm, which fires every 30 s. */
+  extensionWaitMs: Number(env.FLINTRAIL_EXTENSION_WAIT || 35000),
   downloadsDir: env.FLINTRAIL_DOWNLOADS || join(homedir(), 'Downloads', 'Flintrail'),
   /** Password sources fl_login tries in order: browser, 1password[:bin], bitwarden[:bin], command:bin. "off" disables it. */
   passwordSources: (env.FLINTRAIL_PASSWORDS ?? 'browser').trim().toLowerCase() === 'off'
