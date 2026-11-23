@@ -51,7 +51,11 @@ interface Hello {
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 
+// Browser-level sessions (Playwright opens one per Target.attachToBrowserTarget, several at once when tabs
+// open in parallel): each gets its own id, or answers meant for one reach another and Playwright aborts.
 const BROWSER_SESSION = 'flintrail-browser';
+let browserSessions = 0;
+const isBrowserSession = (sessionId: string | undefined) => !sessionId || sessionId === BROWSER_SESSION || sessionId.startsWith(BROWSER_SESSION + '-');
 
 /** "Google Chrome" -> chrome, "Microsoft Edge" -> edge, "Brave" -> brave. */
 function browserKey(brand: string | undefined): string {
@@ -278,7 +282,7 @@ class ExtensionBridge {
       } catch (e) {
         this.toView(view, { id: m.id, sessionId: m.sessionId, error: { code: -32000, message: (e as Error).message } });
       }
-      if (m.method === 'Target.setAutoAttach' && (!m.sessionId || m.sessionId === BROWSER_SESSION)) {
+      if (m.method === 'Target.setAutoAttach' && isBrowserSession(m.sessionId)) {
         for (const tab of this.tabsBySession.values()) if (tab.owner === view) this.announce(tab);
       }
     });
@@ -312,7 +316,7 @@ class ExtensionBridge {
 
   private async handleCdp(view: CdpView, m: CdpMessage): Promise<unknown> {
     const { method = '', params = {}, sessionId } = m;
-    if (!sessionId || sessionId === BROWSER_SESSION) return this.browserCommand(view, method, params);
+    if (!sessionId || isBrowserSession(sessionId)) return this.browserCommand(view, method, params);
     const tab = this.ownedTab(view, sessionId);
     if (tab) return this.request('send', { tabId: tab.tabId, method, params });
     const owner = this.childSessions.get(sessionId);
@@ -329,7 +333,7 @@ class ExtensionBridge {
         view.autoAttach = true;
         return {};
       case 'Target.attachToBrowserTarget':
-        return { sessionId: BROWSER_SESSION };
+        return { sessionId: `${BROWSER_SESSION}-${++browserSessions}` };
       case 'Target.getTargetInfo':
         return { targetInfo: { targetId: 'flintrail-browser', type: 'browser', title: '', url: '', attached: true, canAccessOpener: false } };
       case 'Target.getTargets':
