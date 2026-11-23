@@ -30,6 +30,9 @@ interface Tab {
   targetInfo: Record<string, unknown> & { targetId: string; url?: string };
   /** The view (client + browser) driving this tab. null: shared by the user, not claimed yet. */
   owner: CdpView | null;
+  /** Page.getFrameTree calls still unanswered: the tab's events wait for them (see onDebuggerEvent). */
+  frameTreesPending?: number;
+  heldEvents?: Record<string, unknown>[];
 }
 
 interface CdpMessage {
@@ -114,6 +117,9 @@ class CdpView {
 
 /** How long a browser whose extension dropped its connection keeps its tabs and the agents' connections. */
 const EXTENSION_GRACE_MS = 60 * 1000;
+
+/** handleCdp already sent the reply itself (in order with the events it held back). */
+const HANDLED = Symbol('handled');
 
 /** One line in relay.log: when tabs are lost, it says why. */
 const log = (line: string) => console.error(`${new Date().toISOString()} ${line}`);
@@ -302,7 +308,12 @@ class ExtensionBridge {
     if (method === 'Target.targetInfoChanged' && !childSession && params?.targetInfo?.targetId === tab.targetInfo.targetId) {
       tab.targetInfo = params.targetInfo;
     }
-    this.toView(tab.owner, { method, params, sessionId: childSession || tab.sessionId });
+    const event = { method, params, sessionId: childSession || tab.sessionId };
+    // chrome.debugger answers commands asynchronously, so the execution contexts Runtime.enable reports can
+    // arrive before the frame tree asked for just before it. Playwright then ignores them as belonging to
+    // unknown frames and waits forever for a context: hold the tab's events until the frame tree is answered.
+    if (tab.frameTreesPending) (tab.heldEvents ??= []).push(event);
+    else this.toView(tab.owner, event);
   }
 
   /** Gives a tab the user shared (URL containing match) to this client. */
@@ -342,7 +353,7 @@ class ExtensionBridge {
       this.lastClient = view.client;
       try {
         const result = await this.handleCdp(view, m);
-        this.toView(view, { id: m.id, sessionId: m.sessionId, result: result ?? {} });
+        if (result !== HANDLED) this.toView(view, { id: m.id, sessionId: m.sessionId, result: result ?? {} });
       } catch (e) {
         this.toView(view, { id: m.id, sessionId: m.sessionId, error: { code: -32000, message: (e as Error).message } });
       }
@@ -382,6 +393,16 @@ class ExtensionBridge {
     const { method = '', params = {}, sessionId } = m;
     if (!sessionId || isBrowserSession(sessionId)) return this.browserCommand(view, method, params);
     const tab = this.ownedTab(view, sessionId);
+    if (tab && method === 'Page.getFrameTree') {
+      tab.frameTreesPending = (tab.frameTreesPending || 0) + 1;
+      try {
+        const tree = await this.request('send', { tabId: tab.tabId, method, params });
+        this.toView(view, { id: m.id, sessionId, result: tree ?? {} });
+        return HANDLED;
+      } finally {
+        if (!--tab.frameTreesPending) for (const event of tab.heldEvents?.splice(0) ?? []) this.toView(tab.owner, event);
+      }
+    }
     if (tab) return this.request('send', { tabId: tab.tabId, method, params });
     const owner = this.childSessions.get(sessionId);
     if (owner !== undefined && this.tabsById.get(owner)?.owner === view) return this.request('send', { tabId: owner, sessionId, method, params });
