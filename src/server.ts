@@ -9,6 +9,7 @@ import { config } from './config.js';
 import { getRelayClient } from './relay-client.js';
 import { localProfiles, matchProfiles } from './profiles.js';
 import { slug } from './relay-protocol.js';
+import { bindVariable, describeShortcut } from './api-shortcut.js';
 import { listFlows, loadFlow, saveFlow } from './store.js';
 
 import { VERSION } from './version.js';
@@ -196,17 +197,17 @@ export function buildServer(): McpServer {
 
   s.registerTool('fl_run', {
     description: 'Replay a recorded flow at browser speed, no LLM. On failure (site changed) it stops at the failing step and returns the page so the flow can be repaired.',
-    inputSchema: { name: z.string(), vars: z.record(z.string(), z.string()).optional(), tab: z.string().optional(), browser: browserOpt },
-  }, guard(async ({ name, vars, tab, browser }) => (await runFlow(name, vars || {}, tab, { browser })).text));
+    inputSchema: { name: z.string(), vars: z.record(z.string(), z.string()).optional(), tab: z.string().optional(), browser: browserOpt, direct: z.boolean().optional().describe('Send the flow\'s recorded API request alone instead of replaying the UI steps (only for flows where fl_record_stop or fl_flows reports a direct API call). It writes on the site without going through its interface: ask the user before the first direct run of a flow. A refusal (HTTP 4xx) falls back to the UI steps; any other failure stops without replaying, to never write twice.') },
+  }, guard(async ({ name, vars, tab, browser, direct }) => (await runFlow(name, vars || {}, tab, { browser, direct })).text));
 
   s.registerTool('fl_run_many', {
     description: 'Replay the same flow for many variable sets in parallel, each in its own background tab.',
-    inputSchema: { name: z.string(), runs: z.array(z.record(z.string(), z.string())).min(1), concurrency: z.number().optional(), keepTabs: z.boolean().optional(), browser: browserOpt },
-  }, guard(async ({ name, runs, concurrency, keepTabs, browser }) => runMany(name, runs, concurrency ?? 4, !!keepTabs, browser)));
+    inputSchema: { name: z.string(), runs: z.array(z.record(z.string(), z.string())).min(1), concurrency: z.number().optional(), keepTabs: z.boolean().optional(), browser: browserOpt, direct: z.boolean().optional().describe('Send each run as the flow\'s direct API request, as in fl_run.') },
+  }, guard(async ({ name, runs, concurrency, keepTabs, browser, direct }) => runMany(name, runs, concurrency ?? 4, !!keepTabs, browser, !!direct)));
 
   s.registerTool('fl_flows', { description: 'List recorded flows with their variables and last timing.', inputSchema: {} },
     guard(async () => listFlows()
-      .map((f) => `${f.name}: ${f.steps.length} steps, vars [${f.vars.join(', ')}], ${f.runs} runs${f.lastMs ? `, last ${f.lastMs} ms` : ''}. ${f.description}`)
+      .map((f) => `${f.name}: ${f.steps.length} steps, vars [${f.vars.join(', ')}], ${f.runs} runs${f.lastMs ? `, last ${f.lastMs} ms` : ''}${f.api ? `, direct API call ${describeShortcut(f.api)}` : ''}. ${f.description}`)
       .join('\n') || 'No flows yet.'));
 
   s.registerTool('fl_flow', { description: 'Show a flow with all its steps and element fingerprints.', inputSchema: { name: z.string() } },
@@ -236,8 +237,20 @@ export function buildServer(): McpServer {
     else if (st.value !== undefined) st.value = `{{${v}}}`; else st.url = `{{${v}}}`;
     f.vars = [...new Set([...f.vars, v])];
     f.updatedAt = new Date().toISOString();
+    // The direct API call must carry the new variable too, or it would keep sending the recorded value.
+    let direct = '';
+    if (f.api) {
+      const bound = st.value !== undefined && was !== undefined ? bindVariable(f.api, was, v) : null;
+      if (bound) {
+        f.api = bound;
+        direct = ' The direct API call uses it too.';
+      } else {
+        delete f.api;
+        direct = ' The direct API call was removed: the recorded value is not found exactly once in its request.';
+      }
+    }
     saveFlow(f);
-    return `Step ${step} of "${name}" now uses {{${v}}} (recorded value was "${was}").`;
+    return `Step ${step} of "${name}" now uses {{${v}}} (recorded value was "${was}").${direct}`;
   }));
 
   s.registerTool('fl_extension', {

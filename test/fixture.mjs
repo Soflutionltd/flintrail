@@ -100,6 +100,10 @@ export function startFixture(port = 0) {
       req.on('data', (c) => (b += c));
       req.on('end', () => {
         const o = JSON.parse(b || '{}');
+        // A plate the server chokes on: the request arrived, the answer is an error.
+        // A session that expired: like many sites, the API sends the caller to the sign-in page.
+        if (o.plate === 'EXPIRED') { res.writeHead(302, { location: '/login' }); return res.end(); }
+        if (o.plate === 'BOOM') { res.writeHead(500, { 'content-type': 'text/plain' }); return res.end('server error'); }
         const ticket = 'T' + (1000 + orders.length);
         orders.push({ ...o, ticket });
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -107,6 +111,71 @@ export function startFixture(port = 0) {
       });
       return;
     }
+    // A site whose API wants a token only its own page script knows: a direct call without it is refused.
+    if (url.pathname === '/guarded') return html('Guarded', `<h1>Guarded order</h1>
+      <label>Plate <input name="plate"></label>
+      <button type="button" id="go">Order</button><p id="out"></p>
+      <script>
+        go.onclick = async () => {
+          const r = await fetch('/api/guarded', { method: 'POST', headers: { 'content-type': 'application/json', 'x-page-token': 'tok-' + Date.now() },
+            body: JSON.stringify({ plate: document.querySelector('input').value }) });
+          out.textContent = r.ok ? 'Guarded order done' : 'Refused';
+        };
+      </script>`);
+    if (url.pathname === '/api/guarded' && req.method === 'POST') {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => {
+        if (!req.headers['x-page-token']) { res.writeHead(403, { 'content-type': 'application/json' }); return res.end('{"error":"token"}'); }
+        orders.push({ ...JSON.parse(b || '{}'), guarded: true });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+      });
+      return;
+    }
+    // A classic form posted by page navigation, then a button that calls the API.
+    if (url.pathname === '/native') return html('Native', `<h1>Basket</h1>
+      <form method="post" action="/native-step"><button>Add to basket</button></form>`);
+    if (url.pathname === '/native-step' && req.method === 'POST') {
+      req.resume();
+      return html('Pay', `<h1>Pay</h1><button type="button" id="pay">Pay</button><p id="out"></p>
+        <script>
+          pay.onclick = async () => {
+            await fetch('/api/order', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ plate: 'NATIVE' }) });
+            out.textContent = 'Paid';
+          };
+        </script>`);
+    }
+    // An API with the record ID in its path, a query string and a number in its body.
+    if (url.pathname === '/items') return html('Items', `<h1>Stock</h1>
+      <label>Item <input name="item"></label><label>Quantity <input name="qty"></label>
+      <button type="button" id="save">Save</button><p id="out"></p>
+      <script>
+        save.onclick = async () => {
+          const [item, qty] = [...document.querySelectorAll('input')].map((i) => i.value);
+          await fetch('/api/items/' + encodeURIComponent(item) + '?mode=fast', { method: 'PUT', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ qty: Number(qty), unit: 'box' }) });
+          out.textContent = 'Stock saved';
+        };
+      </script>`);
+    if (url.pathname.startsWith('/api/items/') && req.method === 'PUT') {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => {
+        orders.push({ item: decodeURIComponent(url.pathname.slice('/api/items/'.length)), mode: url.searchParams.get('mode'), ...JSON.parse(b || '{}') });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+      });
+      return;
+    }
+    // A request that carries a session token next to its data.
+    if (url.pathname === '/tokened') return html('Tokened', `<h1>Tokened</h1><button type="button" id="send">Send</button><p id="out"></p>
+      <script>
+        send.onclick = async () => {
+          await fetch('/api/order', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ plate: 'TK-1', csrf: 'abc123' }) });
+          out.textContent = 'Sent';
+        };
+      </script>`);
     res.writeHead(404).end();
   });
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, url: `http://127.0.0.1:${server.address().port}` })));

@@ -478,6 +478,7 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
   const notes: string[] = [];
   for (let i = 0; i < actions.length; i++) {
     const a = actions[i]!;
+    recorder.beginAction(page);
     try {
       if (!needsElement(a)) {
         const v = await performPage(page, a);

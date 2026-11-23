@@ -32,7 +32,7 @@ Flintrail treats the browser like a JIT compiler treats code:
 1. **Live**, the agent drives the page, but batches a whole sequence of actions into one call and gets back a compact snapshot with clickable refs.
 2. **Record**, the same calls are captured with multi-clue element fingerprints and `{{variables}}`.
 3. **Replay**, the flow runs at browser speed with no model between steps. When a site changes, the run stops at the exact failing step and hands the page back so the agent repairs only that part.
-4. **API replay**, Flintrail sees the site's own fetch/XHR calls and can replay them from inside the page, with the same cookies and session. No rendering, no clicking.
+4. **API replay**, Flintrail sees the site's own fetch/XHR calls and can replay them from inside the page, with the same cookies and session. No rendering, no clicking. When a recorded flow ends on a single write request, Flintrail finds it by itself, ties each flow variable to the place of the request that carried its value, and `fl_run(direct: true)` sends that request alone.
 
 ## Benchmark
 
@@ -146,7 +146,7 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_screenshot` | JPEG screenshot of the tab, or of one element (`ref` / `selector`), in CSS pixels usable by `mouse`. |
 | `fl_console` | Console errors and uncaught exceptions of a tab (`level: "all"` adds warnings and logs). `fl_act` says when new ones appear. |
 | `fl_record_start` / `fl_record_stop` | Record a flow; `repairFrom` keeps the good steps and re-records the rest. |
-| `fl_run` | Replay a flow with variables, no LLM. |
+| `fl_run` | Replay a flow with variables, no LLM. `direct: true` sends the flow's own API request instead of the UI steps, when one was detected. |
 | `fl_run_many` | Replay a flow for many variable sets in parallel tabs. |
 | `fl_flows` / `fl_flow` | List flows, inspect one. |
 | `fl_flow_set_var` | Turn a recorded value into a `{{variable}}`, for flows taught by demonstration. |
@@ -238,6 +238,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 - Flows are plain JSON in `~/.flintrail/flows`, easy to review and version.
 - The HTTP transport requires a bearer token (constant-time comparison) and binds to `127.0.0.1` by default.
 - `eval` and `request` run inside the page with the page's own privileges, nothing more.
+- A direct API replay (`fl_run(direct: true)`) is never the default: the agent has to ask for it, and is told to ask you first. It is only kept for a flow that makes exactly one write request (a second one, even usage reporting, rules it out), to the site of its start URL, with nothing but waits after it, with no form posted by page navigation, and never for a flow that handles a password or whose request carries a credential or session token: the request is stored in the flow file in clear. A redirect, or a page where the site answered JSON when recorded, counts as a failure. If the site refuses the request (HTTP 4xx) the flow replays through the UI; on any other failure it stops without replaying, so nothing is written twice.
 - The pairing host only answers the Flintrail extension ID (the browser enforces `allowed_origins`), and the relay only listens on `127.0.0.1`.
 - The relay refuses connections from web pages (they always send an `Origin` header). Flintrail processes and the extension prove they know the token with an HMAC over a fresh challenge, and the relay proves it back, so the token never travels and a program squatting the port learns nothing.
 

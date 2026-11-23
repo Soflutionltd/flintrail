@@ -3,6 +3,7 @@ import type { Page, Request, Response } from 'playwright-core';
 import type { Action, Step } from './engine.js';
 import type { DesktopStep } from './desktop.js';
 import type { TargetDescriptor } from './page-scripts.js';
+import { BODY_LIMIT, describeShortcut, findShortcut, isWrite } from './api-shortcut.js';
 import { loadFlow, saveFlow, type Flow } from './store.js';
 
 export interface ApiCall {
@@ -25,6 +26,14 @@ interface Recording {
   steps: Step[];
   repairFrom?: number;
   base?: Flow;
+  /** Recorded value of each variable, to find it again in the site's API request. */
+  literals: Map<string, string>;
+  /** A password went through this recording: its requests are never kept. */
+  sensitive: boolean;
+  /** Write requests (POST, PUT, PATCH, DELETE) the site made during this recording. */
+  writes: ApiCall[];
+  /** Forms submitted by plain page navigation (POST), which no fetch/XHR capture sees. */
+  formPosts: number;
 }
 
 class Recorder {
@@ -32,6 +41,10 @@ class Recorder {
   private calls: ApiCall[] = [];
   private pending = new Map<Request, { call: ApiCall; t0: number }>();
   private seq = 1;
+  /** Index of the step being performed: the requests it triggers are tied to it. */
+  private current = 0;
+  /** Tab the recorded actions run in: requests of other tabs are not part of the flow. */
+  private page: Page | null = null;
 
   get active() { return this.rec !== null; }
 
@@ -49,7 +62,13 @@ class Recorder {
       steps: [],
       repairFrom,
       base,
+      literals: new Map(),
+      sensitive: false,
+      writes: [],
+      formPosts: 0,
     };
+    this.current = 0;
+    this.page = null;
     return `Recording "${name}" started${repairFrom !== undefined ? ` (repairing from step ${repairFrom})` : ''}. Every fl_open / fl_act / fl_desktop_act from now on is captured.`;
   }
 
@@ -61,22 +80,46 @@ class Recorder {
     const steps = r.base ? [...r.base.steps.slice(0, r.repairFrom), ...r.steps] : r.steps;
     const vars = [...new Set((JSON.stringify(steps).match(/\{\{(\w+)\}\}/g) || []).map((v) => v.slice(2, -2)))];
     const now = new Date().toISOString();
+    // A repaired flow mixes two recordings: its request can no longer be tied to all of its steps.
+    const found = r.base
+      ? (r.base.api || r.writes.length ? { reason: 'a repaired flow mixes two recordings' } : {})
+      : findShortcut({
+      steps,
+      vars,
+      literals: r.literals,
+      startUrl: r.startUrl,
+      calls: r.writes,
+      formPosts: r.formPosts,
+      sensitive: r.sensitive,
+    });
     saveFlow({
       name: r.name,
       description: r.description,
       startUrl: r.startUrl,
       vars,
       steps,
+      ...(found.shortcut ? { api: found.shortcut } : {}),
       createdAt: r.base?.createdAt || now,
       updatedAt: now,
       runs: r.base?.runs || 0,
     });
-    return `Flow "${r.name}" saved: ${steps.length} steps, variables: ${vars.join(', ') || 'none'}.`;
+    const direct = found.shortcut
+      ? `\nDirect API call detected: ${describeShortcut(found.shortcut)}. fl_run(direct: true) sends it without the UI steps.`
+      : found.reason ? `\nNo direct API call kept: ${found.reason}.` : '';
+    return `Flow "${r.name}" saved: ${steps.length} steps, variables: ${vars.join(', ') || 'none'}.${direct}`;
   }
 
   onOpen(url: string) {
     if (this.rec && this.rec.steps.length === 0 && !this.rec.startUrl) this.rec.startUrl = url;
     else if (this.rec) this.rec.steps.push({ do: 'goto', url });
+    if (this.rec) this.current = Math.max(0, this.rec.steps.length - 1);
+  }
+
+  /** Called before an action runs, so the requests it triggers are tied to its step. */
+  beginAction(page: Page) {
+    if (!this.rec) return;
+    this.current = this.rec.steps.length;
+    this.page = page;
   }
 
   addStep(_page: Page, step: Step) {
@@ -91,7 +134,10 @@ class Recorder {
   /** Returns a warning when a value was deliberately not recorded. */
   addElementStep(_page: Page, a: Action, target: TargetDescriptor): string | null {
     if (!this.rec) return null;
-    if (target.type === 'password') return 'password NOT recorded (keep the session logged in instead)';
+    if (target.type === 'password') {
+      this.rec.sensitive = true;
+      return 'password NOT recorded (keep the session logged in instead)';
+    }
     const step: Step = { do: a.do, target };
     let warning: string | null = null;
     if (a.files) {
@@ -100,7 +146,10 @@ class Recorder {
         step.files = a.files;
         if (a.var) warning = `var "${a.var}" ignored: a file variable needs exactly one file`;
       }
-    } else if (a.value !== undefined) step.value = a.var ? `{{${a.var}}}` : a.value;
+    } else if (a.value !== undefined) {
+      step.value = a.var ? `{{${a.var}}}` : a.value;
+      if (a.var) this.rec.literals.set(a.var, a.value);
+    }
     if (a.key) step.key = a.key;
     this.rec.steps.push(step);
     return warning;
@@ -109,7 +158,10 @@ class Recorder {
   /** A step captured by the extension while the user performs the task by hand. */
   addDemoStep(step: Step) {
     if (!this.rec || !step || !step.do) return;
-    if (step.target?.type === 'password') return;
+    if (step.target?.type === 'password') {
+      this.rec.sensitive = true;
+      return;
+    }
     const last = this.rec.steps.at(-1);
     // Typing produces several change events on the same field: keep only the final value.
     if (step.do === 'fill' && last?.do === 'fill' && JSON.stringify(last.target) === JSON.stringify(step.target)) {
@@ -117,10 +169,18 @@ class Recorder {
       return;
     }
     this.rec.steps.push({ do: step.do, target: step.target, value: step.value, key: step.key });
+    this.current = this.rec.steps.length - 1;
+  }
+
+  /** True when the request comes from the tab being recorded (or when no action ran yet). */
+  private fromRecordedTab(r: Request): boolean {
+    if (!this.page) return true;
+    try { return r.frame().page() === this.page; } catch { return false; }
   }
 
   onRequest(r: Request) {
     const type = r.resourceType();
+    if (this.rec && type === 'document' && r.method().toUpperCase() !== 'GET' && this.fromRecordedTab(r)) this.rec.formPosts++;
     if (type !== 'fetch' && type !== 'xhr') return;
     const headers = r.headers();
     const call: ApiCall = {
@@ -128,9 +188,10 @@ class Recorder {
       method: r.method(),
       url: r.url(),
       requestType: headers['content-type'],
-      postData: r.postData()?.slice(0, 4000) || undefined,
-      afterStep: this.rec ? this.rec.steps.length : -1,
+      postData: r.postData()?.slice(0, BODY_LIMIT) || undefined,
+      afterStep: this.rec ? this.current : -1,
     };
+    if (this.rec && isWrite(call) && this.fromRecordedTab(r)) this.rec.writes.push(call);
     this.pending.set(r, { call, t0: Date.now() });
     this.calls.push(call);
     if (this.calls.length > 200) this.calls.shift();
