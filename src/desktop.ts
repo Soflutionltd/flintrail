@@ -139,6 +139,21 @@ async function runningApps() {
   return appsCache.apps;
 }
 
+/**
+ * Apps an agent never drives here. Browsers: their own windows hold the Flintrail settings and the window
+ * where the user confirms a password fill (a click through the accessibility tree would answer it for them);
+ * web pages are driven through fl_open instead. Password managers, terminals, code editors with a terminal,
+ * system settings and scripting tools: each one reads secrets or runs commands.
+ */
+const FORBIDDEN_BUNDLES = /^(com\.brave\.browser|com\.google\.chrome|com\.microsoft\.edgemac|company\.thebrowser\.|com\.vivaldi\.|com\.operasoftware\.|org\.chromium\.|com\.apple\.safari|org\.mozilla\.|app\.zen-browser|com\.1password\.|com\.agilebits\.|com\.bitwarden\.|com\.apple\.keychainaccess|com\.apple\.passwords|com\.apple\.terminal|com\.googlecode\.iterm2|dev\.warp\.|com\.mitchellh\.ghostty|net\.kovidgoyal\.kitty|io\.alacritty|com\.microsoft\.vscode|com\.todesktop\.|dev\.zed\.|com\.apple\.systempreferences|com\.apple\.settings|com\.apple\.scripteditor|com\.apple\.automator|com\.apple\.shortcuts|com\.anthropic\.|com\.apple\.accessibilityinspector|com\.apple\.voiceoverutility|com\.apple\.assistivecontrol|com\.apple\.dt\.|com\.jetbrains\.|com\.exafunction\.|com\.sublimetext\.|com\.barebones\.|com\.raycast\.|com\.runningwithcrayons\.|com\.stairways\.|org\.hammerspoon\.|ai\.perplexity\.|com\.kagi\.|ru\.yandex\.|org\.thorium)/i;
+const FORBIDDEN_NAMES = /\b(brave|chrome|chromium|edge|arc|vivaldi|opera|safari|firefox|1password|bitwarden|keychain|trousseau|passwords|mots de passe|terminal|iterm|warp|ghostty|kitty|alacritty|visual studio code|cursor|zed|system settings|réglages système|system preferences|script editor|éditeur de script|automator|shortcuts|raccourcis|claude|accessibility inspector|inspecteur d.accessibilit|voiceover|assistive|xcode|intellij|pycharm|webstorm|goland|rider|clion|phpstorm|rubymine|datagrip|windsurf|sublime|bbedit|raycast|alfred|keyboard maestro|hammerspoon|comet|orion|thorium|yandex)\b/i;
+
+export function assertDesktopAllowed(name: string, bundle?: string) {
+  if ((bundle && FORBIDDEN_BUNDLES.test(bundle)) || FORBIDDEN_NAMES.test(name)) {
+    throw new DesktopError('FORBIDDEN_APP', `${name}: Flintrail never drives browsers (use fl_open for web pages), password managers, terminals, code editors or system settings through the desktop.`);
+  }
+}
+
 /** Accepts the localized name ("Calculatrice"), the English name ("Calculator") or the bundle id. */
 export async function resolveApp(app: string): Promise<string> {
   const apps = await runningApps();
@@ -147,6 +162,7 @@ export async function resolveApp(app: string): Promise<string> {
     || apps.find((a) => a.bundle_id?.toLowerCase() === low)
     || apps.find((a) => a.bundle_id?.toLowerCase().split('.').pop() === low.replace(/\s+/g, ''))
     || apps.find((a) => a.presentation === 'foreground' && a.name.toLowerCase().includes(low));
+  assertDesktopAllowed(hit ? hit.name : app, hit?.bundle_id ?? (/^[a-z0-9-]+(\.[a-z0-9-]+){2,}$/i.test(app) ? app : undefined));
   return hit ? hit.name : app;
 }
 
@@ -287,8 +303,10 @@ export async function performDesktop(s: DesktopStep, ref: string | null, vars?: 
       return parts.join(' ').trim();
     }
     case 'press': {
+      // Without an app the key would go to whatever window is in front, a browser's confirmation window included.
+      if (!app) throw new DesktopError('NO_APP', 'press needs app.');
       if (ref) await ad(['focus', ref]).catch(() => {});
-      const w = app ? await windowOf(app) : undefined;
+      const w = await windowOf(app);
       await ad(['press', s.key || 'return', ...(w ? ['--window-id', w] : [])]);
       return;
     }
