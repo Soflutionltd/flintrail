@@ -15,7 +15,7 @@ import { connect, testEnv } from './helpers.mjs';
 
 const extPath = new URL('../extension', import.meta.url).pathname;
 const token = 'multi-client-' + Math.random().toString(36).slice(2);
-let site, relayPort, env, a, b, ctx, sw;
+let site, relayPort, env, a, b, ctx;
 
 const freePort = () => new Promise((resolve) => {
   const s = createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
@@ -31,6 +31,9 @@ async function waitFor(fn, ms = 20000) {
   }
 }
 
+// Chrome may restart the extension's service worker under load: always talk to the current one.
+const worker = async () => ctx.serviceWorkers()[0] || ctx.waitForEvent('serviceworker');
+const sw = { evaluate: async (fn, arg) => (await worker()).evaluate(fn, arg) };
 const tabId = (snap) => /Tab (t\d+)/.exec(snap)[1];
 const mac = (key, message) => createHmac('sha256', key).update(message).digest('hex');
 
@@ -64,7 +67,6 @@ before(async () => {
     ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }),
     args: [`--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`],
   });
-  sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
   await waitFor(async () => /chromium: Extension connected/.test(await a.call('fl_extension')));
   await waitFor(async () => /chromium: Extension connected/.test(await b.call('fl_extension')));
 });
@@ -152,6 +154,8 @@ test('the relay refuses web pages, wrong tokens and impostors', async () => {
   const legacy = await rawRelay('/extension', {}, (ws) => ws.send(JSON.stringify({ type: 'hello', token, version: '1.3.0', browser: 'Brave', instance: 'old-one' })));
   assert.equal(legacy.message.type, 'welcome');
   assert.match(await b.call('fl_extension'), /brave: Extension connected \(Brave, extension 1\.3\.0\) \(outdated: reload the extension/);
+  // It cannot pick a window: refused, instead of a tab silently opening somewhere else.
+  await assert.rejects(b.call('fl_open', { url: site.url, browser: 'brave', newWindow: true }), /extension 1\.3\.0 cannot pick a window/);
   legacy.ws.close();
 });
 

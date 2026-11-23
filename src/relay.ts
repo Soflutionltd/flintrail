@@ -20,6 +20,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { config } from './config.js';
 import { installNativeHost } from './pairing.js';
+import { profileOfInstance } from './profiles.js';
 import { macFor, macMatches, RELAY_PROTOCOL, slug, type BrowserInfo } from './relay-protocol.js';
 import { VERSION } from './version.js';
 
@@ -47,6 +48,8 @@ interface Hello {
   browser?: string;
   instance?: string;
   label?: string;
+  /** Found by the relay (src/profiles.ts), never sent by the extension. */
+  profile?: string;
 }
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
@@ -128,7 +131,10 @@ class ExtensionBridge {
   get connected() { return this.ext.readyState === WebSocket.OPEN; }
 
   describe(): BrowserInfo {
-    return { key: this.key, label: this.info.label || '', browser: this.info.browser || 'browser', version: this.info.version || '?', legacy: this.legacy };
+    return {
+      key: this.key, label: this.info.label || '', profile: this.info.profile || '', browser: this.info.browser || 'browser',
+      version: this.info.version || '?', legacy: this.legacy,
+    };
   }
 
   /** The extension reconnected (service worker restart): keep the name, swap the socket. */
@@ -248,8 +254,7 @@ class ExtensionBridge {
 
   /** Gives a tab the user shared (URL containing match) to this client. */
   claim(client: ClientConn, match: string): { url: string } | null {
-    const view = [...this.views].find((v) => v.client === client && v.ws);
-    if (!view) throw new Error(`${this.key}: connect to this browser first.`);
+    const view = this.viewOf(client);
     const tab = [...this.tabsById.values()].filter((t) => !t.owner && String(t.targetInfo.url || '').includes(match)).at(-1);
     if (!tab) return null;
     tab.owner = view;
@@ -257,14 +262,20 @@ class ExtensionBridge {
     return { url: String(tab.targetInfo.url || '') };
   }
 
+  /** The connected view of this client on this browser. */
+  viewOf(client: ClientConn): CdpView {
+    const view = [...this.views].find((v) => v.client === client && v.ws);
+    if (!view) throw new Error(`${this.key}: connect to this browser first.`);
+    return view;
+  }
+
   // ---------- Playwright side ----------
 
   openView(client: ClientConn): CdpView {
-    // A view this client opened but never connected (Playwright failed to connect): reuse it.
-    const unused = [...this.views].find((v) => v.client === client && !v.ws);
-    if (unused) return unused;
     const view = new CdpView(this, client);
     this.views.add(view);
+    // Playwright failed to connect to it: forget it rather than keep a dead endpoint.
+    setTimeout(() => { if (!view.ws) this.views.delete(view); }, 30000).unref();
     return view;
   }
 
@@ -339,7 +350,15 @@ class ExtensionBridge {
       case 'Target.getTargets':
         return { targetInfos: own().map((t) => ({ ...t.targetInfo, attached: true })) };
       case 'Target.createTarget': {
-        const r = await this.request('createTab', { url: params.url || 'about:blank', background: params.background !== false });
+        // Window choice sent by Flintrail along with the command: an existing window, or a new one.
+        const placement = {
+          ...(typeof params.flintrailWindowId === 'number' ? { windowId: params.flintrailWindowId } : {}),
+          ...(params.flintrailNewWindow === true ? { newWindow: true } : {}),
+        };
+        if (Object.keys(placement).length && this.legacy) {
+          throw new Error(`${this.key}: extension ${this.info.version} cannot pick a window, reload it in this browser to update it.`);
+        }
+        const r = await this.request('createTab', { url: params.url || 'about:blank', background: params.background !== false, ...placement });
         if (!this.views.has(view)) {
           // The client left while the tab was opening: nobody will drive it.
           if (!this.legacy) this.request('release', { tabIds: [r.tabId] }, 5000).catch(() => {});
@@ -379,7 +398,10 @@ export class ExtensionRelay {
   /** A browser by name, or by the label the user gave it in the extension. */
   get(key: string): ExtensionBridge | undefined {
     const k = key.trim().toLowerCase();
-    return this.list().find((b) => b.key === k) || this.list().find((b) => b.info.label && slug(b.info.label) === slug(k));
+    const s = slug(k);
+    return this.list().find((b) => b.key === k)
+      || this.list().find((b) => b.info.label && slug(b.info.label) === s)
+      || this.list().find((b) => b.info.profile && slug(b.info.profile) === s);
   }
 
   start(): Promise<void> {
@@ -537,12 +559,15 @@ export class ExtensionRelay {
     const same = [...this.bridges.values()].find((b) => b.instance === instance);
     if (same && (same.info.label || '') === label) { same.replaceSocket(ws); return same; }
     if (same) { this.bridges.delete(same.key); same.retire(); }
-    // A name the user gave in the extension wins ("brave-ideekdo"); otherwise the brand, made unique.
+    const profile = profileOfInstance(instance)?.name || '';
+    // A name the user gave in the extension wins ("brave-ideekdo"), then the browser profile's own name
+    // ("brave-soflution"), then the brand, made unique.
     const base = browserKey(hello.browser);
-    let key = label ? `${base}-${slug(label) || 'browser'}` : base;
+    const named = label || profile;
+    let key = named ? `${base}-${slug(named) || 'browser'}` : base;
     if (this.bridges.has(key)) key = `${key}-${instance.replace(/[^a-z0-9]/gi, '').slice(0, 4).toLowerCase()}`;
     for (let n = 2; this.bridges.has(key); n++) key = `${base}-${n}`;
-    const bridge = new ExtensionBridge(key, instance, { ...hello, label, token: undefined }, ws, legacy, this);
+    const bridge = new ExtensionBridge(key, instance, { ...hello, label, profile, token: undefined }, ws, legacy, this);
     this.bridges.set(key, bridge);
     return bridge;
   }

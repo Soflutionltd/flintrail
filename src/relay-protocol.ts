@@ -10,6 +10,8 @@ export interface BrowserInfo {
   key: string;
   /** Name the user gave this browser in the extension, or "". */
   label: string;
+  /** Name of the browser profile it runs in ("Soflution"), or "" when it could not be found. */
+  profile: string;
   browser: string;
   /** Extension version. */
   version: string;

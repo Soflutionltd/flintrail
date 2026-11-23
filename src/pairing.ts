@@ -1,43 +1,14 @@
 // Automatic pairing with the browser extension. At startup Flintrail registers a native messaging host
 // (com.soflution.flintrail) in every Chromium browser installed for this user. The extension asks it for
-// the relay token, so connecting a browser needs no copy-paste. Only the Flintrail extension IDs below
-// may talk to the host: the browser checks allowed_origins before starting it.
+// the relay token, so connecting a browser needs no copy-paste. Only the Flintrail extension IDs
+// may talk to the host (extensionIds in profiles.ts): the browser checks allowed_origins before starting it.
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
+import { extensionIds, knownBrowsers } from './profiles.js';
 
 export const HOST_NAME = 'com.soflution.flintrail';
-
-/** ID fixed by the "key" in extension/manifest.json (unpacked and packed builds). */
-export const EXTENSION_ID = 'hgkglidmccenjlhdcplcpkgbadonplnb';
-
-function extensionIds(): string[] {
-  const extra = (process.env.FLINTRAIL_EXTENSION_IDS || '').split(',').map((s) => s.trim()).filter((s) => /^[a-p]{32}$/.test(s));
-  return [...new Set([EXTENSION_ID, ...extra])];
-}
-
-/** User data directories of the Chromium browsers Flintrail knows, per platform. */
-function browserDataDirs(): string[] {
-  const override = process.env.FLINTRAIL_PAIRING_DIRS;
-  if (override) return override.split(',').map((d) => d.trim()).filter(Boolean);
-  const home = homedir();
-  if (platform() === 'darwin') {
-    const support = join(home, 'Library/Application Support');
-    return [
-      'Google/Chrome', 'Google/Chrome Beta', 'Google/Chrome Canary', 'Google/Chrome for Testing', 'Chromium',
-      'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser-Beta', 'Microsoft Edge', 'Arc/User Data',
-      'Vivaldi', 'com.operasoftware.Opera',
-    ].map((d) => join(support, d));
-  }
-  if (platform() === 'linux') {
-    const cfg = process.env.XDG_CONFIG_HOME || join(home, '.config');
-    return ['google-chrome', 'google-chrome-beta', 'chromium', 'BraveSoftware/Brave-Browser', 'microsoft-edge', 'vivaldi', 'opera']
-      .map((d) => join(cfg, d));
-  }
-  return [];
-}
 
 /** Writes the host launcher script, with the settings this process uses baked in. */
 function writeLauncher(): string {
@@ -61,7 +32,7 @@ function writeLauncher(): string {
  */
 export function installNativeHost(extraDataDirs: string[] = []): string[] {
   if (process.env.FLINTRAIL_PAIRING === 'off') return [];
-  const dirs = [...browserDataDirs(), ...extraDataDirs].filter((d) => d && existsSync(d));
+  const dirs = [...knownBrowsers().map((b) => b.dataDir), ...extraDataDirs].filter((d) => d && existsSync(d));
   if (!dirs.length) return [];
   const launcher = writeLauncher();
   const manifest = JSON.stringify({

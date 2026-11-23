@@ -178,11 +178,22 @@ export class RelayClient {
     });
   }
 
-  /** A browser by name or label, or the first connected one when no name is given. */
+  /** Connected browsers answering to this name: their exact name, the user's label, or the profile name. */
+  matching(key: string): BrowserInfo[] {
+    const k = key.trim().toLowerCase();
+    const exact = this.browsers.filter((b) => b.key === k);
+    if (exact.length) return exact;
+    const s = slug(k);
+    const labelled = this.browsers.filter((b) => b.label && slug(b.label) === s);
+    if (labelled.length) return labelled;
+    return this.browsers.filter((b) => b.profile && (slug(b.profile) === s || `${b.key.split('-')[0]}-${slug(b.profile)}` === s));
+  }
+
+  /** A browser by name, label or profile, or the first connected one when no name is given. Never guesses between two. */
   find(key?: string): BrowserInfo | undefined {
     if (!key) return this.browsers[0];
-    const k = key.trim().toLowerCase();
-    return this.browsers.find((b) => b.key === k) || this.browsers.find((b) => b.label && slug(b.label) === slug(k));
+    const found = this.matching(key);
+    return found.length === 1 ? found[0] : undefined;
   }
 
   /** Waits for a browser by name, or for any browser when no name is given. */

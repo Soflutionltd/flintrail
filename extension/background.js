@@ -189,6 +189,19 @@ async function agentWindow() {
   return { windowId: win.id, blankTabId: win.tabs?.[0]?.id };
 }
 
+// Where a new agent tab goes: a window the agent named (from listTabs), a new window, or the agent window.
+async function placeTab(p) {
+  if (p.newWindow) {
+    const win = await chrome.windows.create({ focused: false, url: 'about:blank' });
+    return { windowId: win.id, blankTabId: win.tabs?.[0]?.id };
+  }
+  if (typeof p.windowId === 'number') {
+    await chrome.windows.get(p.windowId).catch(() => { throw new Error(`Window ${p.windowId} is closed (list windows with fl_extension tabs:true).`); });
+    return { windowId: p.windowId };
+  }
+  return agentWindow();
+}
+
 // The debugging bar shows in every window while any tab is driven: release tabs left idle.
 const IDLE_RELEASE_MS = 5 * 60 * 1000;
 const lastUsed = new Map();
@@ -204,7 +217,7 @@ async function releaseIdleTabs() {
 async function handle(method, p) {
   switch (method) {
     case 'createTab': {
-      const { windowId, blankTabId } = await agentWindow();
+      const { windowId, blankTabId } = await placeTab(p);
       const tab = blankTabId !== undefined
         ? await chrome.tabs.get(blankTabId)
         : await chrome.tabs.create({ windowId, url: 'about:blank', active: !p.background });

@@ -7,6 +7,8 @@ import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
 import { getRelayClient } from './relay-client.js';
+import { localProfiles, matchProfiles } from './profiles.js';
+import { slug } from './relay-protocol.js';
 import { listFlows, loadFlow, saveFlow } from './store.js';
 
 import { VERSION } from './version.js';
@@ -62,7 +64,7 @@ const desktopActionSchema = z.object({
   amount: z.number().int().optional().describe('scroll: units (default 3).'),
 });
 
-const browserOpt = z.string().optional().describe('Which browser: "agent" (dedicated browser, default) or a user browser connected through the Flintrail extension, e.g. "brave", "chrome", "edge" (list with fl_extension).');
+const browserOpt = z.string().optional().describe('Which browser: "agent" (dedicated browser, default) or one of the user\'s browsers through the Flintrail extension: a name from fl_extension ("brave-soflution"), a browser profile name ("Soflution") or a brand ("brave", "chrome", "edge").');
 
 const snapOpts = {
   text: z.number().optional().describe('Characters of page text to include (default 600, 0 for none).'),
@@ -73,10 +75,15 @@ export function buildServer(): McpServer {
   const s = new McpServer({ name: 'flintrail', version: VERSION });
 
   s.registerTool('fl_open', {
-    description: 'Open a URL in a background tab (logged-in sessions kept). By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead ("brave", "chrome"... see fl_extension). Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
-    inputSchema: { url: z.string(), browser: browserOpt, ...snapOpts },
-  }, guard(async ({ url, browser, text: t, max }) => {
-    const id = await openTab(url, browser);
+    description: 'Open a URL in a background tab (logged-in sessions kept). By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, window picks one of its windows (ids from fl_extension tabs:true) and newWindow opens a new window. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    inputSchema: {
+      url: z.string(), browser: browserOpt,
+      window: z.number().int().optional().describe('User browser only: open the tab in this window (id from fl_extension tabs:true).'),
+      newWindow: z.boolean().optional().describe('User browser only: open the tab in a new window.'),
+      ...snapOpts,
+    },
+  }, guard(async ({ url, browser, window, newWindow, text: t, max }) => {
+    const id = await openTab(url, browser, { window, newWindow });
     return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max }));
   }));
 
@@ -234,7 +241,7 @@ export function buildServer(): McpServer {
   }));
 
   s.registerTool('fl_extension', {
-    description: 'Browsers Flintrail can drive: the dedicated one ("agent") and every user browser where the Flintrail extension is connected ("brave", "brave-ideekdo", "chrome"...), named after the label the user gave it in the extension. Several conversations can drive them at once, each sees only its own tabs. Pass the name as browser to fl_open. tabs: true also lists the tabs open in each browser (site and title), to find the window where an account is signed in.',
+    description: 'Browsers Flintrail can drive: the dedicated one ("agent") and every user browser where the Flintrail extension is connected ("brave-soflution", "chrome"...), named after the browser profile or the label the user gave it in the extension, plus the profiles of this computer that are not open (fl_open opens them). Several conversations can drive them at once, each sees only its own tabs. Pass the name as browser to fl_open. tabs: true also lists the tabs open in each browser (site and title), to find the window where an account is signed in.',
     inputSchema: {
       tabs: z.boolean().optional().describe('Also list the open tabs of each user browser (origin and title).'),
       browser: z.string().optional().describe('Only this browser.'),
@@ -252,7 +259,7 @@ export function buildServer(): McpServer {
       if (relay.connected) {
         const list = relay.browsers.filter((b) => !browser || b === relay.find(browser));
         for (const b of list) {
-          const name = b.label ? ` "${b.label}"` : '';
+          const name = (b.label ? ` "${b.label}"` : '') + (b.profile ? `, profile "${b.profile}"` : '');
           const old = b.legacy ? ' (outdated: reload the extension in this browser to update it)' : '';
           lines.push(`${b.key}: Extension connected (${b.browser}${name}, extension ${b.version})${old}`);
           if (!tabs) continue;
@@ -261,6 +268,10 @@ export function buildServer(): McpServer {
             for (const t of open) lines.push(`  window ${t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
           } catch (e) { lines.push(`  tabs unavailable: ${(e as Error).message}`); }
         }
+        // Profiles of this computer with no connected window: fl_open opens them on demand.
+        const open = new Set(relay.browsers.map((b) => `${b.key.split('-')[0]}/${slug(b.profile)}`));
+        const closed = localProfiles().filter((p) => !open.has(`${p.brand}/${slug(p.name)}`) && (!browser || matchProfiles(browser, [p]).length));
+        if (closed.length) lines.push(`Not open (fl_open with browser "<profile name>" opens it): ${closed.map((p) => `${p.brand} "${p.name}"`).join(', ')}.`);
         if (!relay.browsers.length) lines.push(`No user browser connected. The Flintrail extension pairs and connects by itself once installed (relay 127.0.0.1:${config.relayPort}, version ${relay.relayVersion}).`);
         else if (browser && !list.length) lines.push(`Browser "${browser}" is not connected.`);
       }

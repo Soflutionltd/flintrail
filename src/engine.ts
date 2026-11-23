@@ -133,6 +133,12 @@ function pageNotes(page: Page): string[] {
   return notes;
 }
 
+/** In a user browser: open the tab in this window (id from fl_extension tabs), or in a new window. */
+export interface Placement {
+  window?: number;
+  newWindow?: boolean;
+}
+
 /** Tabs being opened, per browser context. */
 const opening = new WeakMap<BrowserContext, Promise<unknown>>();
 
@@ -140,13 +146,14 @@ const opening = new WeakMap<BrowserContext, Promise<unknown>>();
  * Opens a tab, one at a time per browser: each opening waits for "the next page" of the context, so two
  * at once could both get the same tab.
  */
-function newPage(where: Driven): Promise<Page> {
-  const run = (opening.get(where.ctx) ?? Promise.resolve()).catch(() => {}).then(() => openPage(where));
+function newPage(where: Driven, placement: Placement = {}): Promise<Page> {
+  const run = (opening.get(where.ctx) ?? Promise.resolve()).catch(() => {}).then(() => openPage(where, placement));
   opening.set(where.ctx, run);
   return run;
 }
 
-async function openPage(where: Driven): Promise<Page> {
+async function openPage(where: Driven, placement: Placement = {}): Promise<Page> {
+  const placed = placement.window !== undefined || !!placement.newWindow;
   const { ctx, browser } = where;
   if (browser) {
     // Open the tab in the background so the window never steals focus.
@@ -164,19 +171,32 @@ async function openPage(where: Driven): Promise<Page> {
         if (t.type === 'page' && /^https?:/.test(t.url) && t.browserContextId) count.set(t.browserContextId, (count.get(t.browserContextId) || 0) + 1);
       }
       const browserContextId = [...count].sort((a, b) => b[1] - a[1])[0]?.[0];
-      await cdp.send('Target.createTarget', { url: 'about:blank', background: true, ...(browserContextId ? { browserContextId } : {}) });
+      // In a user browser the window choice travels in the same command, read by the relay (Chrome ignores it),
+      // so two tabs opened at once never swap windows.
+      const params = {
+        url: 'about:blank', background: true, ...(browserContextId ? { browserContextId } : {}),
+        ...(placement.window !== undefined ? { flintrailWindowId: placement.window } : {}),
+        ...(placement.newWindow ? { flintrailNewWindow: true } : {}),
+      };
+      await cdp.send('Target.createTarget', params);
       const page = await waitPage;
       await cdp.detach().catch(() => {});
       return page;
-    } catch { /* fall back below */ }
+    } catch (e) {
+      // A tab asked for a given window must not silently land elsewhere.
+      if (placed) throw e;
+    }
   }
   return ctx.newPage();
 }
 
 /** Opens a background tab in the named browser (see getDriven), optionally on a URL. */
-export async function openTab(url?: string, browserName?: string): Promise<string> {
+export async function openTab(url?: string, browserName?: string, placement: Placement = {}): Promise<string> {
   const where = await getDriven(browserName);
-  const page = await newPage(where);
+  if ((placement.window !== undefined || placement.newWindow) && !where.viaExtension) {
+    throw new Error('window and newWindow apply to the user\'s browsers only (set browser, see fl_extension).');
+  }
+  const page = await newPage(where, placement);
   const id = register(page, where);
   if (url) {
     await gotoFast(page, url);

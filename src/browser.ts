@@ -13,7 +13,8 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { config } from './config.js';
 import { loadToken } from './auth.js';
-import { getRelayClient, relayClient } from './relay-client.js';
+import { matchProfiles, openProfile } from './profiles.js';
+import { getRelayClient, relayClient, type RelayClient } from './relay-client.js';
 import { VERSION } from './version.js';
 import { startCdpFilter, type CdpFilter } from './cdp-filter.js';
 
@@ -114,18 +115,47 @@ export interface Driven {
 export const AGENT = 'agent';
 
 const driven = new Map<string, Promise<Driven>>();
+/** Extension connections being opened, by requested name. */
+const connecting = new Map<string, Promise<Driven>>();
 let filter: CdpFilter | null = null;
 
 async function connectExtension(name: string | undefined): Promise<Driven> {
   const relay = relayClient(loadToken(), VERSION);
   if (!relay) throw new Error('The extension relay is turned off (FLINTRAIL_RELAY=off).');
-  const found = await relay.waitFor(name, config.extensionWaitMs);
+  const found = await findOrOpen(relay, name);
   const { key, cdpUrl } = await relay.open(found.key);
   const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 15000 });
   browser.on('disconnected', () => driven.delete(key));
   const ctx = browser.contexts()[0];
   if (!ctx) throw new Error(`${key}: the extension exposes no context.`);
   return { name: key, ctx, browser, viaExtension: true };
+}
+
+/**
+ * A connected browser by name. When the name is a browser profile of this computer that is not open
+ * ("Soflution", "brave-soflution"), Flintrail opens a window of it and waits for its extension.
+ */
+async function findOrOpen(relay: RelayClient, name: string | undefined) {
+  await relay.ensure();
+  const connected = name ? relay.matching(name) : [];
+  if (connected.length > 1) throw new Error(`Several browsers answer to "${name}": ${connected.map((b) => b.key).join(', ')}. Use one of these names.`);
+  const now = relay.find(name);
+  if (now || !name) return now ?? relay.waitFor(name, config.extensionWaitMs);
+  const matches = matchProfiles(name);
+  if (matches.length > 1) {
+    throw new Error(`Several profiles are called "${name}": ${matches.map((p) => `${p.brand}-${p.name}`).join(', ')}. Name the browser too, e.g. "${matches[0]!.brand} ${matches[0]!.name}".`);
+  }
+  const profile = matches[0];
+  if (!profile) return relay.waitFor(name, config.extensionWaitMs);
+  // Open but still reconnecting (the extension retries every 30 s): give it a moment before opening a window.
+  const soon = await relay.waitFor(name, 3000).catch(() => null);
+  if (soon) return soon;
+  openProfile(profile);
+  try {
+    return await relay.waitFor(name, Math.max(config.extensionWaitMs, 45000));
+  } catch {
+    throw new Error(`Opened ${profile.brand} profile "${profile.name}", but its Flintrail extension did not connect. Install the extension in that profile (${profile.brand}://extensions), then try again.`);
+  }
 }
 
 async function connectAgent(): Promise<Driven> {
@@ -170,15 +200,19 @@ export async function getDriven(name?: string): Promise<Driven> {
     if (!driven.has(AGENT)) driven.set(AGENT, connectAgent().catch((e) => { driven.delete(AGENT); throw e; }));
     return driven.get(AGENT)!;
   }
-  if (wanted && driven.has(wanted)) return driven.get(wanted)!;
-  if (!wanted) {
-    const first = getRelayClient()?.browsers[0];
-    if (first && driven.has(first.key)) return driven.get(first.key)!;
+  // "Soflution", "brave" or no name at all: look the connection up under the browser's real name.
+  const known = getRelayClient()?.find(wanted);
+  const key = known?.key ?? wanted;
+  if (key && driven.has(key)) return driven.get(key)!;
+  const request = key ?? '';
+  // Calls made at the same time for the same browser share one connection.
+  if (!connecting.has(request)) {
+    connecting.set(request, connectExtension(wanted).then((d) => {
+      if (!driven.has(d.name)) driven.set(d.name, Promise.resolve(d));
+      return d;
+    }).finally(() => connecting.delete(request)));
   }
-  const pending = connectExtension(wanted);
-  const settled = await pending;
-  // Cache under the real name (an unnamed request resolves to whichever browser is connected).
-  if (!driven.has(settled.name)) driven.set(settled.name, pending);
+  const settled = await connecting.get(request)!;
   return driven.get(settled.name)!;
 }
 
