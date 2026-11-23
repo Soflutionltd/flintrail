@@ -37,12 +37,16 @@ if (process.argv.includes('--zip')) {
 
   // The Chrome Web Store refuses a manifest with "key" (it signs the item with its own key), while the
   // unpacked zip needs it to keep the extension ID that native messaging pairing allows.
+  // Native messaging is optional there: a new required permission would disable the extension for every
+  // user until they accept it, so the store build asks for it when the user clicks Connect.
   const storeZip = join(root, `flintrail-extension-${version}-store.zip`);
   const staging = mkdtempSync(join(tmpdir(), 'flintrail-store-'));
   try {
     cpSync(ext, staging, { recursive: true, filter: (src) => !src.endsWith(join('icons', 'icon.svg')) });
     const storeManifest = JSON.parse(readFileSync(join(staging, 'manifest.json'), 'utf8'));
     delete storeManifest.key;
+    storeManifest.permissions = storeManifest.permissions.filter((p) => p !== 'nativeMessaging');
+    storeManifest.optional_permissions = [...new Set([...(storeManifest.optional_permissions || []), 'nativeMessaging'])];
     writeFileSync(join(staging, 'manifest.json'), JSON.stringify(storeManifest, null, 2) + '\n');
     rmSync(storeZip, { force: true });
     execFileSync('zip', ['-qr', storeZip, '.'], { cwd: staging });

@@ -40,6 +40,9 @@ const HOST_NAME = 'com.soflution.flintrail';
 // Ask the local Flintrail for its token through native messaging. The browser only starts the host
 // for this extension's ID, so no other extension or web page can read the token this way.
 async function pair() {
+  // The Chrome Web Store build declares native messaging as optional, granted when the user clicks
+  // Connect: without it, pairing is skipped and the pasted token is the way in.
+  if (!await chrome.permissions.contains({ permissions: ['nativeMessaging'] })) return false;
   try {
     const r = await chrome.runtime.sendNativeMessage(HOST_NAME, { type: 'pair' });
     if (r?.type !== 'paired' || !r.token) return false;
@@ -76,7 +79,13 @@ async function hmac(key, message) {
 async function openConnection() {
   let { token } = await store.get('token');
   if (!token && await pair()) ({ token } = await store.get('token'));
-  if (!token) { await setStatus('idle', 'Start Flintrail once on this computer, or paste the token from ~/.flintrail/token'); return; }
+  if (!token) {
+    const canPair = await chrome.permissions.contains({ permissions: ['nativeMessaging'] });
+    await setStatus('idle', canPair
+      ? 'Start Flintrail once on this computer, or paste the token from ~/.flintrail/token'
+      : 'Click Connect to pair with Flintrail, or paste the token from ~/.flintrail/token');
+    return;
+  }
   const { port = 8932, label = '' } = await store.get(['port', 'label']);
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   const instance = await instanceId();

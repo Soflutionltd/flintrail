@@ -43,6 +43,10 @@ async function render() {
 }
 
 $('connect').onclick = async () => {
+  // Pairing needs native messaging, optional in the Chrome Web Store build: ask for it inside the click,
+  // before any other await, so the browser counts it as a user gesture. Refused, the token still works.
+  const optional = (chrome.runtime.getManifest().optional_permissions || []).includes('nativeMessaging');
+  if (optional && !$('token').value.trim()) await chrome.permissions.request({ permissions: ['nativeMessaging'] }).catch(() => false);
   await send({ type: 'connect', token: $('token').value, port: $('port').value });
   setTimeout(render, 400);
 };
