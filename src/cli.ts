@@ -11,6 +11,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { loadToken } from './auth.js';
 import { shutdown } from './browser.js';
 import { config } from './config.js';
+import { installNativeHost } from './pairing.js';
 import { runRelayDaemon } from './relay.js';
 import { relayClient } from './relay-client.js';
 import { buildServer, VERSION } from './server.js';
@@ -49,7 +50,12 @@ process.on('SIGTERM', stop);
 
 // Join the shared relay right away (starting it if no Flintrail did), so the user's browsers (Brave,
 // Chrome...) connect through the extension, and can record by demonstration, before the agent's first call.
-relayClient(loadToken(opt('token', '')), VERSION)?.ensure().catch((e: Error) => console.error(`flintrail: extension relay unavailable: ${e.message}`));
+const relay = relayClient(loadToken(opt('token', '')), VERSION);
+// The pairing host is registered here, before the MCP handshake, and again by the daemon: a browser opened
+// right after Flintrail starts must not try to pair before the detached daemon is up, or it waits for the
+// extension's next retry, 30 seconds later.
+if (relay) installNativeHost(config.dedicatedProfile ? [config.dedicatedProfile] : []);
+relay?.ensure().catch((e: Error) => console.error(`flintrail: extension relay unavailable: ${e.message}`));
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
