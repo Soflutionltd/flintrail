@@ -1,6 +1,18 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+/** "example.com" is that host only, "*.example.com" is example.com and all its subdomains. Ports are ignored. */
+export function parseDomains(list: string): string[] {
+  return list.split(',').map((raw) => {
+    const rule = raw.trim().toLowerCase();
+    if (!rule) return '';
+    const wildcard = rule.startsWith('*.');
+    // Accept a pasted URL or host:port, keep the host.
+    const host = (wildcard ? rule.slice(2) : rule).replace(/^[a-z]+:\/\//, '').replace(/[/:?#].*$/, '').replace(/\.$/, '');
+    return host ? (wildcard ? `*.${host}` : host) : '';
+  }).filter(Boolean);
+}
+
 const env = process.env;
 const port = Number(env.FLINTRAIL_PORT || 9222);
 const home = env.FLINTRAIL_HOME || join(homedir(), '.flintrail');
@@ -16,6 +28,8 @@ export const config = {
   allowAnyBrowser: env.FLINTRAIL_ALLOW_ANY_BROWSER === '1',
   /** user-data-dir of a dedicated automation profile in a regular Chrome (e.g. one 1Password can connect to). */
   dedicatedProfile: env.FLINTRAIL_DEDICATED_PROFILE || '',
+  /** Sites the agent may open, read and send requests to. Empty: any site. */
+  allowedDomains: parseDomains(env.FLINTRAIL_ALLOWED_DOMAINS || ''),
   home,
   flowsDir: join(home, 'flows'),
   profileDir: env.FLINTRAIL_PROFILE || join(home, 'profile'),

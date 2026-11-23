@@ -177,6 +177,10 @@ export function startFixture(port = 0) {
           out.textContent = 'Sent';
         };
       </script>`);
+    // Ways off the site: a link and a redirect to the address given in ?to=.
+    if (url.pathname === '/away') return html('Away', `<h1>Leaving</h1><a id="out" href="${url.searchParams.get('to')}">Partner site</a>`);
+    if (url.pathname === '/bounce') { res.writeHead(302, { location: url.searchParams.get('to') }); return res.end(); }
+    if (url.pathname === '/secret') return html('Secret', '<h1>Other site secret</h1>');
     // A page that reports the visit as soon as it loads, like most sites with audience measurement.
     if (url.pathname === '/measured') return html('Measured', `<h1>Measured</h1>
       <label>Plate <input name="plate"></label><button type="button" id="go">Order</button><p id="out"></p>

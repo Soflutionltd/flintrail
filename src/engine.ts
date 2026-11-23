@@ -5,6 +5,7 @@ import type { BrowserContext, Dialog, Frame, Locator, Page, Request } from 'play
 import { AGENT, getDriven, type Driven } from './browser.js';
 import { getRelayClient } from './relay-client.js';
 import { config } from './config.js';
+import { assertAllowed, domainProblem } from './domains.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
 import type { DesktopStep } from './desktop.js';
@@ -220,6 +221,7 @@ export async function adoptTab(match: string, browserName?: string): Promise<str
       page = free();
     }
   }
+  if (page) assertAllowed(page.url());
   if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' (in a user browser, share the tab from the Flintrail extension first)' : ''}.`);
   return register(page, where);
 }
@@ -232,6 +234,8 @@ export function tabBrowser(id: string): string {
 export function getTab(id: string): Page {
   const p = tabs.get(id);
   if (!p || p.isClosed()) throw new Error(`Tab ${id} not found: closed, or released by the extension after 5 minutes without use. Use fl_open, or fl_adopt to take an open tab back.`);
+  const why = domainProblem(p.url());
+  if (why) throw new Error(`Blocked: tab ${id} went to a site the agent may not work on. ${why} Close it with fl_close.`);
   return p;
 }
 
@@ -240,11 +244,20 @@ export function listTabs(): string[] {
 }
 
 export async function closeTab(id: string) {
-  await getTab(id).close();
+  const page = tabs.get(id);
+  if (!page || page.isClosed()) throw new Error(`Tab ${id} not found.`);
+  await page.close();
 }
 
 export async function gotoFast(page: Page, url: string) {
+  assertAllowed(url);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  // The allowed address may redirect elsewhere: nothing is read from that page.
+  const why = domainProblem(page.url());
+  if (why) {
+    await page.goto('about:blank').catch(() => {});
+    throw new Error(`Blocked: ${url} redirected to another site. ${why}`);
+  }
 }
 
 /** Lets a client-side app finish re-rendering before we read it. Never waits on the network. */
@@ -270,7 +283,10 @@ export async function withNavigation<T>(page: Page, fn: () => Promise<T>): Promi
 }
 
 export async function snapshot(page: Page, opts: { max?: number; text?: number } = {}): Promise<string> {
-  const frames = page.frames().filter((f) => !f.isDetached()).slice(0, 6);
+  const away = domainProblem(page.url());
+  if (away) return `Blocked: nothing was read from this tab. ${away} Close it with fl_close.`;
+  // An embedded frame of a site outside the user's list is not read either.
+  const frames = page.frames().filter((f, i) => !f.isDetached() && (i === 0 || !domainProblem(f.url()))).slice(0, 6);
   // Frames are read in parallel: one round trip instead of one per frame.
   const reads = await Promise.all(frames.map((f, i) => f.evaluate(snapshotScript, {
     max: i === 0 ? opts.max ?? 150 : 40,
@@ -445,6 +461,10 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
       return page.evaluate(`(async () => { ${body} })()`);
     }
     case 'request': {
+      const target = fillVars(a.url, vars)!;
+      let absolute = target;
+      try { absolute = new URL(target, page.url()).href; } catch { /* refused below when a list is set */ }
+      assertAllowed(absolute);
       const r = await page.evaluate(fetchScript, {
         method: (a.method || 'GET').toUpperCase(),
         url: fillVars(a.url, vars)!,
@@ -452,6 +472,8 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
         headers: a.headers,
         max: 20000,
       });
+      const away = r.redirectedTo ? domainProblem(r.redirectedTo) : null;
+      if (away) throw new Error(`Blocked: the request was redirected to another site, its answer is not returned. ${away}`);
       if (r.status >= 400) throw new Error(`HTTP ${r.status}: ${r.body.slice(0, 200)}`);
       return r.contentType.includes('json') ? safeJson(r.body) : r.body;
     }
@@ -480,6 +502,8 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
     const a = actions[i]!;
     recorder.beginAction(page);
     try {
+      // A click may have led to a site outside the user's list: stop there, read nothing.
+      assertAllowed(page.url());
       if (!needsElement(a)) {
         const v = await performPage(page, a);
         recorder.addStep(page, { ...a, ref: undefined } as Step);
@@ -513,6 +537,8 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
       break;
     }
   }
+  const away = domainProblem(page.url());
+  if (away) return [...notes, `Blocked: the tab went to another site, nothing was read from it. ${away} Close it with fl_close.`].join('\n');
   if (opts.snapshot === false) return [...notes, ...pageNotes(page), `URL: ${page.url()}`].join('\n');
   await domQuiet(page);
   return (notes.length ? notes.join('\n') + '\n\n' : '') + (await snapshot(page, opts));

@@ -242,6 +242,16 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 - The pairing host only answers the Flintrail extension ID (the browser enforces `allowed_origins`), and the relay only listens on `127.0.0.1`.
 - The relay refuses connections from web pages (they always send an `Origin` header). Flintrail processes and the extension prove they know the token with an HMAC over a fresh challenge, and the relay proves it back, so the token never travels and a program squatting the port learns nothing.
 
+## Allowed sites
+
+Set `FLINTRAIL_ALLOWED_DOMAINS` to keep the agent on the sites you chose, for example `"FLINTRAIL_ALLOWED_DOMAINS": "example.com,*.example.org"`. With a list:
+
+- `fl_open`, `goto`, a flow's start URL and the `request` action are refused for any other site, before anything is sent.
+- If an allowed address redirects elsewhere, or a click leads to another site, Flintrail stops: the page is not read, no further action runs on it, and the agent is told to close the tab. Embedded frames of other sites are left out of snapshots.
+- `fl_adopt` refuses a tab that is on another site.
+
+The list is read from the environment when Flintrail starts: the agent has no tool to change it. It bounds where the agent goes and what it reads, not what the pages themselves load (their scripts, images and analytics still come from wherever the site takes them), and JavaScript run with `eval` or `fl_extract` runs inside an allowed page with that page's own network access.
+
 ## Configuration
 
 | Variable | Default | |
@@ -260,6 +270,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 | `FLINTRAIL_HOME` | `~/.flintrail` | Flows, profile, token |
 | `FLINTRAIL_DOWNLOADS` | `~/Downloads/Flintrail` | Where downloads land |
 | `FLINTRAIL_TOKEN` | generated | HTTP bearer token and extension token |
+| `FLINTRAIL_ALLOWED_DOMAINS` | any site | The only sites the agent may work on, comma separated: `example.com` is that host, `*.example.com` is `example.com` and its subdomains. See Allowed sites. |
 | `FLINTRAIL_PASSWORDS` | `browser` | Password sources for `fl_login`, in order: `browser`, `1password[:path]`, `bitwarden[:path]`, `command:path`. `off` removes the tool. |
 
 ## Develop

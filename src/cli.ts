@@ -36,6 +36,7 @@ if (flag('help')) {
     --token <t>             bearer token (default: FLINTRAIL_TOKEN or ~/.flintrail/token)
 Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_RELAY=off, FLINTRAIL_RELAY_IDLE_MS, FLINTRAIL_PAIRING=off,
   FLINTRAIL_EXTENSION_IDS, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0,
+  FLINTRAIL_ALLOWED_DOMAINS=example.com,*.example.org   the only sites the agent may open, read and send requests to (default: any),
   FLINTRAIL_PASSWORDS=browser,1password[:path],bitwarden[:path],command:path   sources for fl_login, in order (default browser, "off" to disable)`);
   process.exit(0);
 }
