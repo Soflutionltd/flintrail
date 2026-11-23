@@ -216,6 +216,15 @@ export function startFixture(port = 0) {
         document.getElementById('drop').onclick = () => { rows.lastElementChild.remove(); };
         document.getElementById('reset').onclick = () => { rows.innerHTML = Array.from({ length: 40 }, (_, i) => '<li><button type="button" class="row">Other ' + i + '</button></li>').join(''); };
       </script>`);
+    // Changes a difference by ref cannot tell: a list sorted the other way, a heading or a message that goes away.
+    if (url.pathname === '/sorted') return html('Sorted', `<h2 id="alert">Error: card declined</h2><p id="note">Payment refused by the bank</p>
+      <ul id="fruits"><li><button type="button">Apple</button></li><li><button type="button">Banana</button></li><li><button type="button">Cherry</button></li></ul>
+      <button type="button" id="sort">Sort desc</button><button type="button" id="dismiss">Dismiss</button><button type="button" id="clear">Clear note</button>
+      <script>
+        document.getElementById('sort').onclick = () => { const l = document.getElementById('fruits'); [...l.children].reverse().forEach((c) => l.appendChild(c)); };
+        document.getElementById('dismiss').onclick = () => document.getElementById('alert').remove();
+        document.getElementById('clear').onclick = () => document.getElementById('note').remove();
+      </script>`);
     // A page that reports the visit as soon as it loads, like most sites with audience measurement.
     if (url.pathname === '/measured') return html('Measured', `<h1>Measured</h1>
       <label>Plate <input name="plate"></label><button type="button" id="go">Order</button><p id="out"></p>

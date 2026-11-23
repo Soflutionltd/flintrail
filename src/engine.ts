@@ -366,60 +366,87 @@ const refOfLine = (line: string) => /^\[([^\]]+)\]/.exec(line)?.[1];
  */
 function changesSince(before: Seen, now: Seen): string[] | null {
   if (before.url !== now.url || before.max !== now.max || before.text !== now.text || before.more || now.more) return null;
+  // Embedded frames added, removed or sent to another address: the frame headers carry that, so tell the whole page.
+  const frames = (seen: Seen) => seen.lines.filter((l) => !refOfLine(l)).join('\n');
+  if (frames(before) !== frames(now)) return null;
   const old = new Map<string, string>();
   for (const line of before.lines) {
     const ref = refOfLine(line);
     if (ref) old.set(ref, line);
   }
   const changes: string[] = [];
-  const kept = new Set<string>();
+  const kept: string[] = [];
   let same = 0;
   for (const line of now.lines) {
     const ref = refOfLine(line);
-    if (!ref) continue; // frame separators
-    kept.add(ref);
+    if (!ref) continue;
     const was = old.get(ref);
+    if (was !== undefined) kept.push(ref);
     if (was === line) same++;
     else changes.push(`${was === undefined ? '+' : '~'} ${line}`);
   }
-  for (const [ref, line] of old) if (!kept.has(ref)) changes.push(`- ${line}`);
+  // A difference cannot say where things are: when the elements that stayed changed order (a sorted list), tell the whole page.
+  const still = new Set(kept);
+  if (before.lines.map(refOfLine).filter((r): r is string => !!r && still.has(r)).join(' ') !== kept.join(' ')) return null;
+  for (const [ref, line] of old) if (!still.has(ref)) changes.push(`- ${line}`);
+  const goneHeads = before.heads.filter((h) => !now.heads.includes(h));
   const headsChanged = before.heads.join('\n') !== now.heads.join('\n');
   const bodyChanged = before.body !== now.body;
   const full = now.lines.length + now.heads.length + (now.body ? 1 : 0);
-  const told = changes.length + (headsChanged ? now.heads.length : 0) + (bodyChanged ? 1 : 0);
-  // Past half of the page, the whole page is as short and easier to read.
-  if (told * 2 > full) return null;
+  const told = changes.length + (headsChanged ? Math.max(1, now.heads.length + goneHeads.length) : 0) + (bodyChanged ? 1 : 0);
   const out = [`URL: ${now.url}`];
   if (before.title !== now.title) out.push(`Title: ${now.title}`);
   if (!told) {
-    out.push(`No change since the last snapshot of this tab (${same} elements, same refs).`);
+    // Only what a snapshot shows was compared: the listed elements, the headings and the first characters of text.
+    out.push(`No change since the last snapshot of this tab in the elements, headings and text it shows (${same} element${same === 1 ? '' : 's'}, same refs).`);
     return out;
   }
+  // Past half of the page, the whole page is as short and easier to read.
+  if (told * 2 > full) return null;
   out.push(`Changes since the last snapshot of this tab (+ new, ~ changed, - gone). ${same} other element${same === 1 ? '' : 's'} unchanged, same refs.`);
-  if (headsChanged) out.push(...now.heads);
+  if (headsChanged) out.push(...now.heads, ...goneHeads.map((h) => `- ${h}`));
   out.push(...changes);
-  if (bodyChanged && now.body) out.push('', textChange(before.body, now.body));
+  if (bodyChanged) out.push('', textChange(before.body, now.body));
   return out;
 }
 
-/** The words of the page text that are new, each run with a few words around it; the whole text when most of it changed. */
+/** The words of the page text that are new or gone, each run with a few words around it; the whole text when most of it changed. */
 function textChange(before: string, now: string): string {
-  const a = before.split(' ');
+  if (!now) return 'Text: none left.';
+  const a = before ? before.split(' ') : [];
   const b = now.split(' ');
-  // Longest common subsequence of words: what is left of `now` is new. The text is a few hundred words at most.
-  const lcs: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+  // Words the two texts share at both ends are set aside first: the comparison below then stays small.
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const am = a.slice(head, a.length - tail);
+  const bm = b.slice(head, b.length - tail);
+  const fresh: boolean[] = new Array<boolean>(b.length).fill(false);
+  const gone: string[] = [];
+  if (am.length * bm.length > 250_000) {
+    // Too long to compare word by word without stalling every tab: the middle is told whole.
+    for (let j = 0; j < bm.length; j++) fresh[head + j] = true;
+  } else {
+    // Longest common subsequence of words: what is left of `now` is new, what is left of `before` is gone.
+    const lcs: number[][] = Array.from({ length: am.length + 1 }, () => new Array<number>(bm.length + 1).fill(0));
+    for (let i = am.length - 1; i >= 0; i--) {
+      for (let j = bm.length - 1; j >= 0; j--) {
+        lcs[i]![j] = am[i] === bm[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+      }
     }
-  }
-  const fresh: boolean[] = new Array<boolean>(b.length).fill(true);
-  for (let i = 0, j = 0; i < a.length && j < b.length;) {
-    if (a[i] === b[j]) { fresh[j] = false; i++; j++; } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) i++; else j++;
+    let i = 0;
+    let j = 0;
+    while (i < am.length && j < bm.length) {
+      if (am[i] === bm[j]) { i++; j++; } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) gone.push(am[i++]!); else fresh[head + j++] = true;
+    }
+    while (i < am.length) gone.push(am[i++]!);
+    while (j < bm.length) fresh[head + j++] = true;
   }
   const count = fresh.filter(Boolean).length;
-  if (!count) return 'Text: some of it went away, nothing new.';
   if (count * 2 > b.length) return 'Text: ' + now;
+  const wentAway = gone.length ? `Text, words gone: ${gone.slice(0, 60).join(' ')}${gone.length > 60 ? '…' : ''}` : '';
+  if (!count) return wentAway || 'Text: unchanged words, spacing aside.';
   const parts: string[] = [];
   for (let j = 0; j < b.length; j++) {
     if (!fresh[j]) continue;
@@ -430,7 +457,12 @@ function textChange(before: string, now: string): string {
     parts.push(`${from > 0 ? '…' : ''}${b.slice(from, j).join(' ')} [${b.slice(j, end + 1).join(' ')}] ${b.slice(end + 1, to).join(' ')}${to < b.length ? '…' : ''}`.replace(/ +/g, ' ').trim());
     j = end;
   }
-  return 'Text, new words in [brackets]: ' + parts.join('  ');
+  return 'Text, new words in [brackets]: ' + parts.join('  ') + (wentAway ? '\n' + wentAway : '');
+}
+
+/** Drops what a tab was last told as: its next snapshot is the whole page. For a snapshot whose text is not returned to the agent. */
+export function forgetSnapshot(page: Page) {
+  lastSeen.delete(page);
 }
 
 function fromRef(page: Page, ref: string): { frame: Frame; key: string } {

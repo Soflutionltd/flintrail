@@ -40,7 +40,7 @@ test('after an action on the same page, only what changed comes back', async () 
 
   // A ref left out of the difference still works.
   const viaOldRef = await mcp.call('fl_act', { tab, actions: [{ do: 'click', ref: lastRow }] });
-  assert.match(viaOldRef, /No change since the last snapshot of this tab \(44 elements, same refs\)/);
+  assert.match(viaOldRef, /No change since the last snapshot of this tab in the elements, headings and text it shows \(44 elements, same refs\)/);
   await mcp.call('fl_close', { tab });
 });
 
@@ -73,5 +73,37 @@ test('a truncated list is never told as a difference', async () => {
   const out = await click(tab, '#rename', { max: 10 });
   assert.match(out, /list truncated/);
   assert.doesNotMatch(out, /Changes since/);
+  await mcp.call('fl_close', { tab });
+});
+
+test('a change a list of differences cannot tell is never reported as no change', async () => {
+  const first = await mcp.call('fl_open', { url: site.url + '/sorted', text: 0 });
+  const tab = tabOf(first);
+  // Same elements, other order: the whole page, in its new order.
+  const sorted = await click(tab, '#sort', { text: 0 });
+  assert.doesNotMatch(sorted, /No change|Changes since/);
+  assert.ok(sorted.indexOf('"Cherry"') < sorted.indexOf('"Apple"'), 'the new order is shown');
+
+  // A heading that goes away is told, with or without the page text.
+  const dismissed = await click(tab, '#dismiss', { text: 0 });
+  assert.doesNotMatch(dismissed, /No change/);
+  assert.ok(/^- # Error: card declined$/m.test(dismissed) || !/Error: card declined/.test(dismissed), 'gone, or the whole page without it');
+  await mcp.call('fl_close', { tab });
+
+  // Text that goes away is named.
+  const tab2 = tabOf(await mcp.call('fl_open', { url: site.url + '/sorted' }));
+  const cleared = await click(tab2, '#clear');
+  assert.doesNotMatch(cleared, /No change/);
+  assert.ok(/Text, words gone: Payment refused by the bank/.test(cleared) || (/Title: Sorted/.test(cleared) && !/Payment refused/.test(cleared)));
+  await mcp.call('fl_close', { tab: tab2 });
+});
+
+test('a very long page text is compared without stalling', async () => {
+  const tab = tabOf(await mcp.call('fl_open', { url: site.url + '/board', text: 200000 }));
+  await mcp.call('fl_act', { tab, snapshot: false, actions: [{ do: 'eval', js: 'const p = document.createElement("p"); p.id = "long"; p.textContent = Array.from({ length: 30000 }, (_, i) => "w" + (i % 977)).join(" "); document.body.appendChild(p); return 1' }] });
+  await mcp.call('fl_snapshot', { tab, text: 200000 });
+  const t0 = Date.now();
+  await mcp.call('fl_act', { tab, text: 200000, actions: [{ do: 'eval', js: 'const p = document.getElementById("long"); p.textContent = p.textContent.split(" ").reverse().join(" "); return 1' }] });
+  assert.ok(Date.now() - t0 < 1500, `took ${Date.now() - t0} ms`);
   await mcp.call('fl_close', { tab });
 });

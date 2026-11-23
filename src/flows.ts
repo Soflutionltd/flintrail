@@ -1,7 +1,7 @@
 // Replays recorded flows at browser speed, with no LLM in the loop.
 // A flow may mix browser steps and desktop steps (do: 'desktop'); a desktop-only flow never opens a tab.
 import type { Page } from 'playwright-core';
-import { fillVars, getTab, gotoFast, openTab, performOn, performPage, resolveTarget, snapshot, closeTab } from './engine.js';
+import { fillVars, getTab, gotoFast, openTab, performOn, performPage, resolveTarget, snapshot, closeTab, forgetSnapshot } from './engine.js';
 import { runDesktopStep, snapshotApp } from './desktop.js';
 import { signIn } from './login.js';
 import { describeShortcut, renderShortcut } from './api-shortcut.js';
@@ -107,6 +107,8 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
       const where = desktop
         ? (lastApp ? await snapshotApp(lastApp).catch(() => '') : '')
         : page ? await snapshot(page) : '';
+      // fl_run_many does not return this page to the agent: its next snapshot of the tab must be the whole page.
+      if (page && opts.snapshot === false) forgetSnapshot(page);
       return {
         ok: false, tab: id, ms, failedStep: i, outputs,
         text: `FAILED at step ${i}/${flow.steps.length} (${desktop ? `desktop ${s.desktop?.do}` : s.do}) after ${ms} ms: ${msg}\n` +
