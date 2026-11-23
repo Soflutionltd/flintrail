@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // flintrail            -> MCP over stdio (Claude Desktop, Claude Code, Cursor...)
 // flintrail --http     -> MCP over Streamable HTTP with a bearer token (remote agents, servers)
+// flintrail --relay    -> shared extension relay, started by Flintrail itself (src/relay.ts)
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
 import { join } from 'node:path';
@@ -10,8 +11,8 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { loadToken } from './auth.js';
 import { shutdown } from './browser.js';
 import { config } from './config.js';
-import { installNativeHost } from './pairing.js';
-import { startRelay } from './relay.js';
+import { runRelayDaemon } from './relay.js';
+import { relayClient } from './relay-client.js';
 import { buildServer, VERSION } from './server.js';
 import { attachUpdateNotice, startUpdateCheck } from './update-notice.js';
 
@@ -30,24 +31,25 @@ if (flag('help')) {
   console.log(`flintrail ${VERSION}
   flintrail                 MCP over stdio
   flintrail --http          MCP over HTTP (default 127.0.0.1:8931, path /mcp)
+  flintrail --relay         shared extension relay (started by Flintrail itself when needed)
     --host <h> --port <p>   listen address
     --token <t>             bearer token (default: FLINTRAIL_TOKEN or ~/.flintrail/token)
-Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_RELAY=off, FLINTRAIL_PAIRING=off,
+Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_RELAY=off, FLINTRAIL_RELAY_IDLE_MS, FLINTRAIL_PAIRING=off,
   FLINTRAIL_EXTENSION_IDS, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0,
   FLINTRAIL_PASSWORDS=browser,1password[:path],bitwarden[:path],command:path   sources for fl_login, in order (default browser, "off" to disable)`);
   process.exit(0);
 }
 
+// The shared relay daemon (started by Flintrail itself): it never returns, the rest is the MCP server.
+if (flag('relay')) await runRelayDaemon(loadToken(opt('token', '')));
+
 const stop = async () => { await shutdown(); process.exit(0); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
-// The relay starts right away in every mode, so the user's browsers (Brave, Chrome...) connect through
-// the extension, and can record by demonstration, before the agent makes its first call. Pairing lets the
-// extension fetch the token by itself.
-if (process.env.FLINTRAIL_RELAY !== 'off') {
-  if (await startRelay(loadToken(opt('token', '')))) installNativeHost(config.dedicatedProfile ? [config.dedicatedProfile] : []);
-}
+// Join the shared relay right away (starting it if no Flintrail did), so the user's browsers (Brave,
+// Chrome...) connect through the extension, and can record by demonstration, before the agent's first call.
+relayClient(loadToken(opt('token', '')), VERSION)?.ensure().catch((e: Error) => console.error(`flintrail: extension relay unavailable: ${e.message}`));
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];

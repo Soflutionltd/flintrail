@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Dialog, Frame, Locator, Page, Request } from 'playwright-core';
 import { AGENT, getDriven, type Driven } from './browser.js';
+import { getRelayClient } from './relay-client.js';
 import { config } from './config.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
@@ -175,8 +176,18 @@ export async function openTab(url?: string, browserName?: string): Promise<strin
 export async function adoptTab(match: string, browserName?: string): Promise<string> {
   const where = await getDriven(browserName);
   const owned = new Set(tabs.values());
-  const page = where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
-  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}".`);
+  const free = () => where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
+  let page = free();
+  // In a user browser, a tab the user shared from the extension belongs to no conversation until one
+  // claims it: the relay then hands it to this process only.
+  if (!page && where.viaExtension) {
+    const claimed = await getRelayClient()?.request('claim', { key: where.name, match });
+    for (let i = 0; claimed && !page && i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      page = free();
+    }
+  }
+  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' (in a user browser, share the tab from the Flintrail extension first)' : ''}.`);
   return register(page, where);
 }
 

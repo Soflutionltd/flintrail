@@ -67,23 +67,42 @@ function connect() {
   return connecting;
 }
 
+async function hmac(key, message) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(message));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function openConnection() {
   let { token } = await store.get('token');
   if (!token && await pair()) ({ token } = await store.get('token'));
   if (!token) { await setStatus('idle', 'Start Flintrail once on this computer, or paste the token from ~/.flintrail/token'); return; }
-  const { port = 8932 } = await store.get('port');
+  const { port = 8932, label = '' } = await store.get(['port', 'label']);
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   const instance = await instanceId();
+  const cnonce = crypto.randomUUID();
+  let welcomed = false;
   await setStatus('connecting');
   const sock = new WebSocket(`ws://127.0.0.1:${port}/extension`);
   ws = sock;
-  sock.onopen = () => {
-    sock.send(JSON.stringify({
-      type: 'hello', token, version: VERSION, userAgent: navigator.userAgent, instance,
-      browser: (navigator.userAgentData?.brands || []).map((b) => b.brand).filter((b) => !/Not.A.Brand|Chromium/i.test(b))[0] || 'Chromium',
-    }));
+  // The relay sends a challenge: answer with an HMAC of it, so the token itself never travels, then check
+  // that the relay knows the token too before obeying it.
+  sock.onmessage = async (ev) => {
+    const m = JSON.parse(ev.data);
+    if (!welcomed && m.type === 'challenge') {
+      sock.send(JSON.stringify({
+        type: 'hello', mac: await hmac(token, 'extension:' + m.nonce), cnonce, version: VERSION, userAgent: navigator.userAgent, instance, label,
+        browser: (navigator.userAgentData?.brands || []).map((b) => b.brand).filter((b) => !/Not.A.Brand|Chromium/i.test(b))[0] || 'Chromium',
+      }));
+      return;
+    }
+    if (!welcomed && m.type === 'welcome') {
+      if (m.mac !== await hmac(token, 'relay:' + cnonce)) { sock.close(); await setStatus('error', 'The program on the relay port is not Flintrail.'); return; }
+      welcomed = true;
+      await store.set({ name: m.name || '' });
+    }
+    if (welcomed) onMessage(m);
   };
-  sock.onmessage = (ev) => onMessage(JSON.parse(ev.data));
   sock.onclose = async (ev) => {
     if (ws !== sock) return;
     ws = null;
@@ -92,6 +111,7 @@ async function openConnection() {
     const bad = ev.code === 4401;
     // The token changed on the Flintrail side (new install, new computer): pair again, then retry.
     if (bad && await pair() && (await store.get('token')).token !== token) { connect(); return; }
+    if (!welcomed && (await store.get('status')).status === 'error') return;
     await setStatus(bad ? 'error' : 'disconnected', bad ? 'Wrong token' : 'Flintrail is not running (it starts with your agent).');
   };
   sock.onerror = () => {};
@@ -199,9 +219,22 @@ async function handle(method, p) {
       await chrome.tabs.remove(p.tabId).catch(() => {});
       attached.delete(p.tabId);
       return {};
+    case 'release':
+      // One conversation is done: release its tabs only, the other conversations keep theirs.
+      for (const tabId of p.tabIds || []) await detach(tabId);
+      return {};
     case 'releaseAll':
       for (const tabId of [...attached]) await detach(tabId);
       return {};
+    case 'listTabs': {
+      // Site and title only (no path, no query string): enough to find the window where an account is open.
+      const all = await chrome.tabs.query({});
+      return all.map((t) => {
+        let origin = '';
+        try { origin = t.url ? new URL(t.url).origin : ''; } catch { /* chrome:// and the like */ }
+        return { window: t.windowId, origin: origin === 'null' ? '' : origin, title: t.title || '', attached: attached.has(t.id) };
+      });
+    }
     default:
       throw new Error(`Unknown method ${method}`);
   }
@@ -295,6 +328,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case 'disconnect':
         await disconnect();
         return reply({});
+      case 'setLabel':
+        // The name agents use to pick this browser (e.g. "Work" becomes brave-work): reconnect to apply it.
+        await store.set({ label: String(msg.label || '').trim().slice(0, 60) });
+        ws?.close();
+        ws = null;
+        await connect();
+        return reply({ text: 'Saved.' });
       case 'share': {
         if (!ws || ws.readyState !== WebSocket.OPEN) return reply({ text: 'Error: connect to Flintrail first.' });
         try {

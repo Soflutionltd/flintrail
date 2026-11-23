@@ -17,6 +17,8 @@ export function testEnv(extra = {}) {
     // Never touch the real browsers of the machine running the tests.
     FLINTRAIL_RELAY: 'off',
     FLINTRAIL_PAIRING: 'off',
+    // A relay daemon started by a test leaves soon after the test's Flintrail processes.
+    FLINTRAIL_RELAY_IDLE_MS: '1500',
     ...(process.env.FLINTRAIL_CHROME ? { FLINTRAIL_CHROME: process.env.FLINTRAIL_CHROME } : {}),
     ...extra,
   };

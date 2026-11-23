@@ -4,7 +4,8 @@
 //  - launch: start its own Chromium with a persistent profile (servers, CI, headless).
 //  - extension: no dedicated browser, only the browsers below.
 // In every mode, the user's own browsers where the Flintrail extension is installed are reachable by
-// name ("brave", "chrome", "edge"...) through the local relay, several at once.
+// name ("brave", "brave-ideekdo", "chrome"...) through the shared relay daemon, several at once, and from
+// several Flintrail processes (one per conversation) at the same time.
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -12,7 +13,8 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { config } from './config.js';
 import { loadToken } from './auth.js';
-import { getRelay, startRelay } from './relay.js';
+import { getRelayClient, relayClient } from './relay-client.js';
+import { VERSION } from './version.js';
 import { startCdpFilter, type CdpFilter } from './cdp-filter.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -115,16 +117,15 @@ const driven = new Map<string, Promise<Driven>>();
 let filter: CdpFilter | null = null;
 
 async function connectExtension(name: string | undefined): Promise<Driven> {
-  const relay = await startRelay(loadToken());
-  if (!relay) throw new Error(`Another Flintrail process owns the extension relay on port ${config.relayPort}.`);
-  const bridge = await relay.waitFor(name, config.extensionWaitMs);
-  const browser = await chromium.connectOverCDP(bridge.cdpUrl, { timeout: 15000 });
-  const forget = () => driven.delete(bridge.key);
-  browser.on('disconnected', forget);
-  bridge.onClose(forget);
+  const relay = relayClient(loadToken(), VERSION);
+  if (!relay) throw new Error('The extension relay is turned off (FLINTRAIL_RELAY=off).');
+  const found = await relay.waitFor(name, config.extensionWaitMs);
+  const { key, cdpUrl } = await relay.open(found.key);
+  const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 15000 });
+  browser.on('disconnected', () => driven.delete(key));
   const ctx = browser.contexts()[0];
-  if (!ctx) throw new Error(`${bridge.key}: the extension exposes no context.`);
-  return { name: bridge.key, ctx, browser, viaExtension: true };
+  if (!ctx) throw new Error(`${key}: the extension exposes no context.`);
+  return { name: key, ctx, browser, viaExtension: true };
 }
 
 async function connectAgent(): Promise<Driven> {
@@ -171,7 +172,7 @@ export async function getDriven(name?: string): Promise<Driven> {
   }
   if (wanted && driven.has(wanted)) return driven.get(wanted)!;
   if (!wanted) {
-    const first = getRelay()?.list()[0];
+    const first = getRelayClient()?.browsers[0];
     if (first && driven.has(first.key)) return driven.get(first.key)!;
   }
   const pending = connectExtension(wanted);

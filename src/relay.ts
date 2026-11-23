@@ -1,22 +1,34 @@
-// Extension relay. Flintrail browser extensions connect here over a local WebSocket and drive tabs with
-// chrome.debugger. Several browsers can be connected at once (Brave, Chrome, Edge...): each one gets its
-// own private CDP endpoint, and the relay translates between Playwright and that extension, so the whole
-// engine works unchanged on top of any Chromium browser.
+// Shared extension relay (daemon). One small process, started by the first Flintrail that needs it, owns
+// the relay port for every conversation on this computer:
 //
-//   Playwright ──CDP──▶ /cdp/<secret> ──▶ bridge "brave" ──JSON──▶ /extension ──▶ chrome.debugger
+//   Flintrail A ──/client──┐                          ┌──/extension── Brave "IdéeKdo"  (chrome.debugger)
+//   Flintrail B ──/client──┼──▶ relay daemon ◀───────┼──/extension── Brave "Perso"
+//   Playwright A ──/cdp/<secret>─┘ (one view per       └──/extension── Chrome
+//   Playwright B ──/cdp/<secret>─┘  client and browser)
 //
-// Only tabs that Flintrail opened, or that the user explicitly shared from the extension, are visible.
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { createServer, type Server } from 'node:http';
+// Each Flintrail process is a client: it gets its own private CDP endpoint per browser, and only sees the
+// tabs it opened, or a tab the user shared from the extension and it claimed (fl_adopt). The daemon does
+// not belong to any conversation: closing one never cuts the others off. It exits by itself once no
+// Flintrail has been connected for a while (FLINTRAIL_RELAY_IDLE_MS, 10 minutes by default).
+//
+// Security: it listens on 127.0.0.1 only and refuses requests coming from a web page (Origin header).
+// Clients and extensions prove they know the token in ~/.flintrail/token with an HMAC over a fresh nonce,
+// and the daemon proves it back, so the token itself never travels and a process squatting the port
+// learns nothing.
+import { randomBytes } from 'node:crypto';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { config } from './config.js';
-import { recorder } from './recorder.js';
-import type { Step } from './engine.js';
+import { installNativeHost } from './pairing.js';
+import { macFor, macMatches, RELAY_PROTOCOL, slug, type BrowserInfo } from './relay-protocol.js';
+import { VERSION } from './version.js';
 
 interface Tab {
   tabId: number;
   sessionId: string;
-  targetInfo: Record<string, unknown> & { targetId: string };
+  targetInfo: Record<string, unknown> & { targetId: string; url?: string };
+  /** The view (client + browser) driving this tab. null: shared by the user, not claimed yet. */
+  owner: CdpView | null;
 }
 
 interface CdpMessage {
@@ -28,10 +40,13 @@ interface CdpMessage {
 
 interface Hello {
   token?: string;
+  mac?: string;
+  cnonce?: string;
   version?: string;
   userAgent?: string;
   browser?: string;
   instance?: string;
+  label?: string;
 }
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
@@ -39,39 +54,91 @@ type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; timer: N
 const BROWSER_SESSION = 'flintrail-browser';
 
 /** "Google Chrome" -> chrome, "Microsoft Edge" -> edge, "Brave" -> brave. */
-export function browserKey(brand: string | undefined): string {
+function browserKey(brand: string | undefined): string {
   const b = (brand || 'chromium').toLowerCase();
   if (b.includes('edge')) return 'edge';
   if (b.includes('chrome')) return 'chrome';
   if (b.includes('opera') || b.includes('opr')) return 'opera';
-  return b.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'chromium';
+  return slug(b) || 'chromium';
 }
 
-/** One connected browser extension and the Playwright session driving it. */
-export class ExtensionBridge {
-  readonly cdpPath = '/cdp/' + randomBytes(16).toString('hex');
-  private cdp: WebSocket | null = null;
+/** A web page can open a WebSocket to 127.0.0.1: it always sends its http(s) origin, an extension or Node does not. */
+function fromWebPage(req: IncomingMessage): boolean {
+  return /^https?:/i.test(String(req.headers.origin || ''));
+}
+
+/** One Flintrail process connected to the daemon. */
+class ClientConn {
+  readonly id = randomBytes(6).toString('hex');
+  lastActive = Date.now();
+  private demoWaiters = new Map<number, (text: string) => void>();
+  private nextDemo = 1;
+
+  constructor(readonly ws: WebSocket, readonly pid: number) {}
+
+  send(message: Record<string, unknown>) {
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
+  }
+
+  /** Forwards a demonstration request from the extension, waits for the recorder's answer. */
+  demo(action: string, extra: Record<string, unknown>): Promise<string> {
+    const reqId = this.nextDemo++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.demoWaiters.delete(reqId); resolve('Error: Flintrail did not answer.'); }, 4000);
+      this.demoWaiters.set(reqId, (text) => { clearTimeout(timer); resolve(text); });
+      this.send({ type: 'demo', reqId, action, ...extra });
+    });
+  }
+
+  demoResult(reqId: number, text: string) {
+    this.demoWaiters.get(reqId)?.(text);
+    this.demoWaiters.delete(reqId);
+  }
+}
+
+/** What one client sees of one browser: its own CDP endpoint and its own tabs. */
+class CdpView {
+  readonly path = '/cdp/' + randomBytes(16).toString('hex');
+  ws: WebSocket | null = null;
+  autoAttach = false;
+
+  constructor(readonly bridge: ExtensionBridge, readonly client: ClientConn) {}
+}
+
+/** One connected browser extension, shared by every client. */
+class ExtensionBridge {
   private pending = new Map<number, Pending>();
   private nextId = 1;
   private nextTab = 1;
   private tabsBySession = new Map<string, Tab>();
   private tabsById = new Map<number, Tab>();
   private childSessions = new Map<string, number>();
-  private autoAttach = false;
-  private closeListeners: (() => void)[] = [];
+  readonly views = new Set<CdpView>();
+  /** The client that last drove this browser: it receives the recordings made by demonstration. */
+  lastClient: ClientConn | null = null;
+  private demoClient: ClientConn | null = null;
 
-  constructor(readonly key: string, readonly instance: string, readonly info: Hello, private ext: WebSocket, private readonly port: number) {}
+  constructor(readonly key: string, readonly instance: string, readonly info: Hello, private ext: WebSocket, readonly legacy: boolean,
+    private readonly relay: ExtensionRelay) {}
 
   get connected() { return this.ext.readyState === WebSocket.OPEN; }
-  get cdpUrl() { return `ws://127.0.0.1:${this.port}${this.cdpPath}`; }
 
-  onClose(fn: () => void) { this.closeListeners.push(fn); }
+  describe(): BrowserInfo {
+    return { key: this.key, label: this.info.label || '', browser: this.info.browser || 'browser', version: this.info.version || '?', legacy: this.legacy };
+  }
 
   /** The extension reconnected (service worker restart): keep the name, swap the socket. */
   replaceSocket(ws: WebSocket) {
     const old = this.ext;
     this.ext = ws;
     old.close(4000, 'replaced');
+  }
+
+  /** The same browser came back under another name: drop this one. */
+  retire() {
+    const ws = this.ext;
+    this.closed(ws);
+    ws.close(4000, 'renamed');
   }
 
   closed(ws: WebSocket) {
@@ -81,12 +148,12 @@ export class ExtensionBridge {
     this.tabsBySession.clear();
     this.tabsById.clear();
     this.childSessions.clear();
-    this.cdp?.close();
-    this.closeListeners.splice(0).forEach((fn) => fn());
+    for (const view of this.views) view.ws?.close();
+    this.views.clear();
     return true;
   }
 
-  private request(method: string, params: Record<string, unknown>, timeout = 30000): Promise<any> {
+  request(method: string, params: Record<string, unknown>, timeout = 30000): Promise<any> {
     if (!this.connected) return Promise.reject(new Error(`${this.key}: extension not connected`));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -112,16 +179,25 @@ export class ExtensionBridge {
       case 'event': return this.onDebuggerEvent(m.tabId, m.sessionId, m.method, m.params);
       case 'detached':
       case 'tabClosed': return this.dropTab(m.tabId);
-      case 'shared': return this.addTab(m.tabId, m.targetInfo);
+      case 'shared': { this.addTab(m.tabId, m.targetInfo, null); return; }
       case 'recorded': {
-        recorder.addDemoStep(m.step as Step);
+        this.demoClient?.send({ type: 'recorded', step: m.step });
         return;
       }
       case 'demo': {
         let text: string;
-        try {
-          text = m.action === 'start' ? recorder.start(m.name, 'Recorded by demonstration', m.url) : recorder.stop(true);
-        } catch (e) { text = `Error: ${(e as Error).message}`; }
+        if (m.action === 'start') {
+          const client = this.relay.recordingTarget(this);
+          this.demoClient = client;
+          text = client
+            ? await client.demo('start', { name: m.name, url: m.url })
+            : 'Error: no Flintrail conversation is running. Start your agent first.';
+          if (text.startsWith('Error')) this.demoClient = null;
+        } else {
+          const client = this.demoClient;
+          this.demoClient = null;
+          text = client ? await client.demo('stop', {}) : 'Error: no recording in progress.';
+        }
         this.send({ type: 'demoResult', reqId: m.reqId, text });
         return;
       }
@@ -129,18 +205,18 @@ export class ExtensionBridge {
     }
   }
 
-  private addTab(tabId: number, targetInfo: Tab['targetInfo']): Tab {
+  private addTab(tabId: number, targetInfo: Tab['targetInfo'], owner: CdpView | null): Tab {
     const existing = this.tabsById.get(tabId);
     if (existing) return existing;
-    const tab: Tab = { tabId, sessionId: `flintrail-tab-${this.nextTab++}`, targetInfo };
+    const tab: Tab = { tabId, sessionId: `flintrail-tab-${this.nextTab++}`, targetInfo, owner };
     this.tabsBySession.set(tab.sessionId, tab);
     this.tabsById.set(tabId, tab);
-    if (this.autoAttach) this.announce(tab);
+    if (owner?.autoAttach) this.announce(tab);
     return tab;
   }
 
   private announce(tab: Tab) {
-    this.toCdp({
+    this.toView(tab.owner, {
       method: 'Target.attachedToTarget',
       params: { sessionId: tab.sessionId, targetInfo: { ...tab.targetInfo, attached: true }, waitingForDebugger: false },
     });
@@ -152,7 +228,7 @@ export class ExtensionBridge {
     this.tabsById.delete(tabId);
     this.tabsBySession.delete(tab.sessionId);
     for (const [sid, t] of this.childSessions) if (t === tabId) this.childSessions.delete(sid);
-    this.toCdp({ method: 'Target.detachedFromTarget', params: { sessionId: tab.sessionId, targetId: tab.targetInfo.targetId } });
+    this.toView(tab.owner, { method: 'Target.detachedFromTarget', params: { sessionId: tab.sessionId, targetId: tab.targetInfo.targetId } });
   }
 
   private onDebuggerEvent(tabId: number, childSession: string | undefined, method: string, params: any) {
@@ -163,68 +239,113 @@ export class ExtensionBridge {
     if (method === 'Target.targetInfoChanged' && !childSession && params?.targetInfo?.targetId === tab.targetInfo.targetId) {
       tab.targetInfo = params.targetInfo;
     }
-    this.toCdp({ method, params, sessionId: childSession || tab.sessionId });
+    this.toView(tab.owner, { method, params, sessionId: childSession || tab.sessionId });
+  }
+
+  /** Gives a tab the user shared (URL containing match) to this client. */
+  claim(client: ClientConn, match: string): { url: string } | null {
+    const view = [...this.views].find((v) => v.client === client && v.ws);
+    if (!view) throw new Error(`${this.key}: connect to this browser first.`);
+    const tab = [...this.tabsById.values()].filter((t) => !t.owner && String(t.targetInfo.url || '').includes(match)).at(-1);
+    if (!tab) return null;
+    tab.owner = view;
+    if (view.autoAttach) this.announce(tab);
+    return { url: String(tab.targetInfo.url || '') };
   }
 
   // ---------- Playwright side ----------
 
-  onCdp(ws: WebSocket) {
-    if (this.cdp) this.cdp.close();
-    this.cdp = ws;
-    this.autoAttach = false;
+  openView(client: ClientConn): CdpView {
+    // A view this client opened but never connected (Playwright failed to connect): reuse it.
+    const unused = [...this.views].find((v) => v.client === client && !v.ws);
+    if (unused) return unused;
+    const view = new CdpView(this, client);
+    this.views.add(view);
+    return view;
+  }
+
+  onCdp(view: CdpView, ws: WebSocket) {
+    if (view.ws) { ws.close(4409, 'view already in use'); return; }
+    view.ws = ws;
     ws.on('message', async (raw: RawData) => {
       let m: CdpMessage;
       try { m = JSON.parse(String(raw)); } catch { return; }
+      view.client.lastActive = Date.now();
+      this.lastClient = view.client;
       try {
-        const result = await this.handleCdp(m);
-        this.toCdp({ id: m.id, sessionId: m.sessionId, result: result ?? {} });
+        const result = await this.handleCdp(view, m);
+        this.toView(view, { id: m.id, sessionId: m.sessionId, result: result ?? {} });
       } catch (e) {
-        this.toCdp({ id: m.id, sessionId: m.sessionId, error: { code: -32000, message: (e as Error).message } });
+        this.toView(view, { id: m.id, sessionId: m.sessionId, error: { code: -32000, message: (e as Error).message } });
       }
       if (m.method === 'Target.setAutoAttach' && (!m.sessionId || m.sessionId === BROWSER_SESSION)) {
-        for (const tab of this.tabsBySession.values()) this.announce(tab);
+        for (const tab of this.tabsBySession.values()) if (tab.owner === view) this.announce(tab);
       }
     });
-    ws.on('close', () => {
-      if (this.cdp === ws) this.cdp = null;
-      if (this.connected) this.request('releaseAll', {}, 5000).catch(() => {});
-    });
+    ws.on('close', () => this.closeView(view));
   }
 
-  private toCdp(m: Record<string, unknown>) {
-    if (this.cdp?.readyState === WebSocket.OPEN) this.cdp.send(JSON.stringify(m));
+  /** The client went away: release its tabs in the browser (the user keeps them open, no longer driven), and leave the other clients' tabs alone. */
+  closeView(view: CdpView) {
+    if (!this.views.delete(view)) return;
+    view.ws?.close();
+    const released: number[] = [];
+    for (const tab of [...this.tabsById.values()]) {
+      if (tab.owner !== view) continue;
+      released.push(tab.tabId);
+      this.tabsById.delete(tab.tabId);
+      this.tabsBySession.delete(tab.sessionId);
+      for (const [sid, t] of this.childSessions) if (t === tab.tabId) this.childSessions.delete(sid);
+    }
+    // Extension 1.3 has no per-tab release: its own idle timer detaches the tabs after 5 minutes.
+    if (released.length && !this.legacy && this.connected) this.request('release', { tabIds: released }, 5000).catch(() => {});
   }
 
-  private async handleCdp(m: CdpMessage): Promise<unknown> {
-    const { method = '', params = {}, sessionId } = m;
-    if (!sessionId || sessionId === BROWSER_SESSION) return this.browserCommand(method, params);
+  private toView(view: CdpView | null, m: Record<string, unknown>) {
+    if (view?.ws?.readyState === WebSocket.OPEN) view.ws.send(JSON.stringify(m));
+  }
+
+  private ownedTab(view: CdpView, sessionId: string): Tab | undefined {
     const tab = this.tabsBySession.get(sessionId);
+    return tab?.owner === view ? tab : undefined;
+  }
+
+  private async handleCdp(view: CdpView, m: CdpMessage): Promise<unknown> {
+    const { method = '', params = {}, sessionId } = m;
+    if (!sessionId || sessionId === BROWSER_SESSION) return this.browserCommand(view, method, params);
+    const tab = this.ownedTab(view, sessionId);
     if (tab) return this.request('send', { tabId: tab.tabId, method, params });
     const owner = this.childSessions.get(sessionId);
-    if (owner !== undefined) return this.request('send', { tabId: owner, sessionId, method, params });
+    if (owner !== undefined && this.tabsById.get(owner)?.owner === view) return this.request('send', { tabId: owner, sessionId, method, params });
     throw new Error(`Unknown session ${sessionId}`);
   }
 
-  private async browserCommand(method: string, params: Record<string, unknown>): Promise<unknown> {
+  private async browserCommand(view: CdpView, method: string, params: Record<string, unknown>): Promise<unknown> {
+    const own = () => [...this.tabsBySession.values()].filter((t) => t.owner === view);
     switch (method) {
       case 'Browser.getVersion':
         return { protocolVersion: '1.3', product: 'Chrome/Flintrail-Extension', revision: '', userAgent: this.info.userAgent || '', jsVersion: '' };
       case 'Target.setAutoAttach':
-        this.autoAttach = true;
+        view.autoAttach = true;
         return {};
       case 'Target.attachToBrowserTarget':
         return { sessionId: BROWSER_SESSION };
       case 'Target.getTargetInfo':
         return { targetInfo: { targetId: 'flintrail-browser', type: 'browser', title: '', url: '', attached: true, canAccessOpener: false } };
       case 'Target.getTargets':
-        return { targetInfos: [...this.tabsBySession.values()].map((t) => ({ ...t.targetInfo, attached: true })) };
+        return { targetInfos: own().map((t) => ({ ...t.targetInfo, attached: true })) };
       case 'Target.createTarget': {
         const r = await this.request('createTab', { url: params.url || 'about:blank', background: params.background !== false });
-        const tab = this.addTab(r.tabId, r.targetInfo);
+        if (!this.views.has(view)) {
+          // The client left while the tab was opening: nobody will drive it.
+          if (!this.legacy) this.request('release', { tabIds: [r.tabId] }, 5000).catch(() => {});
+          throw new Error('client disconnected');
+        }
+        const tab = this.addTab(r.tabId, r.targetInfo, view);
         return { targetId: tab.targetInfo.targetId };
       }
       case 'Target.closeTarget': {
-        const tab = [...this.tabsBySession.values()].find((t) => t.targetInfo.targetId === params.targetId);
+        const tab = own().find((t) => t.targetInfo.targetId === params.targetId);
         if (tab) await this.request('closeTab', { tabId: tab.tabId });
         return { success: !!tab };
       }
@@ -240,119 +361,212 @@ export class ExtensionBridge {
 export class ExtensionRelay {
   private server: Server | null = null;
   private bridges = new Map<string, ExtensionBridge>();
-  private waiters: (() => void)[] = [];
+  private clients = new Set<ClientConn>();
+  private idleTimer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly token: string, readonly port: number) {}
+  constructor(private readonly token: string, readonly port: number, readonly version: string,
+    private readonly idleMs: number, private readonly onIdle: () => void) {}
 
-  /** Connected browsers, by name (brave, chrome, edge, chrome-2 ...). */
+  /** Connected browsers, by name (brave, brave-ideekdo, chrome ...). */
   list(): ExtensionBridge[] {
     return [...this.bridges.values()].filter((b) => b.connected);
   }
 
+  /** A browser by name, or by the label the user gave it in the extension. */
   get(key: string): ExtensionBridge | undefined {
-    const b = this.bridges.get(key.toLowerCase());
-    return b?.connected ? b : undefined;
+    const k = key.trim().toLowerCase();
+    return this.list().find((b) => b.key === k) || this.list().find((b) => b.info.label && slug(b.info.label) === slug(k));
   }
-
-  get connected() { return this.list().length > 0; }
 
   start(): Promise<void> {
     const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
     this.server = createServer((_req, res) => { res.writeHead(404).end(); });
     this.server.on('upgrade', (req, socket, head) => {
       const path = (req.url || '').split('?')[0];
+      if (fromWebPage(req)) { socket.destroy(); return; }
       if (path === '/extension') { wss.handleUpgrade(req, socket, head, (ws) => this.onExtension(ws)); return; }
-      const bridge = [...this.bridges.values()].find((b) => b.cdpPath === path);
-      if (bridge) wss.handleUpgrade(req, socket, head, (ws) => bridge.onCdp(ws));
-      else socket.destroy();
+      if (path === '/client') { wss.handleUpgrade(req, socket, head, (ws) => this.onClient(ws)); return; }
+      for (const bridge of this.bridges.values()) {
+        const view = [...bridge.views].find((v) => v.path === path);
+        if (view) { wss.handleUpgrade(req, socket, head, (ws) => bridge.onCdp(view, ws)); return; }
+      }
+      socket.destroy();
     });
     return new Promise((resolve, reject) => {
       this.server!.once('error', reject);
-      this.server!.listen(this.port, '127.0.0.1', () => resolve());
+      this.server!.listen(this.port, '127.0.0.1', () => { this.armIdle(); resolve(); });
     });
   }
 
-  /** Waits for a browser by name, or for any browser when no name is given. */
-  waitFor(key: string | undefined, ms: number): Promise<ExtensionBridge> {
-    const pick = () => (key ? this.get(key) : this.list()[0]);
-    const found = pick();
-    if (found) return Promise.resolve(found);
-    return new Promise((resolve, reject) => {
-      let done = false;
-      const t = setTimeout(() => {
-        done = true;
-        const names = this.list().map((b) => b.key);
-        reject(new Error(key
-          ? `Browser "${key}" is not connected to Flintrail.${names.length ? ` Connected: ${names.join(', ')}.` : ''} Open it: the Flintrail extension connects by itself.`
-          : 'No browser is connected to Flintrail. Open a browser where the Flintrail extension is installed: it connects by itself.'));
-      }, ms);
-      const check = () => {
-        if (done) return;
-        const b = pick();
-        if (b) { done = true; clearTimeout(t); resolve(b); } else this.waiters.push(check);
-      };
-      this.waiters.push(check);
+  close() {
+    this.server?.close();
+    for (const c of this.clients) c.ws.close();
+  }
+
+  /** Who gets a recording made by demonstration in this browser: whoever drove it last, else the most recent client. */
+  recordingTarget(bridge: ExtensionBridge): ClientConn | null {
+    if (bridge.lastClient && this.clients.has(bridge.lastClient)) return bridge.lastClient;
+    return [...this.clients].sort((a, b) => b.lastActive - a.lastActive)[0] || null;
+  }
+
+  private armIdle() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = this.clients.size ? null : setTimeout(this.onIdle, this.idleMs);
+  }
+
+  private broadcastBrowsers() {
+    const browsers = this.list().map((b) => b.describe());
+    for (const c of this.clients) c.send({ type: 'browsers', browsers });
+  }
+
+  // ---------- Flintrail clients ----------
+
+  private onClient(ws: WebSocket) {
+    const nonce = randomBytes(16).toString('hex');
+    let client: ClientConn | null = null;
+    const kick = setTimeout(() => { if (!client) ws.close(4401, 'no hello'); }, 5000);
+    ws.send(JSON.stringify({ type: 'challenge', nonce, version: this.version, protocol: RELAY_PROTOCOL }));
+    ws.on('message', async (raw: RawData) => {
+      let m: any;
+      try { m = JSON.parse(String(raw)); } catch { return; }
+      if (!client) {
+        if (m.type !== 'hello' || !macMatches(this.token, 'client:' + nonce, String(m.mac || ''))) { ws.close(4401, 'bad token'); return; }
+        clearTimeout(kick);
+        client = new ClientConn(ws, Number(m.pid) || 0);
+        this.clients.add(client);
+        this.armIdle();
+        ws.send(JSON.stringify({
+          type: 'welcome', mac: macFor(this.token, 'relay:' + String(m.cnonce || '')), version: this.version, protocol: RELAY_PROTOCOL,
+          clients: this.clients.size, browsers: this.list().map((b) => b.describe()),
+        }));
+        return;
+      }
+      if (m.type === 'demoResult') { client.demoResult(Number(m.reqId), String(m.text ?? '')); return; }
+      if (typeof m.id !== 'number') return;
+      try {
+        client.send({ id: m.id, result: await this.clientRequest(client, String(m.method), m.params || {}) });
+      } catch (e) {
+        client.send({ id: m.id, error: (e as Error).message });
+      }
+    });
+    ws.on('close', () => {
+      clearTimeout(kick);
+      if (!client) return;
+      this.clients.delete(client);
+      for (const bridge of this.bridges.values()) {
+        for (const view of [...bridge.views]) if (view.client === client) bridge.closeView(view);
+      }
+      this.armIdle();
     });
   }
+
+  private bridgeFor(key: unknown): ExtensionBridge {
+    const bridge = this.get(String(key || ''));
+    if (!bridge) throw new Error(`Browser "${key}" is not connected to Flintrail.`);
+    return bridge;
+  }
+
+  private async clientRequest(client: ClientConn, method: string, p: Record<string, unknown>): Promise<unknown> {
+    switch (method) {
+      case 'open': {
+        const bridge = this.bridgeFor(p.key);
+        return { key: bridge.key, cdpUrl: `ws://127.0.0.1:${this.port}${bridge.openView(client).path}` };
+      }
+      case 'claim':
+        return this.bridgeFor(p.key).claim(client, String(p.match || ''));
+      case 'tabs': {
+        const bridge = this.bridgeFor(p.key);
+        if (bridge.legacy) throw new Error(`${bridge.key}: extension ${bridge.info.version} cannot list its tabs, reload it to update.`);
+        return bridge.request('listTabs', {}, 5000);
+      }
+      case 'retire':
+        // A newer Flintrail replaces this daemon, only when nobody else depends on it.
+        if (this.clients.size > 1) throw new Error('other Flintrail processes still use this relay');
+        setImmediate(this.onIdle);
+        return { ok: true };
+      default:
+        throw new Error(`Unknown method ${method}`);
+    }
+  }
+
+  // ---------- browser extensions ----------
 
   private onExtension(ws: WebSocket) {
+    const nonce = randomBytes(16).toString('hex');
     let bridge: ExtensionBridge | null = null;
     const kick = setTimeout(() => { if (!bridge) ws.close(4401, 'no hello'); }, 5000);
+    // Extension 1.4+ answers this challenge. Extension 1.3 ignores it and sends its token in clear.
+    ws.send(JSON.stringify({ type: 'challenge', nonce }));
     ws.on('message', async (raw: RawData) => {
       let m: any;
       try { m = JSON.parse(String(raw)); } catch { return; }
       if (!bridge) {
-        if (m.type !== 'hello' || !this.checkToken(String(m.token || ''))) { ws.close(4401, 'bad token'); return; }
+        const hello = m as Hello;
+        const legacy = !hello.mac;
+        const ok = m.type === 'hello' && (legacy
+          ? macMatches(this.token, 'token', macFor(String(hello.token || ''), 'token'))
+          : macMatches(this.token, 'extension:' + nonce, String(hello.mac)));
+        if (!ok) { ws.close(4401, 'bad token'); return; }
         clearTimeout(kick);
-        bridge = this.register(ws, m as Hello);
-        ws.send(JSON.stringify({ type: 'welcome', name: bridge.key, recording: recorder.status() }));
-        this.waiters.splice(0).forEach((w) => w());
+        bridge = this.register(ws, hello, legacy);
+        ws.send(JSON.stringify({
+          type: 'welcome', name: bridge.key, recording: null,
+          ...(legacy ? {} : { mac: macFor(this.token, 'relay:' + String(hello.cnonce || '')) }),
+        }));
+        this.broadcastBrowsers();
         return;
       }
       await bridge.onExtensionMessage(m);
     });
     ws.on('close', () => {
-      if (bridge?.closed(ws)) this.bridges.delete(bridge.key);
+      clearTimeout(kick);
+      if (bridge?.closed(ws)) {
+        if (this.bridges.get(bridge.key) === bridge) this.bridges.delete(bridge.key);
+        this.broadcastBrowsers();
+      }
     });
   }
 
-  private register(ws: WebSocket, hello: Hello): ExtensionBridge {
+  private register(ws: WebSocket, hello: Hello, legacy: boolean): ExtensionBridge {
     const instance = String(hello.instance || randomBytes(8).toString('hex'));
+    const label = String(hello.label || '').trim().slice(0, 60);
     const same = [...this.bridges.values()].find((b) => b.instance === instance);
-    if (same) { same.replaceSocket(ws); return same; }
+    if (same && (same.info.label || '') === label) { same.replaceSocket(ws); return same; }
+    if (same) { this.bridges.delete(same.key); same.retire(); }
+    // A name the user gave in the extension wins ("brave-ideekdo"); otherwise the brand, made unique.
     const base = browserKey(hello.browser);
-    let key = base;
+    let key = label ? `${base}-${slug(label) || 'browser'}` : base;
+    if (this.bridges.has(key)) key = `${key}-${instance.replace(/[^a-z0-9]/gi, '').slice(0, 4).toLowerCase()}`;
     for (let n = 2; this.bridges.has(key); n++) key = `${base}-${n}`;
-    const bridge = new ExtensionBridge(key, instance, hello, ws, this.port);
+    const bridge = new ExtensionBridge(key, instance, { ...hello, label, token: undefined }, ws, legacy, this);
     this.bridges.set(key, bridge);
     return bridge;
   }
-
-  private checkToken(t: string) {
-    const a = Buffer.from(t), b = Buffer.from(this.token);
-    return a.length === b.length && timingSafeEqual(a, b);
-  }
 }
 
-let relay: ExtensionRelay | null = null;
-
-/** Starts the relay once per process. Returns null if another Flintrail already owns the port. */
-export async function startRelay(token: string): Promise<ExtensionRelay | null> {
-  if (relay) return relay;
-  const r = new ExtensionRelay(token, config.relayPort);
+/**
+ * Runs this process as the relay daemon. Never resolves: the daemon exits by itself once no Flintrail
+ * has been connected for FLINTRAIL_RELAY_IDLE_MS (10 minutes by default), or right away when another
+ * daemon already owns the port.
+ */
+export async function runRelayDaemon(token: string): Promise<never> {
+  const idleMs = Number(process.env.FLINTRAIL_RELAY_IDLE_MS || 10 * 60 * 1000);
+  const relay = new ExtensionRelay(token, config.relayPort, VERSION, idleMs, () => {
+    console.error(`flintrail relay ${VERSION}: no Flintrail connected, exiting.`);
+    relay.close();
+    process.exit(0);
+  });
   try {
-    await r.start();
+    await relay.start();
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-      console.error(`flintrail: relay port ${config.relayPort} already in use, another Flintrail owns the extension.`);
-      return null;
-    }
+    // Another daemon won the race to the port: it serves everyone, this one is not needed.
+    if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE') process.exit(0);
     throw e;
   }
-  relay = r;
-  return r;
-}
-
-export function getRelay(): ExtensionRelay | null {
-  return relay;
+  installNativeHost(config.dedicatedProfile ? [config.dedicatedProfile] : []);
+  console.error(`flintrail relay ${VERSION} (pid ${process.pid}) listening on 127.0.0.1:${config.relayPort}`);
+  const stop = () => { relay.close(); process.exit(0); };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
+  return new Promise<never>(() => {});
 }
