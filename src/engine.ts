@@ -1,7 +1,7 @@
 // Live driving: tabs, compact snapshots, batched actions, smart waits, network capture.
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Dialog, Frame, Locator, Page, Request } from 'playwright-core';
+import type { BrowserContext, Dialog, Frame, Locator, Page, Request } from 'playwright-core';
 import { AGENT, getDriven, type Driven } from './browser.js';
 import { getRelayClient } from './relay-client.js';
 import { config } from './config.js';
@@ -133,7 +133,20 @@ function pageNotes(page: Page): string[] {
   return notes;
 }
 
-async function newPage(where: Driven): Promise<Page> {
+/** Tabs being opened, per browser context. */
+const opening = new WeakMap<BrowserContext, Promise<unknown>>();
+
+/**
+ * Opens a tab, one at a time per browser: each opening waits for "the next page" of the context, so two
+ * at once could both get the same tab.
+ */
+function newPage(where: Driven): Promise<Page> {
+  const run = (opening.get(where.ctx) ?? Promise.resolve()).catch(() => {}).then(() => openPage(where));
+  opening.set(where.ctx, run);
+  return run;
+}
+
+async function openPage(where: Driven): Promise<Page> {
   const { ctx, browser } = where;
   if (browser) {
     // Open the tab in the background so the window never steals focus.
