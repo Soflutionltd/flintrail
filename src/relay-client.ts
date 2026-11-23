@@ -35,6 +35,14 @@ export class RelayClient {
   browsers: BrowserInfo[] = [];
   relayVersion = '';
   lastError = '';
+  /** Tabs of this conversation the browser took back lately, and why. */
+  private lost: { url: string; reason: string; at: number }[] = [];
+
+  /** Why the tab last seen on this URL is no longer driven, if the extension said so in the last 10 minutes. */
+  lostReason(url?: string): string | undefined {
+    const recent = this.lost.filter((l) => Date.now() - l.at < 10 * 60_000);
+    return (url ? recent.filter((l) => l.url === url).at(-1) : recent.at(-1))?.reason;
+  }
 
   constructor(private readonly token: string, private readonly version: string) {}
 
@@ -156,6 +164,9 @@ export class RelayClient {
     }
     switch (m.type) {
       case 'browsers': return this.setBrowsers(m.browsers || []);
+      case 'tabLost':
+        this.lost = [...this.lost, { url: String(m.url || ''), reason: String(m.reason || ''), at: Date.now() }].slice(-20);
+        return;
       case 'recorded': return recorder.addDemoStep(m.step as Step);
       case 'demo': {
         let text: string;

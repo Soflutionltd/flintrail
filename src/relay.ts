@@ -243,9 +243,16 @@ class ExtensionBridge {
     }
     switch (m.type) {
       case 'event': return this.onDebuggerEvent(m.tabId, m.sessionId, m.method, m.params);
-      case 'detached':
-        if (this.tabsById.has(m.tabId)) log(`${this.key}: tab ${m.tabId} detached (${String(m.reason || 'unknown')})`);
+      case 'detached': {
+        const tab = this.tabsById.get(m.tabId);
+        if (tab) {
+          const reason = String(m.reason || 'unknown');
+          log(`${this.key}: tab ${m.tabId} detached (${reason})`);
+          // The conversation that drove it learns why, for its next call on that tab.
+          tab.owner?.client.send({ type: 'tabLost', url: String(m.url || tab.targetInfo.url || ''), reason });
+        }
         return this.dropTab(m.tabId);
+      }
       case 'tabClosed': return this.dropTab(m.tabId);
       case 'attached': return this.keepOnly(Array.isArray(m.tabIds) ? m.tabIds.map(Number) : []);
       case 'shared': { this.addTab(m.tabId, m.targetInfo, null); return; }

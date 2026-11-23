@@ -57,6 +57,8 @@ export interface Step extends Omit<Action, 'ref'> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const tabs = new Map<string, Page>();
+/** Last address of tabs no longer driven, to tell the agent why when it calls them again. */
+const goneTabs = new Map<string, string>();
 let nextTab = 1;
 
 interface ConsoleEntry { level: 'error' | 'warning' | 'info' | 'pageerror'; text: string; at: string }
@@ -140,7 +142,10 @@ function register(page: Page, where: Driven): string {
   const id = 't' + nextTab++;
   tabs.set(id, page);
   Object.assign(stateOf(page), { browser: where.name, viaExtension: where.viaExtension });
-  page.on('close', () => tabs.delete(id));
+  page.on('close', () => {
+    goneTabs.set(id, page.url());
+    tabs.delete(id);
+  });
   // A new document: the secrets filled in the previous one are gone (the agent's scripts may not be, see agentJs).
   page.on('domcontentloaded', () => { stateOf(page).secretFilled = false; });
   page.on('request', (r) => recorder.onRequest(r));
@@ -276,7 +281,12 @@ export function tabBrowser(id: string): string {
 
 export function getTab(id: string): Page {
   const p = tabs.get(id);
-  if (!p || p.isClosed()) throw new Error(`Tab ${id} not found: closed, released by the extension after 5 minutes without use, or debugging cancelled from the browser's bar (the reason is in ~/.flintrail/relay.log). Use fl_open, or fl_adopt to take an open tab back.`);
+  if (!p || p.isClosed()) {
+    const url = p ? p.url() : goneTabs.get(id);
+    const why = url ? getRelayClient()?.lostReason(url) : undefined;
+    if (why) throw new Error(`Tab ${id} is no longer driven: ${why}.`);
+    throw new Error(`Tab ${id} not found: closed, released by the extension after 5 minutes without use, or debugging cancelled from the browser's bar (the reason is in ~/.flintrail/relay.log). Use fl_open, or fl_adopt to take an open tab back.`);
+  }
   const why = domainProblem(p.url());
   if (why) throw new Error(`Blocked: tab ${id} went to a site the agent may not work on. ${why} Close it with fl_close.`);
   return p;

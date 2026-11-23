@@ -331,12 +331,39 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 });
 
 // reason: "target_closed", or "canceled_by_user" when the user closed the debugging bar.
+// The browser also says "target_closed" when the tab is still open but debugging it is no longer allowed: most
+// often another extension (a password manager) put its own frame in the page. Say so instead of "closed".
+async function detachReason(tabId, reason) {
+  if (reason !== 'target_closed') return reason === 'canceled_by_user' ? 'debugging cancelled from the browser bar' : reason;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) return 'tab closed';
+  // The other extension's frame may still be loading when the browser cuts in: try again a moment later.
+  let last = '';
+  for (const wait of [300, 1000, 2000]) {
+    await new Promise((r) => setTimeout(r, wait));
+    try {
+      await chrome.debugger.attach({ tabId }, '1.3');
+      await chrome.debugger.detach({ tabId }).catch(() => {});
+    } catch (e) {
+      last = String(e?.message || e);
+      if (/different extension/i.test(last)) {
+        return 'another extension (a password manager?) put its own frame in this page, and the browser then stops any extension from driving it. In that extension\'s details (brave://extensions or chrome://extensions), set "Site access" to "On click", then open the page again';
+      }
+      if (!(await chrome.tabs.get(tabId).catch(() => null))) return 'tab closed';
+    }
+  }
+  return `the browser stopped debugging this tab (it is still open)${last ? `: ${last}` : ''}`;
+}
+
 chrome.debugger.onDetach.addListener(async (source, reason) => {
   await restored;
   if (!attached.delete(source.tabId)) return;
   await saveAttached();
-  send({ type: 'detached', tabId: source.tabId, reason });
   refreshBadge();
+  const why = await detachReason(source.tabId, reason);
+  // Its address now, so the conversation that drove it can tell which of its tabs this was.
+  const url = (await chrome.tabs.get(source.tabId).catch(() => null))?.url || '';
+  send({ type: 'detached', tabId: source.tabId, reason: why, url });
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, change) => {
