@@ -113,7 +113,9 @@ Pairing: at startup Flintrail registers a native messaging host (`com.soflution.
 
 How it works: the first Flintrail that needs it starts a small relay process on `127.0.0.1:8932`, shared by every Flintrail on the computer (one per conversation in Claude Desktop, Cursor...). It belongs to no conversation, so closing one never cuts the others off, and it exits by itself 10 minutes after the last Flintrail left. Each extension connects to it and executes CDP commands with `chrome.debugger`, one tab at a time. Each Flintrail gets its own CDP endpoint per browser: Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged, and each agent only sees the tabs it opened itself, or a tab you shared with *Share with agent* that it took with `fl_adopt` (the first agent to adopt it gets it).
 
-Several browsers or profiles: give each one a name in the popup (*Name of this browser*, e.g. "Work"). Agents then pick it by that name: `browser: "Work"` or `"brave-work"`. Without a name, browsers are called after their brand (`brave`, `chrome`), with a short suffix when two of the same brand are open. `fl_extension` with `tabs: true` lists the sites open in each browser (origin and title, never the full URL), so an agent can find the profile where an account is signed in.
+Several browsers or profiles: each connected browser is named after its browser profile, e.g. `brave-soflution` for the Brave profile called "Soflution", and agents can simply say `browser: "Soflution"`. Flintrail reads the profile names from the browser's `Local State` file and finds which profile an extension runs in from the extension's own storage (read only, nothing else). A name typed in the popup (*Name of this browser*) wins over the profile name; without either, browsers are called after their brand (`brave`, `chrome`), with a short suffix when two of the same brand are open. `fl_extension` with `tabs: true` lists the windows and sites open in each browser (origin and title, never the full URL), so an agent can find the profile where an account is signed in.
+
+Windows: `fl_open` takes `window` (an id from `fl_extension` `tabs: true`) to open the tab in that window, or `newWindow: true` for a new one. A profile of this computer that is not open (`fl_extension` lists them) is opened on demand on macOS: `fl_open` with `browser: "Soflution"` starts Brave on that profile if needed and waits for its extension, which must be installed in that profile.
 
 Updating the extension: after an update, reload it in every browser and profile where it is installed (`chrome://extensions` or `brave://extensions`, *Flintrail*, reload button). An older extension keeps working, and `fl_extension` flags it as outdated.
 
@@ -264,7 +266,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 40 end-to-end tests over real MCP, extension included
+npm test                               # build + 44 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```
