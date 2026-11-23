@@ -8,6 +8,8 @@ const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8">
 export function startFixture(port = 0) {
   const orders = [];
   const visits = { count: 0 };
+  /** Passwords posted to the two-step sign-in, to check which account's password was sent. */
+  const attempts = [];
   /** Requests worth checking afterwards, as "host path". */
   const hits = [];
   /** Tests flip this to make /switch lead to another site. */
@@ -91,6 +93,34 @@ export function startFixture(port = 0) {
           out.textContent = j.ok ? 'Welcome ' + j.email : 'Wrong credentials';
         };
       </script>`);
+    // Second step of a sign-in in two pages: the account is already chosen and shown, only the password is asked.
+    if (url.pathname === '/login-step') return html('Password', `<h1>Welcome</h1>
+      ${url.searchParams.get('pad') ? Array.from({ length: Number(url.searchParams.get('pad')) }, () => '<i>.</i>').join('') : ''}
+      <p id="who">${url.searchParams.get('as') || ''}</p>
+      ${url.searchParams.get('label') ? `<button type="button" aria-label="Account: ${url.searchParams.get('label')}">A</button>` : ''}
+      ${url.searchParams.get('note') ? `<p>${url.searchParams.get('note')}</p>` : ''}
+      ${url.searchParams.get('long') ? `<p>${'lorem ipsum '.repeat(Number(url.searchParams.get('long')))}</p>` : ''}
+      ${url.searchParams.get('hidden') ? `<p style="display:none">${url.searchParams.get('hidden')}</p><p hidden>${url.searchParams.get('hidden')}</p>
+        <p style="position:absolute;left:-9999px">${url.searchParams.get('hidden')}</p><select><option>${url.searchParams.get('hidden')}</option></select>
+        <span aria-hidden="true">${url.searchParams.get('hidden')}</span><i style="display:none" title="${url.searchParams.get('hidden')}"></i>` : ''}
+      ${url.searchParams.get('frame') ? `<iframe src="${url.searchParams.get('frame')}" width="300" height="120"></iframe>` : ''}
+      ${url.searchParams.get('support') ? '<footer>Need help? <a href="mailto:help@example.com">help@example.com</a></footer>' : ''}
+      <form id="f"><label>Password <input name="password" type="password" autocomplete="current-password"></label><button>Next</button></form>
+      <p id="out"></p>
+      <script>
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          await fetch('/api/login-step', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: who.textContent, password: f.password.value }) });
+          out.textContent = 'Step done';
+        };
+      </script>`);
+    if (url.pathname === '/api/login-step' && req.method === 'POST') {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => { attempts.push(JSON.parse(b || '{}')); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}'); });
+      return;
+    }
     if (url.pathname === '/api/login' && req.method === 'POST') {
       let b = '';
       req.on('data', (c) => (b += c));
@@ -246,5 +276,5 @@ export function startFixture(port = 0) {
     }
     res.writeHead(404).end();
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, hits, state, url: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, hits, state, attempts, url: `http://127.0.0.1:${server.address().port}` })));
 }

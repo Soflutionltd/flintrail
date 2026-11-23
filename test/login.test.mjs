@@ -173,6 +173,14 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
     assert.match(done, /Welcome ann@example.com/);
     assert.ok(!leaks(out + done + (await mcp.call('fl_network', { filter: '/api/login' }))), 'what the browser filled is masked too');
 
+    // The browser's own saved login is for ann: asked for another account, nothing is submitted.
+    const other = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
+    const sentBefore = site.hits.filter((h) => h.endsWith('/api/login')).length;
+    await assert.rejects(mcp.call('fl_login', { tab: other, account: 'carol@example.com' }), /Refused: no saved login for carol@example\.com .*other accounts: the browser's own saved login \(ann@example\.com\)\. Nothing was filled/);
+    assert.equal(site.hits.filter((h) => h.endsWith('/api/login')).length, sentBefore);
+    assert.match(await mcp.call('fl_login', { tab: other, account: 'ANN@example.com' }), /Browser password manager: filled username, password, submitted/);
+    await mcp.call('fl_close', { tab: other });
+
     await mcp.call('fl_record_start', { name: 'browser-signin' });
     const rec = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
     await mcp.call('fl_login', { tab: rec });
@@ -204,4 +212,167 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
       }
     }
   }
+});
+
+describe('a sign-in step that already names the account', () => {
+  const step = (email) => `${site.url}/login-step?as=${encodeURIComponent(email)}`;
+
+  test('with two saved logins for the site, the one the page names is used', async () => {
+    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_SECOND: '1' }));
+    try {
+      // The other login is the one saved under this exact address: the page's account still wins.
+      for (const [email, password] of [['ann@example.com', SECRET], ['bob@example.com', 'Second pass 77']]) {
+        const tab = tabOf(await mcp.call('fl_open', { url: step(email) }));
+        const before = site.attempts.length;
+        const out = await mcp.call('fl_login', { tab });
+        assert.match(out, new RegExp(`\\(${email.replace('.', '\\.')}, .*filled password, submitted`));
+        await mcp.call('fl_act', { tab, snapshot: false, actions: [{ do: 'wait', text: 'Step done' }] });
+        assert.deepEqual(site.attempts.slice(before), [{ email, password }]);
+        assert.ok(!out.includes(password));
+        await mcp.call('fl_close', { tab });
+      }
+      // An account neither login is for: nothing is sent, the agent is told to choose.
+      const tab = tabOf(await mcp.call('fl_open', { url: step('carol@example.com') }));
+      const before = site.attempts.length;
+      await assert.rejects(mcp.call('fl_login', { tab }), /Refused: the page asks for the password of carol@example\.com, none of the saved logins is for that account\. Nothing was filled/);
+      assert.equal(site.attempts.length, before);
+      // Named explicitly, a login is used as asked.
+      assert.match(await mcp.call('fl_login', { tab, item: 'bob@example.com' }), /bob@example\.com.*filled password/);
+      await mcp.call('fl_close', { tab });
+    } finally { await mcp.client.close(); }
+  });
+
+  test('look-alike, hidden and labelled account names are told apart', async () => {
+    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
+    const attempt = async (query) => {
+      const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login-step?${query}` }));
+      const before = site.attempts.length;
+      const out = await mcp.call('fl_login', { tab }).catch((e) => e.message);
+      await mcp.call('fl_act', { tab, snapshot: false, actions: [{ do: 'wait', ms: 250 }] });
+      await mcp.call('fl_close', { tab });
+      return { out, sent: site.attempts.length - before };
+    };
+    const as = (v) => `as=${encodeURIComponent(v)}`;
+    try {
+      // The saved login is ann@example.com. Another account whose name contains it is not it.
+      assert.deepEqual((await attempt(as('joann@example.com'))).sent, 0);
+      assert.deepEqual((await attempt(as('ann@example.com.evil.test'))).sent, 0);
+      // Partly hidden names: the one that fits is used, the one that cannot fit is refused.
+      assert.deepEqual((await attempt(as('a••@example.com'))).sent, 1);
+      assert.deepEqual((await attempt(as('an*@example.com'))).sent, 1);
+      const hidden = await attempt(as('c••••@example.com'));
+      assert.match(hidden.out, /Refused: the page asks for the password of c••••@example\.com/);
+      assert.equal(hidden.sent, 0);
+      assert.deepEqual((await attempt(as('a••@other.test'))).sent, 0);
+      // Named in a label rather than in the text.
+      assert.deepEqual((await attempt('label=' + encodeURIComponent('ann@example.com'))).sent, 1);
+      assert.deepEqual((await attempt('label=' + encodeURIComponent('carol@example.com'))).sent, 0);
+      // A support address in the footer is not an account: the step that names nobody still signs in.
+      assert.deepEqual((await attempt('support=1')).sent, 1);
+      // An account kept in a hidden part of the page is not the one the step is about.
+      assert.deepEqual((await attempt(`${as('carol@example.com')}&hidden=${encodeURIComponent('ann@example.com')}`)).sent, 0);
+      // Odd characters stuck to an address do not make it another address.
+      for (const odd of ['•ann@example.com', '••ann@example.com', 'x#ann@example.com', "o'ann@example.com"]) {
+        assert.deepEqual((await attempt(as(odd))).sent, 0, odd);
+      }
+      // Two accounts on the step: not clear whose password is asked.
+      const both = await attempt(`${as('ann@example.com')}&note=${encodeURIComponent('Not you? Switch to carol@example.com')}`);
+      assert.match(both.out, /Refused: the page shows several accounts/);
+      assert.equal(both.sent, 0);
+      // A frame of another website naming the saved account says nothing about this sign-in.
+      const framed = `${site.url.replace('127.0.0.1', 'localhost')}/login-step?${as('ann@example.com')}`;
+      assert.deepEqual((await attempt(`${as('carol@example.com')}&frame=${encodeURIComponent(framed)}`)).sent, 0);
+      // A page too large to read whole: refused rather than guessed, and quickly.
+      const t0 = Date.now();
+      const huge = await attempt(`${as('carol@example.com')}&pad=45000`);
+      assert.match(huge.out, /Refused: this page is too large to tell which account/);
+      assert.equal(huge.sent, 0);
+      // A very long text without any address is read fast and changes nothing.
+      assert.deepEqual((await attempt(`${as('ann@example.com')}&long=10000`)).sent, 1);
+      assert.ok(Date.now() - t0 < 15000, `took ${Date.now() - t0} ms`);
+      // An address split by markup still reads as one.
+      assert.deepEqual((await attempt('note=' + encodeURIComponent('<b>ann</b>@example.com'))).sent, 1);
+      // A very long address read on the page is cut in the message.
+      const long = await attempt(as(`${'x'.repeat(400)}@example.com`));
+      assert.equal(long.sent, 0);
+      assert.ok(long.out.length < 700, `message of ${long.out.length} characters`);
+    } finally { await mcp.client.close(); }
+  });
+
+  test('a name the page shows by chance does not pick a saved login', async () => {
+    const run = async (username, query) => {
+      const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_USERNAME: username }));
+      try {
+        const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login-step?${query}` }));
+        const before = site.attempts.length;
+        const out = await mcp.call('fl_login', { tab }).catch((e) => e.message);
+        await mcp.call('fl_act', { tab, snapshot: false, actions: [{ do: 'wait', ms: 250 }] });
+        return { out, sent: site.attempts.length - before };
+      } finally { await mcp.client.close(); }
+    };
+    const ann = `as=${encodeURIComponent('ann@example.com')}`;
+    // A plain username is an ordinary word: the page saying "support" is not the account "support".
+    const word = await run('support', `${ann}&note=${encodeURIComponent('Contact support if you are locked out')}`);
+    assert.match(word.out, /Refused: the page asks for the password of ann@example\.com/);
+    assert.equal(word.sent, 0);
+    // The site's contact address in the footer is not the account either.
+    const footer = await run('help@example.com', `${ann}&support=1`);
+    assert.match(footer.out, /Refused: the page asks for the password of ann@example\.com/);
+    assert.equal(footer.sent, 0);
+    // Letters outside ASCII and a leading bullet do not turn one address into another.
+    assert.equal((await run('ann@example.com', `as=${encodeURIComponent('éann@example.com')}`)).sent, 0);
+    assert.equal((await run('joann@example.com', `as=${encodeURIComponent('•ann@example.com')}`)).sent, 0);
+    assert.equal((await run('ann@example.com', `as=${encodeURIComponent('• ann@example.com')}`)).sent, 1);
+  });
+
+  test('asked for one account, a saved login for another is never used', async () => {
+    const posts = () => site.hits.filter((h) => h.endsWith('/api/login')).length + site.attempts.length;
+    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
+    try {
+      // A plain sign-in form that names nobody, and the only saved login is ann's.
+      const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+      const before = posts();
+      await assert.rejects(mcp.call('fl_login', { tab, account: 'carol@example.com' }),
+        /Refused: no saved login for carol@example\.com on 127\.0\.0\.1 .*other accounts: "Fixture shop" \(ann@example\.com.*Nothing was filled/);
+      await assert.rejects(mcp.call('fl_login', { tab, account: 'carol@example.com', item: 'fixture1' }), /Refused: no saved login for carol@example\.com/);
+      await assert.rejects(mcp.call('fl_login', { tab, account: '  ' }), /account is empty/);
+      // Read without running a script (fl_login refuses a tab the agent ran JavaScript in): no e-mail typed, nothing sent.
+      assert.doesNotMatch(await mcp.call('fl_snapshot', { tab }), /email "Email[^"]*" = /);
+      assert.equal(posts(), before);
+
+      // The account asked for is the saved one, whatever the case: it signs in, and a recorded flow keeps the lock.
+      await mcp.call('fl_record_start', { name: 'locked-signin', startUrl: `${site.url}/login` });
+      assert.match(await mcp.call('fl_login', { tab, account: 'Ann@Example.com' }), /filled username, password, one-time code, submitted/);
+      await mcp.call('fl_record_stop');
+      assert.match(await mcp.call('fl_flow', { name: 'locked-signin' }), /"account": "Ann@Example\.com"/);
+      await mcp.call('fl_close', { tab });
+    } finally { await mcp.client.close(); }
+
+    // Two saved logins: asking for bob on a step that names ann fills nothing.
+    const two = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_SECOND: '1' }));
+    try {
+      const tab = tabOf(await two.call('fl_open', { url: `${site.url}/login-step?as=${encodeURIComponent('ann@example.com')}` }));
+      const before = posts();
+      await assert.rejects(two.call('fl_login', { tab, account: 'bob@example.com' }), /Refused: the page asks for the password of ann@example\.com/);
+      assert.equal(posts(), before);
+      await two.call('fl_close', { tab });
+      const own = tabOf(await two.call('fl_open', { url: `${site.url}/login-step?as=${encodeURIComponent('bob@example.com')}` }));
+      assert.match(await two.call('fl_login', { tab: own, account: 'bob@example.com' }), /bob@example\.com.*filled password, submitted/);
+      await two.call('fl_act', { tab: own, snapshot: false, actions: [{ do: 'wait', text: 'Step done' }] });
+      assert.deepEqual(site.attempts.at(-1), { email: 'bob@example.com', password: 'Second pass 77' });
+      await two.call('fl_close', { tab: own });
+    } finally { await two.client.close(); }
+  });
+
+  test('a single saved login is not used for another account the page names', async () => {
+    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
+    try {
+      const tab = tabOf(await mcp.call('fl_open', { url: step('carol@example.com') }));
+      const before = site.attempts.length;
+      await assert.rejects(mcp.call('fl_login', { tab }), /Refused: the page asks for the password of carol@example\.com, the saved login .*ann@example\.com.* is another account\. Nothing was filled/);
+      await mcp.call('fl_act', { tab, snapshot: false, actions: [{ do: 'wait', ms: 300 }] });
+      assert.equal(site.attempts.length, before);
+      await mcp.call('fl_close', { tab });
+    } finally { await mcp.client.close(); }
+  });
 });

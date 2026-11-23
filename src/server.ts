@@ -107,15 +107,16 @@ export function buildServer(): McpServer {
     inputSchema: {
       tab: z.string(),
       item: z.string().optional().describe('Login ID, title or username in a password manager CLI, when several match the site.'),
+      account: z.string().optional().describe('Username or e-mail of the account the user asked to work on. Set it whenever the user said whose account it is (a client, a colleague, a second account of theirs): a saved login for any other account is then refused instead of used, even when it is the only one for the site.'),
       source: z.string().optional().describe('Only this source: browser, 1password, bitwarden or command.'),
       submit: z.boolean().optional().describe('Press Enter after filling (default true).'),
       field: z.string().optional().describe('Ref (eN) of the one password or one-time code field to fill, e.g. a "Confirm access" password prompt. Any other kind of field is refused.'),
       ...snapOpts,
     },
-  }, guard(async ({ tab, item, source, submit, field, text: t, max }) => {
+  }, guard(async ({ tab, item, account, source, submit, field, text: t, max }) => {
     const page = getTab(tab);
-    const r = await signIn(page, { item, source, submit, field });
-    recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(submit === false ? { submit } : {}) } as Step);
+    const r = await signIn(page, { item, source, submit, account, field });
+    recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(account ? { account } : {}), ...(submit === false ? { submit } : {}) } as Step);
     await domQuiet(page);
     return `${r.text}\n\n${await snapshot(page, { text: t, max })}`;
   }));
