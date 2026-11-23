@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, assertNoSecret, closeTab, consoleLog, domQuiet, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { redact, signIn } from './login.js';
@@ -103,17 +103,18 @@ export function buildServer(): McpServer {
   }, guard(async ({ tab, actions, snapshot: snap, diff, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, diff, text: t, max })));
 
   if (config.passwordSources.length) s.registerTool('fl_login', {
-    description: 'Sign in on the open sign-in form with the user\'s saved password: from the browser\'s own password manager, or from a password manager CLI the user configured (1Password, Bitwarden, custom command). Flintrail fills username, password and one-time code itself; the secrets never reach you. A CLI login is only filled when the page domain matches its website. On a multi-step sign-in (e-mail page, then password page), call it on each step. While recording, the flow stores the source and login ID, never a secret.',
+    description: 'Sign in on the open sign-in form with the user\'s saved password: from the browser\'s own password manager, or from a password manager CLI the user configured (1Password, Bitwarden, custom command). Flintrail fills username, password and one-time code itself; the secrets never reach you. A CLI login is only filled over HTTPS, when the page domain matches its website, never in a payment or bank field, and never from a payment card or bank item. In the user\'s own browsers, the Flintrail extension settings (set by the user only) may turn filling off, limit it to some domains, or ask the user to confirm each fill: a refusal is final, do not try another way. On a multi-step sign-in (e-mail page, then password page), call it on each step. While recording, the flow stores the source and login ID, never a secret.',
     inputSchema: {
       tab: z.string(),
       item: z.string().optional().describe('Login ID, title or username in a password manager CLI, when several match the site.'),
       source: z.string().optional().describe('Only this source: browser, 1password, bitwarden or command.'),
       submit: z.boolean().optional().describe('Press Enter after filling (default true).'),
+      field: z.string().optional().describe('Ref (eN) of the one password or one-time code field to fill, e.g. a "Confirm access" password prompt. Any other kind of field is refused.'),
       ...snapOpts,
     },
-  }, guard(async ({ tab, item, source, submit, text: t, max }) => {
+  }, guard(async ({ tab, item, source, submit, field, text: t, max }) => {
     const page = getTab(tab);
-    const r = await signIn(page, { item, source, submit });
+    const r = await signIn(page, { item, source, submit, field });
     recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(submit === false ? { submit } : {}) } as Step);
     await domQuiet(page);
     return `${r.text}\n\n${await snapshot(page, { text: t, max })}`;
@@ -145,6 +146,8 @@ export function buildServer(): McpServer {
   }, async ({ tab, full, ref, selector }): Promise<ToolResult> => {
     try {
       const page = getTab(tab);
+      // A "show password" click would put the filled password in the picture, where no masking applies.
+      assertNoSecret(page, 'A screenshot');
       const opts = { type: 'jpeg' as const, quality: 55, scale: 'css' as const };
       const target = ref ? elementByRef(page, ref) : selector ? page.locator(mainFrameSelector(selector)).first() : null;
       // Embedded frames of sites outside the user's list are hidden for the picture.

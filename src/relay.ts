@@ -588,6 +588,21 @@ export class ExtensionRelay {
         if (bridge.legacy) throw new Error(`${bridge.key}: extension ${bridge.info.version} cannot list its tabs, reload it to update.`);
         return bridge.request('listTabs', {}, 5000);
       }
+      case 'fillPolicy':
+      case 'fillAudit': {
+        // Asked of the extension only: it holds the user's settings, and only the user can answer a confirmation.
+        // An extension without settings (1.4.0 and older) is said so explicitly: Flintrail then applies the
+        // defaults, while an error (an older relay, say) is a refusal, never a silent fill.
+        const bridge = this.bridgeFor(p.key);
+        if (bridge.legacy) return { noSettings: true };
+        const { key: _key, ...rest } = p;
+        try {
+          return await bridge.request(method, rest, method === 'fillPolicy' ? 125_000 : 5000);
+        } catch (e) {
+          if (new RegExp(`Unknown method ${method}`).test((e as Error).message)) return { noSettings: true };
+          throw e;
+        }
+      }
       case 'retire':
         // A newer Flintrail replaces this daemon, only when nobody else depends on it.
         if (this.clients.size > 1) throw new Error('other Flintrail processes still use this relay');

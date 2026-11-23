@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flintrail settings</title>
+<style>
+  :root { --bg:#0E1116; --card:#161B23; --line:#262E3B; --text:#E8ECF2; --muted:#8B95A7; --accent:#FF6A1A; --ok:#2FBF71; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:32px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 4px; letter-spacing:-.3px; } h1 span { color:var(--accent); }
+  p.lead { color:var(--muted); margin:0 0 24px; }
+  section { padding:18px; margin-bottom:16px; background:var(--card); border:1px solid var(--line); border-radius:12px; }
+  h2 { margin:0 0 12px; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  label.switch { display:flex; gap:12px; align-items:flex-start; padding:8px 0; cursor:pointer; }
+  label.switch input { margin-top:3px; accent-color:var(--accent); width:16px; height:16px; flex:none; }
+  label.switch small { display:block; color:var(--muted); }
+  textarea { width:100%; min-height:96px; padding:9px 11px; margin-top:8px; background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--text); font:13px/1.5 ui-monospace,Menlo,monospace; }
+  textarea:disabled { opacity:.45; }
+  textarea:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .fixed li { margin:4px 0; color:var(--muted); }
+  #saved { color:var(--ok); font-size:12px; min-height:18px; margin-top:8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .scroll { overflow-x:auto; }
+  #empty { color:var(--muted); }
+  button { padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--text); font:inherit; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Flint<span>rail</span> settings</h1>
+  <p class="lead">Passwords and one-time codes Flintrail fills from your password manager (1Password, Bitwarden...) in this browser. Only you can change these settings: no agent can, through Flintrail.</p>
+
+  <section>
+    <h2>Password filling</h2>
+    <label class="switch"><input type="checkbox" id="enabled"><span>Fill saved passwords<small>Off: Flintrail never fills a password in this browser.</small></span></label>
+    <label class="switch"><input type="checkbox" id="confirm"><span>Ask me before each fill<small>A Flintrail window shows the website and the login. Only your click answers; no answer within 2 minutes means no.</small></span></label>
+    <label class="switch"><input type="checkbox" id="totp"><span>Fill one-time codes (TOTP)<small>Off: Flintrail fills the password, and the agent asks you for the code.</small></span></label>
+  </section>
+
+  <section>
+    <h2>Websites</h2>
+    <label class="switch"><input type="checkbox" id="allDomains"><span>Every website<small>Off: only the domains below, one per line (example.com also covers its subdomains).</small></span></label>
+    <textarea id="domains" aria-label="Allowed domains" placeholder="github.com&#10;cloudflare.com"></textarea>
+    <div id="saved" role="status"></div>
+  </section>
+
+  <section class="fixed">
+    <h2>Always, whatever the settings</h2>
+    <ul>
+      <li>A login is filled only on the website it is saved for.</li>
+      <li>Never over plain HTTP.</li>
+      <li>Only in password and code fields, never in a free text field.</li>
+      <li>Never a payment card or bank details.</li>
+      <li>The agent never receives a password or a code.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>History</h2>
+    <div class="scroll"><table><thead><tr><th>When</th><th>Website</th><th>Login</th><th>Filled</th><th>Approval</th></tr></thead><tbody id="history"></tbody></table></div>
+    <p id="empty">No fill yet.</p>
+    <button id="clear" type="button">Clear the history</button>
+  </section>
+</main>
+<script src="options.js"></script>
+</body>
+</html>

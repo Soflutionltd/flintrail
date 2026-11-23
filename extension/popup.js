@@ -78,5 +78,6 @@ $('recStop').onclick = async () => {
   render();
 };
 
+$('settings').onclick = (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); };
 chrome.storage.onChanged.addListener(render);
 chrome.tabs.query({ active: true, currentWindow: true }).then(([t]) => { tab = t || null; render(); });

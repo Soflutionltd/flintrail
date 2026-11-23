@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -11,6 +11,8 @@ import { startFixture } from './fixture.mjs';
 import { connect, refOf, testEnv } from './helpers.mjs';
 
 const extPath = new URL('../extension', import.meta.url).pathname;
+const fakeOp = new URL('./fake-op.mjs', import.meta.url).pathname;
+chmodSync(fakeOp, 0o755);
 const token = 'test-token-' + Math.random().toString(36).slice(2);
 let site, mcp, ctx, sw;
 
@@ -37,6 +39,7 @@ before(async () => {
   mcp = await connect(testEnv({
     FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(relayPort), FLINTRAIL_TOKEN: token,
     FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir, FLINTRAIL_EXTENSION_WAIT: '1500',
+    FLINTRAIL_PASSWORDS: `1password:${fakeOp}`,
   }));
   // A normal Chromium with the Flintrail extension installed.
   ctx = await chromium.launchPersistentContext(userDataDir, {
@@ -97,6 +100,71 @@ test('the opened tab is shown in its window, and survives the extension reconnec
   await sw.evaluate(() => ws.close());
   assert.match(await mcp.call('fl_snapshot', { tab }), /search/i);
   assert.match(await mcp.call('fl_tabs'), new RegExp(`${tab} .*\\/search`));
+  await mcp.call('fl_close', { tab });
+});
+
+test('password filling follows the extension settings, and only the user answers a confirmation', async () => {
+  const settings = (v) => sw.evaluate((s) => chrome.storage.local.set({ fillSettings: s }), v);
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url + '/login', browser: 'chromium', text: 0 }))[1];
+  // A fresh load of the form: after a fill, the page is closed to scripts until it changes.
+  const empty = () => mcp.call('fl_act', { tab, actions: [{ do: 'goto', url: site.url + '/login' }] });
+  const leaks = (text) => text.includes('S3cret') || text.includes('123456');
+
+  // Default: filled without asking, and recorded in the extension's history without any value.
+  assert.match(await mcp.call('fl_login', { tab, submit: false }), /filled username, password, one-time code\./);
+  const history = async () => (await sw.evaluate(() => chrome.storage.local.get('fillHistory'))).fillHistory || [];
+  const fillHistory = await waitFor(async () => { const h = await history(); return h.length ? h : null; });
+  assert.deepEqual([fillHistory[0].domain, fillHistory[0].item, fillHistory[0].approval], ['127.0.0.1', 'Fixture shop', 'silent']);
+  assert.ok(!leaks(JSON.stringify(fillHistory)));
+
+  await empty();
+  await settings({ enabled: false });
+  await assert.rejects(mcp.call('fl_login', { tab }), /Refused by the Flintrail extension settings in chromium: password filling is turned off/);
+  // A subdomain in the list never allows its parent domain.
+  await settings({ allDomains: false, domains: ['sub.127.0.0.1', 'github.com'] });
+  await assert.rejects(mcp.call('fl_login', { tab }), /127\.0\.0\.1 is not one of the allowed domains/);
+  await empty();
+  await settings({ allDomains: false, domains: ['127.0.0.1'] });
+  assert.match(await mcp.call('fl_login', { tab, submit: false }), /filled username, password, one-time code\./);
+
+  await empty();
+  await settings({ totp: false });
+  const noCode = await mcp.call('fl_login', { tab, submit: false });
+  assert.match(noCode, /filled username, password\. The page also asks for a code/);
+
+  // Confirmation: a window of the extension asks; the agent cannot answer it, the user's click does.
+  await settings({ confirm: true });
+  for (const [button, expected] of [['#deny', /the user declined/], ['#allow', /confirmed by the user/]]) {
+    await empty();
+    const asked = ctx.waitForEvent('page', (p) => p.url().includes('/confirm.html'));
+    const pending = mcp.call('fl_login', { tab, submit: false }).then((out) => out, (e) => e.message);
+    const win = await asked;
+    await win.waitForSelector('#domain:not(:empty)');
+    assert.equal(await win.textContent('#domain'), '127.0.0.1');
+    assert.match(await win.textContent('#item'), /Fixture shop/);
+    // While the user decides, the agent can run no script in that tab (it would catch the value).
+    assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /Blocked: fl_login is filling this tab/);
+    // A bare click, as an app driving the accessibility tree would send, answers nothing.
+    await win.waitForSelector('#allow:not([disabled])');
+    await win.evaluate(() => document.getElementById('allow').click());
+    await win.waitForTimeout(300);
+    assert.ok(!win.isClosed(), 'a click without a real press must be ignored');
+    await win.click(button);
+    const out = await pending;
+    assert.match(out, expected);
+    assert.ok(!leaks(out));
+  }
+  await waitFor(async () => (await history())[0]?.approval === 'confirmed by the user');
+  await settings({});
+  await mcp.call('fl_close', { tab });
+});
+
+test('browser and extension pages, the settings included, are never driven', async () => {
+  const settingsPage = `chrome-extension://${new URL(sw.url()).host}/options.html`;
+  await assert.rejects(mcp.call('fl_open', { url: settingsPage, browser: 'chromium' }), /never opens browser or extension pages/);
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url, browser: 'chromium', text: 0 }))[1];
+  assert.match(await mcp.call('fl_act', { tab, actions: [{ do: 'goto', url: 'chrome://settings' }] }), /never opens browser or extension pages/);
+  assert.doesNotMatch(await mcp.call('fl_tabs'), /chrome:\/\/settings/);
   await mcp.call('fl_close', { tab });
 });
 

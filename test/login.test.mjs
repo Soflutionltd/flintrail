@@ -22,8 +22,8 @@ before(async () => { site = await startFixture(); });
 after(() => site.server.close());
 
 describe('1Password CLI source', () => {
-  let mcp;
-  before(async () => { mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` })); });
+  let mcp, env;
+  before(async () => { env = testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }); mcp = await connect(env); });
   after(() => mcp.client.close());
 
   test('signs in and never returns the password or the code', async () => {
@@ -38,8 +38,55 @@ describe('1Password CLI source', () => {
     assert.match(net, /•••/);
     assert.ok(!leaks(net), 'request body must be masked');
 
-    const read = await mcp.call('fl_extract', { tab, js: 'return [f.password.value, f.otp.value]' });
-    assert.ok(!leaks(read), 'page reads must be masked');
+    // Scripts and screenshots are refused on the page that holds the filled secrets: base64 or a picture would slip past masking.
+    const read = await mcp.call('fl_extract', { tab, js: 'return btoa(f.password.value + f.otp.value)' });
+    assert.match(read, /Blocked: this page holds a password or code Flintrail filled/);
+    assert.ok(!read.includes(Buffer.from('S3cret').toString('base64').slice(0, 6)));
+    await assert.rejects(mcp.call('fl_screenshot', { tab }), /Blocked: this page holds a password/);
+    // The code box shows no value in snapshots, even if the page turned it into plain text.
+    assert.match(await mcp.call('fl_snapshot', { tab }), /\] text "Code"\n|\] text "Code"$/m);
+    const logs = await mcp.call('fl_console', { tab, level: 'all' });
+    assert.match(logs, /signing in with/);
+    assert.ok(!leaks(logs), 'console messages must be masked');
+    // Audit log: which login, where, how approved, never a value.
+    const audit = readFileSync(join(env.FLINTRAIL_HOME, 'fill-audit.log'), 'utf8');
+    assert.match(audit, /"domain":"127\.0\.0\.1","item":"Fixture shop","ref":"fixture1","source":"1password","filled":\["username","password","one-time code"\],"approval":"dedicated browser"/);
+    assert.ok(!leaks(audit), 'the audit log holds no value');
+    await mcp.call('fl_close', { tab });
+  });
+
+  test('fills only the password or code field the agent names, never a text field', async () => {
+    const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+    const snap = await mcp.call('fl_snapshot', { tab });
+    const ref = (name) => new RegExp(`\\[(e\\d+)\\][^\\n]*${name}`, 'i').exec(snap)?.[1];
+    await assert.rejects(mcp.call('fl_login', { tab, field: ref('email'), submit: false }), /Refused: field e\d+ is not a password or one-time code field/);
+    const out = await mcp.call('fl_login', { tab, field: ref('password'), submit: false });
+    assert.match(out, /filled password\./);
+    assert.ok(!leaks(out));
+    // Only that field was filled: the form sends an empty e-mail and a (masked) password.
+    await mcp.call('fl_act', { tab, actions: [{ do: 'press', key: 'Enter', target: ref('password') }] });
+    await mcp.call('fl_act', { tab, actions: [{ do: 'wait', text: 'Wrong credentials' }] });
+    assert.match(await mcp.call('fl_network', { filter: '/api/login' }), /"email":"","password":"•••"/);
+    await mcp.call('fl_close', { tab });
+  });
+
+  test('refuses a page where the agent ran JavaScript: it could catch the value as it is filled', async () => {
+    const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+    await mcp.call('fl_extract', { tab, js: 'f.password.addEventListener("input", (e) => { window.caught = e.target.value; }); return "listening"' });
+    await assert.rejects(mcp.call('fl_login', { tab }), /Refused: you ran JavaScript in this tab/);
+    // Even after a reload: a window the script opened would outlive it. A new tab is clean.
+    await mcp.call('fl_act', { tab, actions: [{ do: 'goto', url: `${site.url}/login` }] });
+    await assert.rejects(mcp.call('fl_login', { tab }), /Refused: you ran JavaScript in this tab/);
+    await mcp.call('fl_close', { tab });
+    const fresh = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+    assert.match(await mcp.call('fl_login', { tab: fresh, submit: false }), /filled username, password, one-time code\./);
+    await mcp.call('fl_close', { tab: fresh });
+  });
+
+  test('never fills a payment card or bank item', async () => {
+    const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+    await assert.rejects(mcp.call('fl_login', { tab, item: 'Company card' }), /No saved login "Company card"/);
+    assert.match(await mcp.call('fl_extract', { tab, js: 'return f.password.value === ""' }), /true/);
     await mcp.call('fl_close', { tab });
   });
 

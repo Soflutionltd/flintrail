@@ -6,6 +6,7 @@ import type { TargetDescriptor } from './page-scripts.js';
 import { BODY_LIMIT, describeShortcut, findShortcut, isWrite } from './api-shortcut.js';
 import { loadFlow, saveFlow, type Flow } from './store.js';
 import { domainProblem } from './domains.js';
+import { redact } from './secrets.js';
 
 export interface ApiCall {
   id: number;
@@ -229,7 +230,7 @@ class Recorder {
     p.call.ms = Date.now() - p.t0;
     p.call.responseType = res.headers()['content-type'];
     if (p.call.responseType?.includes('json')) {
-      p.call.sample = (await res.text().catch(() => '')).slice(0, 300);
+      p.call.sample = redact(await res.text().catch(() => '')).slice(0, 300);
     }
   }
 
@@ -243,8 +244,9 @@ class Recorder {
     if (!list.length) return 'No API calls captured yet (fetch/XHR).';
     return list
       .map((c) => `#${c.id} ${c.method} ${c.status ?? '...'} ${c.ms ?? '?'}ms ${c.url.slice(0, 160)}` +
-        (c.postData ? `\n   body: ${c.postData.slice(0, 200)}` : '') +
-        (c.sample ? `\n   json: ${c.sample.slice(0, 200)}` : ''))
+        // Masked before being cut: a cut password would no longer be recognized.
+        (c.postData ? `\n   body: ${redact(c.postData).slice(0, 200)}` : '') +
+        (c.sample ? `\n   json: ${redact(c.sample).slice(0, 200)}` : ''))
       .join('\n');
   }
 

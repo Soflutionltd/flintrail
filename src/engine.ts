@@ -6,6 +6,7 @@ import { AGENT, getDriven, type Driven } from './browser.js';
 import { getRelayClient } from './relay-client.js';
 import { config } from './config.js';
 import { assertAllowed, domainProblem } from './domains.js';
+import { redact } from './secrets.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
 import type { DesktopStep } from './desktop.js';
@@ -65,8 +66,45 @@ interface PageState {
   /** Browser the tab lives in ("agent", "brave"...) and whether it is driven through the extension. */
   browser: string;
   viaExtension: boolean;
+  /**
+   * The agent ran JavaScript in this tab. Kept for the tab's whole life: a window it opened from the page
+   * outlives a reload and could read the next document of the same site.
+   */
+  agentJs?: boolean;
+  /** fl_login is filling this tab, or filled a password or code in its current document. */
+  loginRunning?: boolean;
+  secretFilled?: boolean;
 }
 const states = new WeakMap<Page, PageState>();
+/** The agent's JavaScript could read a filled secret in a form no masking recognizes (base64, sent to another site). */
+export function assertNoSecret(page: Page, what: string) {
+  const s = stateOf(page);
+  if (s.loginRunning) throw new Error(`Blocked: fl_login is filling this tab. ${what} is refused meanwhile.`);
+  if (s.secretFilled) {
+    throw new Error(`Blocked: this page holds a password or code Flintrail filled. ${what} is refused until the tab loads another page (after signing in, or with a goto).`);
+  }
+}
+
+/** fl_login refuses a tab the agent ran JavaScript in: a listener there would catch the value as it is filled. */
+export function agentRanJs(page: Page): boolean {
+  return !!stateOf(page).agentJs;
+}
+
+/** Marks the tab while fl_login works in it: scripts and screenshots wait for the end, they are refused. */
+export function loginRunning(page: Page, on: boolean) {
+  stateOf(page).loginRunning = on;
+}
+
+export function markSecretFilled(page: Page) {
+  stateOf(page).secretFilled = true;
+}
+
+/** The browser a tab lives in, and whether it is driven through the extension. */
+export function pageBrowser(page: Page): { browser: string; viaExtension: boolean } {
+  const s = stateOf(page);
+  return { browser: s.browser, viaExtension: s.viaExtension };
+}
+
 function stateOf(page: Page): PageState {
   let s = states.get(page);
   if (!s) states.set(page, (s = { console: [], unseenErrors: 0, dialogs: [], browser: AGENT, viaExtension: false }));
@@ -75,7 +113,8 @@ function stateOf(page: Page): PageState {
 
 function logConsole(page: Page, level: ConsoleEntry['level'], text: string) {
   const s = stateOf(page);
-  s.console.push({ level, text: text.slice(0, 2000), at: new Date().toISOString().slice(11, 23) });
+  // Masked before it is cut: a cut password would no longer be recognized.
+  s.console.push({ level, text: redact(text).slice(0, 2000), at: new Date().toISOString().slice(11, 23) });
   if (s.console.length > 300) s.console.shift();
   if (level === 'error' || level === 'pageerror') s.unseenErrors++;
 }
@@ -100,6 +139,8 @@ function register(page: Page, where: Driven): string {
   tabs.set(id, page);
   Object.assign(stateOf(page), { browser: where.name, viaExtension: where.viaExtension });
   page.on('close', () => tabs.delete(id));
+  // A new document: the secrets filled in the previous one are gone (the agent's scripts may not be, see agentJs).
+  page.on('domcontentloaded', () => { stateOf(page).secretFilled = false; });
   page.on('request', (r) => recorder.onRequest(r));
   page.on('response', (r) => recorder.onResponse(r));
   page.on('console', (m) => {
@@ -634,10 +675,14 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
       else await sleep(a.ms || 1000);
       return undefined;
     case 'eval': {
+      assertNoSecret(page, 'Running JavaScript');
+      stateOf(page).agentJs = true;
       const body = fillVars(a.js, vars) || 'return null';
       return page.evaluate(`(async () => { ${body} })()`);
     }
     case 'request': {
+      assertNoSecret(page, 'A request from the page');
+      stateOf(page).agentJs = true;
       const target = fillVars(a.url, vars)!;
       let absolute = target;
       try { absolute = new URL(target, page.url()).href; } catch { /* refused below when a list is set */ }

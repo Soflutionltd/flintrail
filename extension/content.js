@@ -10,7 +10,7 @@
   const refresh = () => chrome.runtime.sendMessage({ type: 'isRecording' })
     .then((r) => { recording = !!r?.recording; }).catch(() => { recording = false; });
   refresh();
-  chrome.storage.onChanged.addListener((c) => { if (c.recording) refresh(); });
+  chrome.runtime.onMessage.addListener((m) => { if (m?.type === 'recordingChanged') refresh(); });
 
   const describe = (el) => {
     const t = self.flintrailDescribe(el);
@@ -24,7 +24,10 @@
     (el instanceof HTMLInputElement && TEXT_TYPES.has(el.type)) ||
     el?.isContentEditable;
   const isToggle = (el) => el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio');
-  const isPassword = (el) => el instanceof HTMLInputElement && el.type === 'password';
+  // Secrets are never recorded: password fields, one-time code boxes, and any field Flintrail filled with a secret.
+  const isPassword = (el) => el instanceof HTMLInputElement && (el.type === 'password' || el.autocomplete === 'one-time-code'
+    || el.hasAttribute('data-fl-secret') || /otp|totp|2fa|mfa|one.?time|verification.?code|security.?code/i.test(`${el.name} ${el.id}`)
+    || (el.maxLength === 1 && el.inputMode === 'numeric'));
 
   const fillStep = (el) => {
     const value = el.isContentEditable ? el.innerText : el.value;

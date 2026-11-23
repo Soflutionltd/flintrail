@@ -4,6 +4,13 @@ import { execFile } from 'node:child_process';
 
 export interface Credentials { username: string; password: string; totp: string }
 
+/** Payment and bank items are never filled, whatever the page asks: only plain logins. */
+export function assertLoginItem(source: string, title: string, category: string | undefined) {
+  if (category && !/^login$/i.test(category)) {
+    throw new Error(`Refused: ${source} item "${title}" is a ${category.toLowerCase().replace(/_/g, ' ')}. Flintrail only fills logins, never payment cards or bank details.`);
+  }
+}
+
 /** A login found in a source. Holds no secret: reveal() fetches it at fill time. */
 export interface Account {
   source: string;
@@ -42,6 +49,15 @@ function run(bin: string, args: string[]): Promise<string> {
   });
 }
 
+/** Parses a CLI's JSON output. Its own error would quote the output, which can hold a password. */
+function parseJson<T>(text: string, bin: string): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${bin}: unreadable output (not the JSON Flintrail expects).`);
+  }
+}
+
 /** Lists once, then serves the cached metadata for LIST_TTL. */
 function cachedList(load: () => Promise<Account[]>) {
   let cache: { at: number; items: Account[] } | null = null;
@@ -52,11 +68,11 @@ function cachedList(load: () => Promise<Account[]>) {
 }
 
 function onePassword(bin: string): CliSource {
-  interface OpItem { id: string; title: string; vault: { id: string; name: string }; urls?: { href: string }[]; additional_information?: string }
+  interface OpItem { id: string; title: string; category?: string; vault: { id: string; name: string }; urls?: { href: string }[]; additional_information?: string }
   interface OpField { type?: string; purpose?: string; value?: string; totp?: string }
   const list = cachedList(async () => {
-    const items = JSON.parse(await run(bin, ['item', 'list', '--categories', 'Login', '--format', 'json'])) as OpItem[];
-    return items.map((i) => ({
+    const items = parseJson<OpItem[]>(await run(bin, ['item', 'list', '--categories', 'Login', '--format', 'json']), bin);
+    return items.filter((i) => !i.category || /^login$/i.test(i.category)).map((i) => ({
       source: '1password',
       ref: i.id,
       title: i.title,
@@ -65,7 +81,9 @@ function onePassword(bin: string): CliSource {
       hosts: (i.urls || []).map((u) => hostOf(u.href)).filter(Boolean),
       async reveal() {
         const raw = await run(bin, ['item', 'get', i.id, '--vault', i.vault.id, '--reveal', '--format', 'json']);
-        const fields = (JSON.parse(raw) as { fields?: OpField[] }).fields || [];
+        const item = parseJson<{ category?: string; fields?: OpField[] }>(raw, bin);
+        assertLoginItem('1Password', i.title, item.category);
+        const fields = item.fields || [];
         return {
           username: fields.find((f) => f.purpose === 'USERNAME')?.value || '',
           password: fields.find((f) => f.purpose === 'PASSWORD')?.value || '',
@@ -81,7 +99,7 @@ function bitwarden(bin: string): CliSource {
   interface BwItem { id: string; name: string; type: number; login?: { username?: string; password?: string; totp?: string; uris?: { uri?: string }[] } }
   const list = cachedList(async () => {
     // bw list returns passwords too: keep only the metadata, so the cache holds no secret.
-    const items = JSON.parse(await run(bin, ['list', 'items'])) as BwItem[];
+    const items = parseJson<BwItem[]>(await run(bin, ['list', 'items']), bin);
     return items.filter((i) => i.type === 1 && i.login).map(({ id, name, login }) => ({
       source: 'bitwarden',
       ref: id,
@@ -90,7 +108,7 @@ function bitwarden(bin: string): CliSource {
       where: 'Bitwarden',
       hosts: (login!.uris || []).map((u) => hostOf(u.uri || '')).filter(Boolean),
       async reveal() {
-        const item = JSON.parse(await run(bin, ['get', 'item', id])) as BwItem;
+        const item = parseJson<BwItem>(await run(bin, ['get', 'item', id]), bin);
         return {
           username: item.login?.username || '',
           password: item.login?.password || '',
@@ -108,7 +126,7 @@ function command(bin: string): CliSource {
   return {
     kind: 'command',
     async accounts(pageUrl) {
-      const parsed = JSON.parse((await run(bin, [pageUrl])).trim() || '[]') as Out | Out[];
+      const parsed = parseJson<Out | Out[]>((await run(bin, [pageUrl])).trim() || '[]', bin);
       return (Array.isArray(parsed) ? parsed : [parsed]).map((o) => {
         const creds = { username: o.username || '', password: o.password || '', totp: o.totp || '' };
         return {

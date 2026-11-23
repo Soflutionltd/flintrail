@@ -3,8 +3,10 @@
 const [cmd, sub, id] = process.argv.slice(2);
 const vault = { id: 'v1', name: 'Test' };
 const items = [
-  { id: 'fixture1', title: 'Fixture shop', vault, additional_information: 'ann@example.com', urls: [{ href: 'http://127.0.0.1/login' }] },
-  { id: 'other1', title: 'Elsewhere', vault, additional_information: 'bob@example.com', urls: [{ href: 'https://elsewhere.example/login' }] },
+  { id: 'fixture1', title: 'Fixture shop', category: 'LOGIN', vault, additional_information: 'ann@example.com', urls: [{ href: 'http://127.0.0.1/login' }] },
+  { id: 'other1', title: 'Elsewhere', category: 'LOGIN', vault, additional_information: 'bob@example.com', urls: [{ href: 'https://elsewhere.example/login' }] },
+  // 1Password lists only logins when asked (--categories Login); this one checks Flintrail filters anyway.
+  { id: 'card1', title: 'Company card', category: 'CREDIT_CARD', vault, additional_information: '4242', urls: [{ href: 'http://127.0.0.1/login' }] },
 ];
 const fields = [
   { id: 'username', type: 'STRING', purpose: 'USERNAME', value: 'ann@example.com' },

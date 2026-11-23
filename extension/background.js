@@ -23,6 +23,12 @@ const store = {
   get: (k) => chrome.storage.local.get(k),
   set: (o) => chrome.storage.local.set(o),
 };
+// Settings, token and history are for this extension's own pages only, never for its scripts inside web pages.
+// When the browser cannot restrict it, password filling stays refused (see fillPolicy).
+const storageProtected = chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).then(() => true, () => false);
+
+// The recording tab's content script asks again whether it records (it cannot read the storage).
+const notifyRecording = (tabId) => chrome.tabs.sendMessage(tabId, { type: 'recordingChanged' }).catch(() => {});
 
 async function setStatus(status, detail = '') {
   await store.set({ status, statusDetail: detail });
@@ -187,7 +193,27 @@ async function targetInfoFor(tabId) {
   };
 }
 
+// Browser pages and extension pages (this one's settings and confirmation windows included) are never
+// driven: an agent must not be able to open the settings and turn the confirmation off by itself.
+// Only web pages are allowed (http, https, about:blank), not a list of what is forbidden: view-source:,
+// blob:, filesystem: or a leading space would slip through such a list.
+function webUrl(url) {
+  try {
+    const u = new URL(String(url).trim());
+    return u.protocol === 'http:' || u.protocol === 'https:' || u.href === 'about:blank';
+  } catch {
+    return false;
+  }
+}
+const isProtected = (url) => url !== undefined && url !== '' && !webUrl(url);
+
+async function assertWebTab(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (isProtected(tab.url) || isProtected(tab.pendingUrl)) throw new Error('Flintrail never drives browser or extension pages.');
+}
+
 async function attach(tabId) {
+  await assertWebTab(tabId);
   if (!attached.has(tabId)) {
     await chrome.debugger.attach({ tabId }, '1.3');
     attached.add(tabId);
@@ -253,6 +279,7 @@ async function releaseIdleTabs() {
 async function handle(method, p) {
   switch (method) {
     case 'createTab': {
+      if (isProtected(p.url)) throw new Error('Flintrail never opens browser or extension pages.');
       const { windowId, blankTabId } = await placeTab(p);
       // The new tab is the one shown in its window: a background tab behind about:blank looked empty.
       const tab = blankTabId !== undefined
@@ -263,6 +290,9 @@ async function handle(method, p) {
       return { tabId: tab.id, targetInfo };
     }
     case 'send':
+      if (isProtected(p.params?.url)) throw new Error('Flintrail never opens browser or extension pages.');
+      // Checked on every command: the tab may have reached such a page since the last one.
+      await assertWebTab(p.tabId);
       lastUsed.set(p.tabId, Date.now());
       return chrome.debugger.sendCommand(p.sessionId ? { tabId: p.tabId, sessionId: p.sessionId } : { tabId: p.tabId }, p.method, p.params);
     case 'closeTab':
@@ -277,6 +307,10 @@ async function handle(method, p) {
     case 'releaseAll':
       for (const tabId of [...attached]) await detach(tabId, 'conversation closed');
       return {};
+    case 'fillPolicy':
+      return fillPolicy(p);
+    case 'fillAudit':
+      return fillAudit(p);
     case 'listTabs': {
       // Site and title only (no path, no query string): enough to find the window where an account is open.
       const all = await chrome.tabs.query({});
@@ -305,12 +339,75 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
   refreshBadge();
 });
 
+chrome.tabs.onUpdated.addListener(async (tabId, change) => {
+  if (change.url && isProtected(change.url) && attached.has(tabId)) await detach(tabId, 'browser or extension page');
+});
+
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   await restored;
   if (attached.delete(tabId)) { await saveAttached(); send({ type: 'tabClosed', tabId }); }
   const { recording } = await store.get('recording');
   if (recording?.tabId === tabId) stopDemo();
 });
+
+// ---------- password filling ----------
+// The user's settings for the passwords and codes Flintrail fills from their password manager. Only the
+// options page writes them; Flintrail asks before every fill, and no Flintrail tool can change them.
+const FILL_DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true };
+const CONFIRM_MS = 2 * 60 * 1000;
+const HISTORY_MAX = 200;
+const pendingFills = new Map();
+
+async function fillSettings() {
+  const { fillSettings: saved } = await store.get('fillSettings');
+  return { ...FILL_DEFAULTS, ...(saved || {}) };
+}
+
+// "github.com" also allows "gist.github.com", never the other way round.
+const hostAllowed = (host, list) => list.some((d) => host === d || host.endsWith('.' + d));
+
+async function fillPolicy(p) {
+  if (!(await storageProtected)) return { refused: 'this browser cannot protect the extension settings from web pages, so password filling stays off' };
+  const settings = await fillSettings();
+  const domain = String(p.domain || '').toLowerCase();
+  const host = String(p.host || domain).toLowerCase().replace(/^www\./, '');
+  if (!settings.enabled) return { refused: 'password filling is turned off' };
+  if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
+  if (!settings.confirm) return { totp: settings.totp };
+  const ok = await askUser({ domain, item: String(p.item || ''), source: String(p.source || ''), fields: (p.fields || []).map(String), totp: settings.totp });
+  return ok ? { totp: settings.totp, confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
+}
+
+// A small window of this extension asks the user. Only a click there answers: no page and no agent can reach it.
+async function askUser(request) {
+  const id = crypto.randomUUID();
+  const win = await chrome.windows.create({ type: 'popup', focused: true, width: 440, height: 340, url: chrome.runtime.getURL(`confirm.html#${id}`) });
+  return new Promise((resolve) => {
+    const onClosed = (windowId) => { if (windowId === win.id) done(false); };
+    const timer = setTimeout(() => done(false), CONFIRM_MS);
+    function done(ok) {
+      if (!pendingFills.delete(id)) return;
+      clearTimeout(timer);
+      chrome.windows.onRemoved.removeListener(onClosed);
+      chrome.windows.remove(win.id).catch(() => {});
+      resolve(ok);
+    }
+    chrome.windows.onRemoved.addListener(onClosed);
+    pendingFills.set(id, { request, done });
+  });
+}
+
+async function fillAudit(p) {
+  const entry = {
+    at: String(p.at || new Date().toISOString()), domain: String(p.domain || ''), item: String(p.item || ''), source: String(p.source || ''),
+    filled: (p.filled || []).map(String), approval: String(p.approval || ''),
+  };
+  const { fillHistory = [] } = await store.get('fillHistory');
+  await store.set({ fillHistory: [entry, ...fillHistory].slice(0, HISTORY_MAX) });
+  return {};
+}
+
+const fromConfirmWindow = (sender) => sender.id === chrome.runtime.id && String(sender.url || '').startsWith(chrome.runtime.getURL('confirm.html'));
 
 // ---------- recording by demonstration ----------
 
@@ -326,7 +423,10 @@ function demo(action, extra) {
 async function startDemo(name, tab) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return 'Error: connect to Flintrail first.';
   const text = await demo('start', { name, url: tab.url });
-  if (!text.startsWith('Error')) await store.set({ recording: { name, tabId: tab.id, steps: 0 } });
+  if (!text.startsWith('Error')) {
+    await store.set({ recording: { name, tabId: tab.id, steps: 0 } });
+    notifyRecording(tab.id);
+  }
   refreshBadge();
   return text;
 }
@@ -336,6 +436,7 @@ async function stopDemo() {
   const { recording } = await store.get('recording');
   if (!recording) return 'Nothing to stop.';
   await chrome.storage.local.remove('recording');
+  notifyRecording(recording.tabId);
   refreshBadge();
   return demo('stop', {});
 }
@@ -362,6 +463,8 @@ function recordStep(step) {
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   (async () => {
+    // Scripts in web pages may only report recorded steps; everything else comes from the extension's own pages.
+    if (sender.id !== chrome.runtime.id || (sender.tab && !fromConfirmWindow(sender) && !['step', 'isRecording'].includes(msg.type))) return reply({});
     switch (msg.type) {
       case 'step': {
         const { recording } = await store.get('recording');
@@ -409,6 +512,15 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case 'getAgentWindow': {
         const { agentWindow: id } = await chrome.storage.session.get('agentWindow');
         return reply({ windowId: typeof id === 'number' ? id : null });
+      }
+      case 'fillRequest': {
+        if (!fromConfirmWindow(sender)) return reply({});
+        return reply({ request: pendingFills.get(msg.id)?.request || null });
+      }
+      case 'fillAnswer': {
+        if (!fromConfirmWindow(sender)) return reply({});
+        pendingFills.get(msg.id)?.done(msg.ok === true);
+        return reply({});
       }
       case 'demoStart':
         return reply({ text: await startDemo(msg.name, msg.tab) });

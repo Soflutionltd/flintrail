@@ -1,11 +1,17 @@
 // Signs in on the open sign-in form. Either the browser's own password manager has filled it (Flintrail only
 // confirms with a real click), or Flintrail reads a password manager CLI and fills the form itself. Either way
 // the agent only gets the list of fields filled: passwords and one-time codes are masked in every tool result.
+import { getDomain } from 'tldts';
 import { domainProblem } from './domains.js';
 import type { Frame, Locator, Page } from 'playwright-core';
 import { config } from './config.js';
-import { withNavigation } from './engine.js';
+import { randomBytes } from 'node:crypto';
+import { agentRanJs, elementByRef, loginRunning, markSecretFilled, pageBrowser, withNavigation } from './engine.js';
+import { askFill, recordFill } from './fill-policy.js';
 import { hostOf, parseSources, type Account, type CliSource, type SourceSpec } from './passwords.js';
+import { remember } from './secrets.js';
+
+export { redact } from './secrets.js';
 
 interface Marked { user: boolean; pass: boolean; otp: 'one' | 'split' | null; autofilled: boolean }
 
@@ -14,45 +20,39 @@ const BROWSER_FILL_WAIT = 1500;
 const CODE_MASK_MS = 3 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Secret -> time after which it is no longer masked. One-time codes expire fast and look like ordinary numbers. */
-const secrets = new Map<string, number>();
-const remember = (s: string, ttl: number) => {
-  if (s.length >= 4) secrets.set(s, Date.now() + ttl);
-};
-
-/** Masks every password and one-time code fl_login filled, raw or encoded as a form, URL or JSON value would carry it. */
-export function redact(text: string): string {
-  let out = text;
-  for (const [s, until] of secrets) {
-    if (until < Date.now()) {
-      secrets.delete(s);
-      continue;
-    }
-    const forms = [s, encodeURIComponent(s), new URLSearchParams({ v: s }).toString().slice(2), JSON.stringify(s).slice(1, -1)];
-    for (const f of new Set(forms)) out = out.split(f).join('•••');
-  }
-  return out;
+/**
+ * Registrable domain from the public suffix list, for matching a page to a saved login: accounts.google.com ->
+ * google.com, but alice.github.io and bob.github.io stay two sites (a login for one is never filled on the other).
+ */
+export function siteOf(host: string): string {
+  const h = host.replace(/\.$/, '').toLowerCase();
+  return getDomain(h, { allowPrivateDomains: true }) || h;
 }
 
-/** Registrable domain, close enough for matching a page to a saved login: accounts.google.com -> google.com. */
-export function siteOf(host: string): string {
-  const h = host.replace(/\.$/, '');
-  if (!h.includes('.') || h.includes(':') || /^[\d.]+$/.test(h)) return h;
-  const p = h.split('.');
-  const twoPart = p.length > 2 && p.at(-1)!.length === 2 && /^(co|com|org|net|gov|gouv|ac|edu)$/.test(p.at(-2)!);
-  return p.slice(twoPart ? -3 : -2).join('.');
+const LOOPBACK = /^(localhost|127(\.\d+){3}|\[::1\])$/;
+
+/** A secret is only ever sent over HTTPS (or to this computer). Plain HTTP would hand it to anyone on the network. */
+export function fillProblem(url: string): string | null {
+  let u: URL;
+  try { u = new URL(url); } catch { return `not a web page (${url.slice(0, 80)})`; }
+  if (u.protocol === 'https:') return null;
+  if (u.protocol === 'http:' && LOOPBACK.test(u.hostname)) return null;
+  return u.protocol === 'http:' ? `${u.hostname} is served over plain HTTP` : `${u.protocol} pages are never filled`;
 }
 
 let sources: SourceSpec[] | null = null;
 const getSources = () => (sources ??= parseSources(config.passwordSources));
 
-// A sign-in form embedded from a site outside the user's list is never filled.
-const liveFrames = (page: Page) => page.frames().filter((f) => !f.isDetached() && /^https?:/.test(f.url()) && !domainProblem(f.url()));
+// A sign-in form embedded from a site outside the user's list, or served over plain HTTP, is never filled.
+const liveFrames = (page: Page) => page.frames().filter((f) => !f.isDetached() && /^https?:/.test(f.url()) && !domainProblem(f.url()) && !fillProblem(f.url()));
 const label = (a: Account) => `"${a.title}" (${[a.username, a.where, `id ${a.ref}`].filter(Boolean).join(', ')})`;
 const sitesOf = (a: Account) => [...new Set(a.hosts.map(siteOf))];
 
-/** Runs in the page: tags the visible username, password and one-time-code inputs with data-fl-login. */
-function markLoginFields(): Marked {
+/**
+ * Runs in the page: tags the visible username, password and one-time-code inputs with data-fl-login. The tag
+ * holds a random token of this call, so a page cannot prepare an input that would receive the secret.
+ */
+function markLoginFields(token: string): Marked {
   for (const el of document.querySelectorAll('[data-fl-login]')) el.removeAttribute('data-fl-login');
   const shown = (el: HTMLInputElement) => {
     if (el.disabled || el.readOnly) return false;
@@ -67,22 +67,24 @@ function markLoginFields(): Marked {
       return el.matches(':-webkit-autofill');
     }
   };
-  const inputs = [...document.querySelectorAll('input')].filter(shown);
   const hint = (i: HTMLInputElement) =>
     [i.name, i.id, i.autocomplete, i.placeholder, i.getAttribute('aria-label'), i.labels?.[0]?.textContent].join(' ').toLowerCase();
+  // Payment and bank fields are never touched, even when they look like a code box.
+  const payment = (i: HTMLInputElement) => /^cc-/.test(i.autocomplete) || /card|cvc|cvv|iban|\bbic\b|swift|expir|carte|cryptogram/.test(hint(i));
+  const inputs = [...document.querySelectorAll('input')].filter((i) => shown(i) && !payment(i));
   const textual = (i: HTMLInputElement) => ['text', 'email', 'tel', 'number', ''].includes(i.type);
   const pass = inputs.find((i) => i.type === 'password' && i.autocomplete !== 'new-password') ?? null;
   const singles = inputs.filter((i) => textual(i) && i.maxLength === 1);
   let otp: Marked['otp'] = null;
   if (singles.length >= 4) {
-    singles[0]!.dataset.flLogin = 'otp';
+    singles[0]!.dataset.flLogin = `${token}:otp`;
     otp = 'split';
   } else {
     const box = inputs.find((i) => i.autocomplete === 'one-time-code' || (textual(i)
       && /otp|totp|2fa|mfa|one.?time|verification|security.?code|\bcode\b|c[oó]digo/.test(hint(i))
       && !/postal|zip|promo|coupon|voucher|gift|parrain|country|pays/.test(hint(i))));
     if (box) {
-      box.dataset.flLogin = 'otp';
+      box.dataset.flLogin = `${token}:otp`;
       otp = 'one';
     }
   }
@@ -90,33 +92,72 @@ function markLoginFields(): Marked {
   let user = users.find((i) => /username|email/.test(i.autocomplete) || i.type === 'email'
     || /user|e-?mail|login|identifier|identifiant|account|utilisateur|courriel/.test(hint(i))) ?? null;
   if (!user && pass) user = users.filter((i) => i.compareDocumentPosition(pass) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1) ?? null;
-  if (user) user.dataset.flLogin = 'user';
-  if (pass) pass.dataset.flLogin = 'pass';
+  if (user) user.dataset.flLogin = `${token}:user`;
+  if (pass) pass.dataset.flLogin = `${token}:pass`;
   const autofilled = [user, pass].some((el) => !!el && filledByBrowser(el) && el.value !== '');
   return { user: !!user, pass: !!pass, otp, autofilled };
 }
 
-const markAll = (frames: Frame[]) => Promise.all(frames.map((f) => f.evaluate(markLoginFields).catch(() => null)));
-const field = (frame: Frame, k: string) => frame.locator(`[data-fl-login="${k}"]`).first();
+const markAll = (frames: Frame[], token: string) => Promise.all(frames.map((f) => f.evaluate(markLoginFields, token).catch(() => null)));
+const field = (frame: Frame, token: string, k: string) => frame.locator(`[data-fl-login="${token}:${k}"]`).first();
+
+/**
+ * Just before a secret goes into a field: the field's frame must still be on the login's website, over HTTPS.
+ * The user's confirmation or the password manager's unlock can take a while, and the page may have moved meanwhile.
+ */
+async function assertStillOn(loc: Locator, sites: string[]) {
+  if (agentRanJs(loc.page())) throw new Error('Refused: a script of yours ran in this tab while filling. Nothing more was filled.');
+  const where = await loc.evaluate(() => location.href, undefined, { timeout: TIMEOUT });
+  const why = fillProblem(where) || domainProblem(where);
+  const site = siteOf(hostOf(where));
+  if (why || !sites.includes(site)) throw new Error(`Refused: the page moved to ${site || where.slice(0, 80)} before the fill${why ? ` (${why})` : ''}. Nothing more was filled.`);
+}
+
+/** A filled password or code: never shown in snapshots, drawn as dots, and the page is closed to the agent's scripts. */
+async function sealSecret(page: Page, loc: Locator, splitBoxes = false) {
+  await loc.evaluate((el, split) => {
+    const boxes = split ? [...(el.ownerDocument.querySelectorAll('input[maxlength="1"]') as NodeListOf<HTMLInputElement>)] : [el as HTMLInputElement];
+    const block = (e: Event) => e.preventDefault();
+    for (const box of boxes) {
+      box.setAttribute('data-fl-secret', '');
+      box.style.setProperty('-webkit-text-security', 'disc');
+      // No copy out of it either: pasted elsewhere, the value would escape masking.
+      box.style.setProperty('user-select', 'none');
+      box.addEventListener('copy', block, true);
+      box.addEventListener('cut', block, true);
+    }
+  }, splitBoxes).catch(() => {});
+  markSecretFilled(page);
+}
 
 /** The browser's password manager already filled the form: confirm with a real click so the page can read it. */
-async function useBrowserFill(page: Page): Promise<{ text: string; last: Locator; codeWanted: boolean } | null> {
+async function useBrowserFill(page: Page, token: string): Promise<{ text: string; last: Locator; codeWanted: boolean } | null> {
   const frames = liveFrames(page);
-  let marks = await markAll(frames);
+  let marks = await markAll(frames, token);
   if (!marks.some((m) => m?.user || m?.pass)) return null;
   for (let waited = 0; !marks.some((m) => m?.autofilled) && waited < BROWSER_FILL_WAIT; waited += 250) {
     await sleep(250);
-    marks = await markAll(frames);
+    marks = await markAll(frames, token);
   }
   const i = marks.findIndex((m) => m?.autofilled);
   if (i < 0) return null;
   const m = marks[i]!;
   const frame = frames[i]!;
-  const last = field(frame, m.pass ? 'pass' : 'user');
+  const host = hostOf(frame.url());
+  const fields = [m.user && 'username', m.pass && 'password'].filter(Boolean) as string[];
+  // The click hands the value to the page: the user's settings apply to the browser's own saved passwords too.
+  const request = { ...pageBrowser(page), domain: siteOf(host), host, item: 'password saved in the browser', ref: '', source: 'browser', fields };
+  const decision = await askFill(request);
+  const last = field(frame, token, m.pass ? 'pass' : 'user');
+  await assertStillOn(last, [siteOf(host)]);
   await last.click({ timeout: TIMEOUT });
-  if (m.pass) remember(await field(frame, 'pass').inputValue({ timeout: TIMEOUT }), Infinity);
-  const filled = [m.user && 'username', m.pass && 'password'].filter(Boolean).join(', ');
-  return { text: `Browser password manager: filled ${filled}`, last, codeWanted: !!m.otp };
+  if (m.pass) {
+    const pass = field(frame, token, 'pass');
+    remember(await pass.inputValue({ timeout: TIMEOUT }), Infinity);
+    await sealSecret(page, pass);
+  }
+  recordFill(request, decision, fields);
+  return { text: `Browser password manager: filled ${fields.join(', ')}`, last, codeWanted: !!m.otp };
 }
 
 /** The account to use from one CLI source: the one asked for, or the only one whose website matches the page. */
@@ -145,72 +186,131 @@ async function findAccount(page: Page, source: CliSource, wanted?: string): Prom
   return found[0]!;
 }
 
-/** Fills the form from a CLI source, only in frames whose domain matches the account's website. */
-async function useAccount(page: Page, account: Account) {
+/** Runs in the page: what kind of secret this input takes, or null when it is not a password or code field. */
+function secretKind(el: Element): 'pass' | 'otp' | null {
+  if (!(el instanceof HTMLInputElement) || el.disabled || el.readOnly) return null;
+  const hint = [el.name, el.id, el.autocomplete, el.placeholder, el.getAttribute('aria-label'), el.labels?.[0]?.textContent].join(' ').toLowerCase();
+  if (/^cc-/.test(el.autocomplete) || /card|cvc|cvv|iban|\bbic\b|swift|expir|carte|cryptogram/.test(hint)) return null;
+  if (el.type === 'password') return 'pass';
+  if (['text', 'tel', 'number', ''].includes(el.type)
+    && (el.autocomplete === 'one-time-code' || /otp|totp|2fa|mfa|one.?time|verification|security.?code|\bcode\b|c[oó]digo/.test(hint))) return 'otp';
+  return null;
+}
+
+/** Asks the user's settings, then fills from a CLI source, only in frames whose domain matches the account's website. */
+async function useAccount(page: Page, account: Account, token: string, ref?: string) {
   const sites = sitesOf(account);
+  // The tab itself must be on the login's website: a login form framed by another site is not filled.
+  const tabSite = siteOf(hostOf(page.url()));
+  if (!sites.includes(tabSite)) throw new Error(`Refused: this tab is on ${tabSite}, login ${label(account)} is for ${sites.join(', ') || 'no website'}.`);
   const frames = liveFrames(page).filter((f) => sites.includes(siteOf(hostOf(f.url()))));
-  const marks = await markAll(frames);
-  if (!marks.some((m) => m && (m.user || m.pass || m.otp))) {
-    throw new Error(`No sign-in field visible on ${page.url()}. Open the sign-in form first (often a "Sign in" button).`);
+  let targets: { frame: Frame | null; m: Marked; field?: Locator; kind?: 'pass' | 'otp' }[];
+  if (ref) {
+    // The agent named the field: it must be a password or code input, on the account's website.
+    const loc = elementByRef(page, ref);
+    await assertStillOn(loc, sites);
+    const kind = await loc.evaluate(secretKind, undefined, { timeout: TIMEOUT });
+    if (!kind) throw new Error(`Refused: field ${ref} is not a password or one-time code field. Flintrail only fills secrets there, never in a free text field.`);
+    targets = [{ frame: null, m: { user: false, pass: kind === 'pass', otp: kind === 'otp' ? 'one' : null, autofilled: false }, field: loc, kind }];
+  } else {
+    const marks = await markAll(frames, token);
+    if (!marks.some((m) => m && (m.user || m.pass || m.otp))) {
+      throw new Error(`No sign-in field visible on ${page.url()}. Open the sign-in form first (often a "Sign in" button).`);
+    }
+    targets = frames.map((frame, i) => ({ frame, m: marks[i]! })).filter((t) => t.m);
   }
+  const wanted = [...new Set(targets.flatMap(({ m }) => [m.user && 'username', m.pass && 'password', m.otp && 'one-time code'].filter(Boolean) as string[]))];
+  const request = { ...pageBrowser(page), domain: tabSite, host: hostOf(page.url()), item: account.title, ref: account.ref, source: account.source, fields: wanted };
+  // Nothing is revealed before the user's settings (and the user, when they asked to confirm each fill) said yes.
+  const decision = await askFill(request);
   const creds = await account.reveal();
   remember(creds.password, Infinity);
   remember(creds.totp, CODE_MASK_MS);
+  const totp = decision.totp ? creds.totp : '';
   const filled: string[] = [];
   let last: Locator | null = null;
   let codeWanted = false;
-  for (let i = 0; i < frames.length; i++) {
-    const m = marks[i];
-    if (!m) continue;
-    const frame = frames[i]!;
-    if (m.user && creds.username) {
-      last = field(frame, 'user');
-      await last.fill(creds.username, { timeout: TIMEOUT });
-      filled.push('username');
+  try {
+    for (const { frame, m, field: named, kind } of targets) {
+      const at = (k: string) => named ?? field(frame!, token, k);
+      if (m.user && creds.username) {
+        last = at('user');
+        await assertStillOn(last, sites);
+        await last.fill(creds.username, { timeout: TIMEOUT });
+        filled.push('username');
+      }
+      if (m.pass) {
+        if (!creds.password) throw new Error(`Login ${label(account)} has no password.`);
+        last = at('pass');
+        await assertStillOn(last, sites);
+        await last.fill(creds.password, { timeout: TIMEOUT });
+        filled.push('password');
+        await sealSecret(page, last);
+      }
+      if (m.otp && !totp) codeWanted = true;
+      if (m.otp && totp) {
+        last = at('otp');
+        await assertStillOn(last, sites);
+        const split = m.otp === 'split' && !kind;
+        if (split) {
+          await last.click({ timeout: TIMEOUT });
+          await page.keyboard.type(totp, { delay: 40 });
+        } else await last.fill(totp, { timeout: TIMEOUT });
+        filled.push('one-time code');
+        await sealSecret(page, last, split);
+      }
     }
-    if (m.pass) {
-      if (!creds.password) throw new Error(`Login ${label(account)} has no password.`);
-      last = field(frame, 'pass');
-      await last.fill(creds.password, { timeout: TIMEOUT });
-      filled.push('password');
-    }
-    if (m.otp && !creds.totp) codeWanted = true;
-    if (m.otp && creds.totp) {
-      last = field(frame, 'otp');
-      if (m.otp === 'split') {
-        await last.click({ timeout: TIMEOUT });
-        await page.keyboard.type(creds.totp, { delay: 40 });
-      } else await last.fill(creds.totp, { timeout: TIMEOUT });
-      filled.push('one-time code');
-    }
+  } finally {
+    // Logged even when the fill stopped halfway: what did reach the page is what matters.
+    if (filled.length) recordFill(request, decision, filled);
   }
   if (!last) {
     throw new Error(codeWanted
-      ? `The page asks for a code that ${account.source} does not hold for ${label(account)} (SMS, e-mail or phone prompt): ask the user for it.`
+      ? `The page asks for a code that ${account.source} does not hold for ${label(account)}${decision.totp ? '' : ' (one-time codes are turned off in the Flintrail extension settings)'}: ask the user for it.`
       : `Nothing to fill: login ${label(account)} has no username for this field.`);
   }
-  return { text: `${account.source} login ${label(account)}: filled ${filled.join(', ')}`, last, codeWanted };
+  const how = decision.approval === 'confirmed by the user' ? ', confirmed by the user' : '';
+  return { text: `${account.source} login ${label(account)}: filled ${filled.join(', ')}${how}`, last, codeWanted };
 }
 
 /**
  * Signs in on the visible step of a sign-in form. Sources are tried in the configured order; item (an ID, title or
  * username) or source restrict the choice. Returns what to record in a flow: the source and the account ref, never a secret.
  */
-export async function signIn(page: Page, opts: { item?: string; source?: string; submit?: boolean }): Promise<{ text: string; source: string; item?: string }> {
-  const all = getSources().filter((s) => !opts.source || s.kind === opts.source);
-  if (!all.length) throw new Error(opts.source ? `Password source "${opts.source}" is not configured in FLINTRAIL_PASSWORDS.` : 'fl_login is off (FLINTRAIL_PASSWORDS=off).');
+export async function signIn(page: Page, opts: { item?: string; source?: string; submit?: boolean; field?: string }): Promise<{ text: string; source: string; item?: string }> {
+  const all = getSources().filter((s) => !opts.source || s.kind === opts.source).filter((s) => !opts.field || s.kind !== 'browser');
+  if (!all.length) {
+    throw new Error(opts.source ? `Password source "${opts.source}" is not configured in FLINTRAIL_PASSWORDS${opts.field ? ', or cannot fill a named field (browser)' : ''}.`
+      : opts.field ? 'Filling a named field needs a password manager CLI in FLINTRAIL_PASSWORDS (1password, bitwarden, command).' : 'fl_login is off (FLINTRAIL_PASSWORDS=off).');
+  }
+  const unsafe = fillProblem(page.url());
+  if (unsafe) throw new Error(`Refused: ${unsafe}. Flintrail fills passwords and codes over HTTPS only.`);
+  if (agentRanJs(page)) {
+    throw new Error('Refused: you ran JavaScript in this tab (eval, extract or request), which could catch what gets filled. Open the sign-in page in a new tab (fl_open) and call fl_login there before running any script.');
+  }
+  loginRunning(page, true);
+  try {
+    return await fillAndSubmit(page, opts, all);
+  } finally {
+    loginRunning(page, false);
+  }
+}
+
+async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean; field?: string }, all: SourceSpec[]): Promise<{ text: string; source: string; item?: string }> {
+  // A fresh token for this call's field tags: a page cannot prepare an input to receive the secret.
+  const token = randomBytes(8).toString('hex');
   let done: { text: string; last: Locator; codeWanted: boolean } | null = null;
   let source = '';
   let item: string | undefined;
   for (const s of all) {
     if (s.kind === 'browser') {
       if (opts.item) continue;
-      done = await useBrowserFill(page);
+      done = await useBrowserFill(page, token);
       source = 'browser';
     } else {
       const account = await findAccount(page, s, opts.item);
       if (!account) continue;
-      done = await useAccount(page, account);
+      done = await useAccount(page, account, token, opts.field);
       source = account.source;
       item = account.ref;
     }

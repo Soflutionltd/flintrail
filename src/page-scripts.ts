@@ -62,7 +62,8 @@ export function snapshotScript(opts: SnapshotOptions): SnapshotResult {
     let line = `[${opts.prefix}${el.dataset.fl}] ${role} "${nameOf(el)}"`;
     if (tag === 'input' || tag === 'textarea') {
       if (input.type === 'checkbox' || input.type === 'radio') line += input.checked ? ' (checked)' : ' (unchecked)';
-      else if (input.type !== 'password' && input.value) line += ` = "${clean(input.value).slice(0, 40)}"`;
+      // A field Flintrail filled with a password or code never shows its value, even turned into plain text.
+      else if (input.type !== 'password' && input.value && !el.hasAttribute('data-fl-secret')) line += ` = "${clean(input.value).slice(0, 40)}"`;
     }
     const select = el as HTMLSelectElement;
     if (tag === 'select' && select.selectedOptions[0]) line += ` = "${clean(select.selectedOptions[0].text).slice(0, 40)}"`;
