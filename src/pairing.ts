@@ -13,9 +13,12 @@ export const HOST_NAME = 'com.soflution.flintrail';
 /** ID fixed by the "key" in extension/manifest.json (unpacked and packed builds). */
 export const EXTENSION_ID = 'hgkglidmccenjlhdcplcpkgbadonplnb';
 
+/** ID of the Chrome Web Store listing: the store signs the extension with its own key. */
+export const STORE_EXTENSION_ID = 'amgonogobcfmneginonbkfjlbbnecchp';
+
 function extensionIds(): string[] {
   const extra = (process.env.FLINTRAIL_EXTENSION_IDS || '').split(',').map((s) => s.trim()).filter((s) => /^[a-p]{32}$/.test(s));
-  return [...new Set([EXTENSION_ID, ...extra])];
+  return [...new Set([EXTENSION_ID, STORE_EXTENSION_ID, ...extra])];
 }
 
 /** User data directories of the Chromium browsers Flintrail knows, per platform. */

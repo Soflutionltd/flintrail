@@ -53,7 +53,10 @@ test('pairing host is registered only for the Flintrail extension', () => {
   const manifest = join(userDataDir, 'NativeMessagingHosts', 'com.soflution.flintrail.json');
   assert.ok(existsSync(manifest));
   const m = JSON.parse(readFileSync(manifest, 'utf8'));
-  assert.deepEqual(m.allowed_origins, ['chrome-extension://hgkglidmccenjlhdcplcpkgbadonplnb/']);
+  assert.deepEqual(m.allowed_origins, [
+    'chrome-extension://hgkglidmccenjlhdcplcpkgbadonplnb/', // unpacked and release zip
+    'chrome-extension://amgonogobcfmneginonbkfjlbbnecchp/', // Chrome Web Store listing
+  ]);
   assert.equal(m.type, 'stdio');
 });
 
