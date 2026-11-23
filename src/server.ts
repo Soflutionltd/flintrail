@@ -77,7 +77,7 @@ export function buildServer(): McpServer {
   const s = new McpServer({ name: 'flintrail', version: VERSION });
 
   s.registerTool('fl_open', {
-    description: 'Open a URL in a background tab (logged-in sessions kept). By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, window picks one of its windows (ids from fl_extension tabs:true) and newWindow opens a new window. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, window picks one of its windows (ids from fl_extension tabs:true) and newWindow opens a new window. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
     inputSchema: {
       url: z.string(), browser: browserOpt,
       window: z.number().int().optional().describe('User browser only: open the tab in this window (id from fl_extension tabs:true).'),

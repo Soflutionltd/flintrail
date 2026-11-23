@@ -191,7 +191,7 @@ async function openPage(where: Driven, placement: Placement = {}): Promise<Page>
   return ctx.newPage();
 }
 
-/** Opens a background tab in the named browser (see getDriven), optionally on a URL. */
+/** Opens a tab in the named browser (see getDriven), optionally on a URL. */
 export async function openTab(url?: string, browserName?: string, placement: Placement = {}): Promise<string> {
   const where = await getDriven(browserName);
   if ((placement.window !== undefined || placement.newWindow) && !where.viaExtension) {
@@ -233,7 +233,7 @@ export function tabBrowser(id: string): string {
 
 export function getTab(id: string): Page {
   const p = tabs.get(id);
-  if (!p || p.isClosed()) throw new Error(`Tab ${id} not found: closed, or released by the extension after 5 minutes without use. Use fl_open, or fl_adopt to take an open tab back.`);
+  if (!p || p.isClosed()) throw new Error(`Tab ${id} not found: closed, released by the extension after 5 minutes without use, or debugging cancelled from the browser's bar (the reason is in ~/.flintrail/relay.log). Use fl_open, or fl_adopt to take an open tab back.`);
   const why = domainProblem(p.url());
   if (why) throw new Error(`Blocked: tab ${id} went to a site the agent may not work on. ${why} Close it with fl_close.`);
   return p;

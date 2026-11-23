@@ -87,6 +87,19 @@ test('agent tabs open only in the agent window, never in the user\'s window', as
   await mcp.call('fl_close', { tab: again });
 });
 
+test('the opened tab is shown in its window, and survives the extension reconnecting', async () => {
+  const snap = await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', text: 0 });
+  const tab = /Tab (t\d+)/.exec(snap)[1];
+  const shown = () => sw.evaluate(async (u) => (await chrome.tabs.query({ url: u })).map((t) => t.active), site.url + '/search');
+  assert.deepEqual(await shown(), [true]);
+  // The browser restarts the extension's service worker now and then: its connection to the relay drops,
+  // and the tab must stay driven by the same conversation once it is back.
+  await sw.evaluate(() => ws.close());
+  assert.match(await mcp.call('fl_snapshot', { tab }), /search/i);
+  assert.match(await mcp.call('fl_tabs'), new RegExp(`${tab} .*\\/search`));
+  await mcp.call('fl_close', { tab });
+});
+
 test('agent drives the browser through the extension', async () => {
   const snap = await mcp.call('fl_open', { url: site.url });
   const tab = /Tab (t\d+)/.exec(snap)[1];

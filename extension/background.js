@@ -2,7 +2,18 @@
 // Connects to the local Flintrail relay (ws://127.0.0.1:<port>/extension) and executes CDP commands
 // on tabs with chrome.debugger. Only tabs opened by the agent, or shared from the popup, are attached.
 const VERSION = chrome.runtime.getManifest().version;
+// Tabs driven through chrome.debugger. The browser keeps them attached when it restarts this service
+// worker, so the set lives in session storage too and is read back at startup.
 const attached = new Set();
+const saveAttached = () => chrome.storage.session.set({ attachedTabs: [...attached] });
+const restored = (async () => {
+  const { attachedTabs = [] } = await chrome.storage.session.get('attachedTabs');
+  const live = new Set((await chrome.debugger.getTargets()).filter((t) => t.attached && typeof t.tabId === 'number').map((t) => t.tabId));
+  for (const tabId of attachedTabs) if (live.has(tabId)) attached.add(tabId);
+  await saveAttached();
+})();
+// After this long without the relay, the tabs are released: the debugging bar goes away.
+const RELAY_GRACE_MS = 60 * 1000;
 let ws = null;
 let pingTimer = null;
 let reqSeq = 1;
@@ -77,6 +88,7 @@ async function hmac(key, message) {
 }
 
 async function openConnection() {
+  await restored;
   let { token } = await store.get('token');
   if (!token && await pair()) ({ token } = await store.get('token'));
   if (!token) {
@@ -110,6 +122,11 @@ async function openConnection() {
       welcomed = true;
       quickRetries = 0;
       await store.set({ name: m.name || '' });
+      await chrome.storage.session.remove('relayLostAt');
+      // Tabs restored after a service worker restart have no use time: count it from now.
+      for (const tabId of attached) if (!lastUsed.has(tabId)) lastUsed.set(tabId, Date.now());
+      // Back after a service worker restart or a dropped connection: the tabs still attached are kept.
+      sock.send(JSON.stringify({ type: 'attached', tabIds: [...attached] }));
     }
     if (welcomed) onMessage(m);
   };
@@ -117,8 +134,10 @@ async function openConnection() {
     if (ws !== sock) return;
     ws = null;
     clearInterval(pingTimer);
-    for (const tabId of [...attached]) await detach(tabId);
     const bad = ev.code === 4401;
+    const { autoConnect: on = true } = await store.get('autoConnect');
+    if (bad || !on) for (const tabId of [...attached]) await detach(tabId, bad ? 'refused' : 'disconnected');
+    else if (attached.size && !(await chrome.storage.session.get('relayLostAt')).relayLostAt) await chrome.storage.session.set({ relayLostAt: Date.now() });
     // The token changed on the Flintrail side (new install, new computer): pair again, then retry.
     if (bad && await pair() && (await store.get('token')).token !== token) { connect(); return; }
     if (!welcomed && (await store.get('status')).status === 'error') return;
@@ -172,16 +191,19 @@ async function attach(tabId) {
   if (!attached.has(tabId)) {
     await chrome.debugger.attach({ tabId }, '1.3');
     attached.add(tabId);
+    await saveAttached();
     refreshBadge();
   }
   lastUsed.set(tabId, Date.now());
   return targetInfoFor(tabId);
 }
 
-async function detach(tabId) {
+async function detach(tabId, reason = 'released') {
   lastUsed.delete(tabId);
   if (!attached.delete(tabId)) return;
+  await saveAttached();
   try { await chrome.debugger.detach({ tabId }); } catch { /* already gone */ }
+  send({ type: 'detached', tabId, reason });
   refreshBadge();
 }
 
@@ -194,8 +216,9 @@ async function agentWindow() {
   if (typeof id === 'number') {
     try { await chrome.windows.get(id); return { windowId: id }; } catch { /* closed since */ }
   }
-  // No window picked, or it was closed: open one for the agent, without taking the focus.
-  const win = await chrome.windows.create({ focused: false, url: 'about:blank' });
+  // No window picked, or it was closed: open one for the agent, in front, so the user sees what the agent
+  // opens (a page asking them to confirm a password, say). Later tabs do not take the focus again.
+  const win = await chrome.windows.create({ focused: true, url: 'about:blank' });
   await chrome.storage.session.set({ agentWindow: win.id });
   return { windowId: win.id, blankTabId: win.tabs?.[0]?.id };
 }
@@ -218,10 +241,12 @@ const IDLE_RELEASE_MS = 5 * 60 * 1000;
 const lastUsed = new Map();
 async function releaseIdleTabs() {
   const now = Date.now();
+  const { relayLostAt } = await chrome.storage.session.get('relayLostAt');
+  const relayGone = !(ws && ws.readyState === WebSocket.OPEN) && relayLostAt && now - relayLostAt > RELAY_GRACE_MS;
   for (const tabId of [...attached]) {
+    if (relayGone) { await detach(tabId, 'relay gone'); continue; }
     if (now - (lastUsed.get(tabId) ?? now) < IDLE_RELEASE_MS) continue;
-    await detach(tabId);
-    send({ type: 'detached', tabId });
+    await detach(tabId, 'idle');
   }
 }
 
@@ -229,9 +254,10 @@ async function handle(method, p) {
   switch (method) {
     case 'createTab': {
       const { windowId, blankTabId } = await placeTab(p);
+      // The new tab is the one shown in its window: a background tab behind about:blank looked empty.
       const tab = blankTabId !== undefined
         ? await chrome.tabs.get(blankTabId)
-        : await chrome.tabs.create({ windowId, url: 'about:blank', active: !p.background });
+        : await chrome.tabs.create({ windowId, url: 'about:blank', active: true });
       const targetInfo = await attach(tab.id);
       if (p.url && p.url !== 'about:blank') chrome.tabs.update(tab.id, { url: p.url });
       return { tabId: tab.id, targetInfo };
@@ -241,14 +267,15 @@ async function handle(method, p) {
       return chrome.debugger.sendCommand(p.sessionId ? { tabId: p.tabId, sessionId: p.sessionId } : { tabId: p.tabId }, p.method, p.params);
     case 'closeTab':
       await chrome.tabs.remove(p.tabId).catch(() => {});
-      attached.delete(p.tabId);
+      if (attached.delete(p.tabId)) await saveAttached();
+      refreshBadge();
       return {};
     case 'release':
       // One conversation is done: release its tabs only, the other conversations keep theirs.
-      for (const tabId of p.tabIds || []) await detach(tabId);
+      for (const tabId of p.tabIds || []) await detach(tabId, 'conversation closed');
       return {};
     case 'releaseAll':
-      for (const tabId of [...attached]) await detach(tabId);
+      for (const tabId of [...attached]) await detach(tabId, 'conversation closed');
       return {};
     case 'listTabs': {
       // Site and title only (no path, no query string): enough to find the window where an account is open.
@@ -269,14 +296,18 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   send({ type: 'event', tabId: source.tabId, sessionId: source.sessionId, method, params });
 });
 
-chrome.debugger.onDetach.addListener((source) => {
+// reason: "target_closed", or "canceled_by_user" when the user closed the debugging bar.
+chrome.debugger.onDetach.addListener(async (source, reason) => {
+  await restored;
   if (!attached.delete(source.tabId)) return;
-  send({ type: 'detached', tabId: source.tabId });
+  await saveAttached();
+  send({ type: 'detached', tabId: source.tabId, reason });
   refreshBadge();
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  if (attached.delete(tabId)) send({ type: 'tabClosed', tabId });
+  await restored;
+  if (attached.delete(tabId)) { await saveAttached(); send({ type: 'tabClosed', tabId }); }
   const { recording } = await store.get('recording');
   if (recording?.tabId === tabId) stopDemo();
 });
@@ -368,8 +399,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         } catch (e) { return reply({ text: `Error: ${e.message}` }); }
       }
       case 'unshare':
-        await detach(msg.tabId);
-        send({ type: 'detached', tabId: msg.tabId });
+        await detach(msg.tabId, 'unshared');
         return reply({ text: 'Tab released.' });
       case 'isShared':
         return reply({ shared: attached.has(msg.tabId) });

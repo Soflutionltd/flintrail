@@ -112,6 +112,12 @@ class CdpView {
   constructor(readonly bridge: ExtensionBridge, readonly client: ClientConn) {}
 }
 
+/** How long a browser whose extension dropped its connection keeps its tabs and the agents' connections. */
+const EXTENSION_GRACE_MS = 60 * 1000;
+
+/** One line in relay.log: when tabs are lost, it says why. */
+const log = (line: string) => console.error(`${new Date().toISOString()} ${line}`);
+
 /** One connected browser extension, shared by every client. */
 class ExtensionBridge {
   private pending = new Map<number, Pending>();
@@ -124,11 +130,20 @@ class ExtensionBridge {
   /** The client that last drove this browser: it receives the recordings made by demonstration. */
   lastClient: ClientConn | null = null;
   private demoClient: ClientConn | null = null;
+  /** Running while the extension is away: it expires the bridge unless the extension comes back. */
+  private grace: NodeJS.Timeout | null = null;
+  private backWaiters: (() => void)[] = [];
 
   constructor(readonly key: string, readonly instance: string, readonly info: Hello, private ext: WebSocket, readonly legacy: boolean,
     private readonly relay: ExtensionRelay) {}
 
   get connected() { return this.ext.readyState === WebSocket.OPEN; }
+
+  /** Disconnected, but expected back within the grace period. */
+  get reconnecting() { return !!this.grace; }
+
+  /** The relay stops: no timer keeps it alive. */
+  stop() { if (this.grace) { clearTimeout(this.grace); this.grace = null; } }
 
   describe(): BrowserInfo {
     return {
@@ -137,34 +152,69 @@ class ExtensionBridge {
     };
   }
 
-  /** The extension reconnected (service worker restart): keep the name, swap the socket. */
+  /** The extension reconnected (service worker restart, dropped socket): keep the name, the tabs and the agents' connections. */
   replaceSocket(ws: WebSocket) {
     const old = this.ext;
     this.ext = ws;
-    old.close(4000, 'replaced');
+    if (this.grace) { clearTimeout(this.grace); this.grace = null; }
+    if (old !== ws && old.readyState === WebSocket.OPEN) old.close(4000, 'replaced');
+    this.backWaiters.splice(0).forEach((back) => back());
   }
 
   /** The same browser came back under another name: drop this one. */
   retire() {
     const ws = this.ext;
-    this.closed(ws);
+    this.expire('renamed');
     ws.close(4000, 'renamed');
   }
 
-  closed(ws: WebSocket) {
+  /** The extension's socket closed. True when the browser is gone for good (extension 1.3 has no reconnection). */
+  closed(ws: WebSocket, code: number, reason: string): boolean {
     if (this.ext !== ws) return false;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('extension disconnected')); }
     this.pending.clear();
+    if (this.legacy) { this.expire(`disconnected (${code})`); return true; }
+    log(`${this.key}: extension disconnected (${code}${reason ? ` ${reason}` : ''}), its tabs are kept ${EXTENSION_GRACE_MS / 1000} s`);
+    this.grace = setTimeout(() => {
+      this.grace = null;
+      this.expire('did not come back');
+      this.relay.forget(this);
+    }, EXTENSION_GRACE_MS);
+    return false;
+  }
+
+  /** The extension is back: tabs it no longer drives (closed, or released meanwhile) are dropped. */
+  keepOnly(tabIds: number[]) {
+    const kept = new Set(tabIds);
+    const lost = [...this.tabsById.keys()].filter((id) => !kept.has(id));
+    for (const tabId of lost) this.dropTab(tabId);
+    // Still attached in the browser, but nobody drives them here any more (conversation closed meanwhile,
+    // relay restarted): release them, or the debugging bar would stay.
+    const orphans = tabIds.filter((id) => !this.tabsById.has(id));
+    if (orphans.length) this.request('release', { tabIds: orphans }, 5000).catch(() => {});
+    log(`${this.key}: extension back, ${this.tabsById.size} tab(s) kept${lost.length ? `, ${lost.length} lost` : ''}${orphans.length ? `, ${orphans.length} released` : ''}`);
+  }
+
+  private expire(why: string) {
+    if (this.grace) { clearTimeout(this.grace); this.grace = null; }
+    if (this.tabsById.size || this.views.size) log(`${this.key}: ${why}, ${this.tabsById.size} tab(s) and ${this.views.size} agent connection(s) released`);
     this.tabsBySession.clear();
     this.tabsById.clear();
     this.childSessions.clear();
     for (const view of this.views) view.ws?.close();
     this.views.clear();
-    return true;
+    this.backWaiters.splice(0).forEach((back) => back());
   }
 
-  request(method: string, params: Record<string, unknown>, timeout = 30000): Promise<any> {
-    if (!this.connected) return Promise.reject(new Error(`${this.key}: extension not connected`));
+  async request(method: string, params: Record<string, unknown>, timeout = 30000): Promise<any> {
+    // Reconnecting: the extension usually comes back within seconds, wait for it rather than fail.
+    if (!this.connected && this.grace) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 15000);
+        this.backWaiters.push(() => { clearTimeout(timer); resolve(); });
+      });
+    }
+    if (!this.connected) throw new Error(`${this.key}: extension not connected`);
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${this.key}: extension timeout on ${method}`)); }, timeout);
@@ -188,7 +238,10 @@ class ExtensionBridge {
     switch (m.type) {
       case 'event': return this.onDebuggerEvent(m.tabId, m.sessionId, m.method, m.params);
       case 'detached':
+        if (this.tabsById.has(m.tabId)) log(`${this.key}: tab ${m.tabId} detached (${String(m.reason || 'unknown')})`);
+        return this.dropTab(m.tabId);
       case 'tabClosed': return this.dropTab(m.tabId);
+      case 'attached': return this.keepOnly(Array.isArray(m.tabIds) ? m.tabIds.map(Number) : []);
       case 'shared': { this.addTab(m.tabId, m.targetInfo, null); return; }
       case 'recorded': {
         this.demoClient?.send({ type: 'recorded', step: m.step });
@@ -358,7 +411,7 @@ class ExtensionBridge {
         if (Object.keys(placement).length && this.legacy) {
           throw new Error(`${this.key}: extension ${this.info.version} cannot pick a window, reload it in this browser to update it.`);
         }
-        const r = await this.request('createTab', { url: params.url || 'about:blank', background: params.background !== false, ...placement });
+        const r = await this.request('createTab', { url: params.url || 'about:blank', ...placement });
         if (!this.views.has(view)) {
           // The client left while the tab was opening: nobody will drive it.
           if (!this.legacy) this.request('release', { tabIds: [r.tabId] }, 5000).catch(() => {});
@@ -399,9 +452,11 @@ export class ExtensionRelay {
   get(key: string): ExtensionBridge | undefined {
     const k = key.trim().toLowerCase();
     const s = slug(k);
-    return this.list().find((b) => b.key === k)
-      || this.list().find((b) => b.info.label && slug(b.info.label) === s)
-      || this.list().find((b) => b.info.profile && slug(b.info.profile) === s);
+    // A browser reconnecting is still found: its requests wait for it to come back.
+    const all = [...this.bridges.values()].filter((b) => b.connected || b.reconnecting);
+    return all.find((b) => b.key === k)
+      || all.find((b) => b.info.label && slug(b.info.label) === s)
+      || all.find((b) => b.info.profile && slug(b.info.profile) === s);
   }
 
   start(): Promise<void> {
@@ -426,7 +481,14 @@ export class ExtensionRelay {
 
   close() {
     this.server?.close();
+    for (const b of this.bridges.values()) b.stop();
     for (const c of this.clients) c.ws.close();
+  }
+
+  /** A browser whose extension did not come back. */
+  forget(bridge: ExtensionBridge) {
+    if (this.bridges.get(bridge.key) === bridge) this.bridges.delete(bridge.key);
+    this.broadcastBrowsers();
   }
 
   /** Who gets a recording made by demonstration in this browser: whoever drove it last, else the most recent client. */
@@ -544,12 +606,11 @@ export class ExtensionRelay {
       }
       await bridge.onExtensionMessage(m);
     });
-    ws.on('close', () => {
+    ws.on('close', (code: number, reason: Buffer) => {
       clearTimeout(kick);
-      if (bridge?.closed(ws)) {
-        if (this.bridges.get(bridge.key) === bridge) this.bridges.delete(bridge.key);
-        this.broadcastBrowsers();
-      }
+      if (!bridge) return;
+      if (bridge.closed(ws, code, String(reason || ''))) this.forget(bridge);
+      else this.broadcastBrowsers();
     });
   }
 
@@ -557,9 +618,14 @@ export class ExtensionRelay {
     const instance = String(hello.instance || randomBytes(8).toString('hex'));
     const label = String(hello.label || '').trim().slice(0, 60);
     const same = [...this.bridges.values()].find((b) => b.instance === instance);
-    if (same && (same.info.label || '') === label) { same.replaceSocket(ws); return same; }
-    if (same) { this.bridges.delete(same.key); same.retire(); }
     const profile = profileOfInstance(instance)?.name || '';
+    // Same browser, same name: it keeps its tabs. A new label or a profile found since is a new name.
+    if (same && (same.info.label || '') === label && (same.info.profile || '') === profile) {
+      log(`${same.key}: extension reconnected (${hello.version || '?'})`);
+      same.replaceSocket(ws);
+      return same;
+    }
+    if (same) { this.bridges.delete(same.key); same.retire(); }
     // A name the user gave in the extension wins ("brave-ideekdo"), then the browser profile's own name
     // ("brave-soflution"), then the brand, made unique.
     const base = browserKey(hello.browser);
@@ -569,6 +635,7 @@ export class ExtensionRelay {
     for (let n = 2; this.bridges.has(key); n++) key = `${base}-${n}`;
     const bridge = new ExtensionBridge(key, instance, { ...hello, label, profile, token: undefined }, ws, legacy, this);
     this.bridges.set(key, bridge);
+    log(`${key}: extension connected (${hello.browser || 'browser'} ${hello.version || '?'}${profile ? `, profile "${profile}"` : ''})`);
     return bridge;
   }
 }
