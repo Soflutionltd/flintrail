@@ -153,7 +153,10 @@ test('the relay refuses web pages, wrong tokens and impostors', async () => {
   // An extension 1.3 (token in clear) still connects, and agents are told to reload it.
   const legacy = await rawRelay('/extension', {}, (ws) => ws.send(JSON.stringify({ type: 'hello', token, version: '1.3.0', browser: 'Brave', instance: 'old-one' })));
   assert.equal(legacy.message.type, 'welcome');
-  assert.match(await b.call('fl_extension'), /brave: Extension connected \(Brave, extension 1\.3\.0\) \(outdated: reload the extension/);
+  // The relay sends the new browser list to the conversations just after the welcome: wait for it.
+  const outdated = /brave: Extension connected \(Brave, extension 1\.3\.0\) \(outdated: reload the extension/;
+  await waitFor(async () => outdated.test(await b.call('fl_extension')));
+  assert.match(await b.call('fl_extension'), outdated);
   // It cannot pick a window: refused, instead of a tab silently opening somewhere else.
   await assert.rejects(b.call('fl_open', { url: site.url, browser: 'brave', newWindow: true }), /extension 1\.3\.0 cannot pick a window/);
   legacy.ws.close();
