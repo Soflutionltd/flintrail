@@ -1,7 +1,8 @@
 // Builds the browser extension: generates fingerprint.js from the engine's own describe function
 // (so recorded steps match what the engine replays), renders the icons, and zips the result.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,5 +34,21 @@ if (process.argv.includes('--zip')) {
   rmSync(zip, { force: true });
   execFileSync('zip', ['-qr', zip, '.', '-x', 'icons/icon.svg'], { cwd: ext });
   console.log(`extension packed: ${zip}`);
+
+  // The Chrome Web Store refuses a manifest with "key" (it signs the item with its own key), while the
+  // unpacked zip needs it to keep the extension ID that native messaging pairing allows.
+  const storeZip = join(root, `flintrail-extension-${version}-store.zip`);
+  const staging = mkdtempSync(join(tmpdir(), 'flintrail-store-'));
+  try {
+    cpSync(ext, staging, { recursive: true, filter: (src) => !src.endsWith(join('icons', 'icon.svg')) });
+    const storeManifest = JSON.parse(readFileSync(join(staging, 'manifest.json'), 'utf8'));
+    delete storeManifest.key;
+    writeFileSync(join(staging, 'manifest.json'), JSON.stringify(storeManifest, null, 2) + '\n');
+    rmSync(storeZip, { force: true });
+    execFileSync('zip', ['-qr', storeZip, '.'], { cwd: staging });
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  console.log(`extension packed for the Chrome Web Store: ${storeZip}`);
 }
 console.log('extension built');
