@@ -92,7 +92,7 @@ Clients connect to `http://host:8931/mcp` with `Authorization: Bearer <token>`. 
 | `launch` | Servers, CI, Docker. | `FLINTRAIL_MODE=launch` starts Chromium with a persistent profile in `~/.flintrail/profile`, headless by default. |
 | `extension` | Anyone, any Chromium browser, no debugging port. | `FLINTRAIL_MODE=extension`: no dedicated browser, only the user's browsers through the extension. See below. |
 
-In every mode, the browsers where the Flintrail extension is installed are also reachable, several at once: `fl_open` takes `browser: "brave"`, `"chrome"`, `"edge"`... (`fl_extension` lists them), and without it uses the dedicated browser (`"agent"`).
+In every mode, the browsers where the Flintrail extension is installed are also reachable, several at once: `fl_open` takes `browser: "brave"`, `"chrome"`, `"edge"`... (`fl_extension` lists them), and without it uses the dedicated browser (`"agent"`). Several agents (one Flintrail per conversation) can drive them at the same time.
 
 Flintrail refuses to attach to a personal browser (Brave, Edge, Opera, or on macOS anything that is not Chrome for Testing) unless `FLINTRAIL_ALLOW_ANY_BROWSER=1`. Your everyday browser stays yours. To drive a regular Chrome instead (for example so a password manager can connect to it), start it with its own `--user-data-dir` and set `FLINTRAIL_DEDICATED_PROFILE` to that same path: only a browser running that profile is accepted.
 
@@ -111,7 +111,11 @@ The extension is the easiest way in: no command-line flags, no debugging port, w
 
 Pairing: at startup Flintrail registers a native messaging host (`com.soflution.flintrail`) in every Chromium browser installed for your user account (macOS and Linux). The browser lets only the Flintrail extension start it, and it hands the extension the relay token, so you never copy it. On Windows, or with `FLINTRAIL_PAIRING=off`, paste the token from `~/.flintrail/token` in the extension popup instead.
 
-How it works: Flintrail starts a relay on `127.0.0.1:8932`. Each extension connects to it with the token and executes CDP commands with `chrome.debugger`, one tab at a time. Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged. The agent only sees tabs it opened itself or tabs you share with *Share with agent*.
+How it works: the first Flintrail that needs it starts a small relay process on `127.0.0.1:8932`, shared by every Flintrail on the computer (one per conversation in Claude Desktop, Cursor...). It belongs to no conversation, so closing one never cuts the others off, and it exits by itself 10 minutes after the last Flintrail left. Each extension connects to it and executes CDP commands with `chrome.debugger`, one tab at a time. Each Flintrail gets its own CDP endpoint per browser: Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged, and each agent only sees the tabs it opened itself, or a tab you shared with *Share with agent* that it took with `fl_adopt` (the first agent to adopt it gets it).
+
+Several browsers or profiles: give each one a name in the popup (*Name of this browser*, e.g. "Work"). Agents then pick it by that name: `browser: "Work"` or `"brave-work"`. Without a name, browsers are called after their brand (`brave`, `chrome`), with a short suffix when two of the same brand are open. `fl_extension` with `tabs: true` lists the sites open in each browser (origin and title, never the full URL), so an agent can find the profile where an account is signed in.
+
+Updating the extension: after an update, reload it in every browser and profile where it is installed (`chrome://extensions` or `brave://extensions`, *Flintrail*, reload button). An older extension keeps working, and `fl_extension` flags it as outdated.
 
 Agent window: the agent never opens tabs in the window you work in. Click *Use this window for the agent* in the popup of the window you leave to it; without a choice, or once that window is closed, it opens a window of its own in the background. Chrome shows its "started debugging this browser" bar in every window while a tab is driven (the browser enforces this, extensions cannot hide it), so the extension releases tabs left unused for 5 minutes; the agent takes one back with `fl_adopt`.
 
@@ -233,6 +237,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 - The HTTP transport requires a bearer token (constant-time comparison) and binds to `127.0.0.1` by default.
 - `eval` and `request` run inside the page with the page's own privileges, nothing more.
 - The pairing host only answers the Flintrail extension ID (the browser enforces `allowed_origins`), and the relay only listens on `127.0.0.1`.
+- The relay refuses connections from web pages (they always send an `Origin` header). Flintrail processes and the extension prove they know the token with an HMAC over a fresh challenge, and the relay proves it back, so the token never travels and a program squatting the port learns nothing.
 
 ## Configuration
 
@@ -240,7 +245,8 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 |---|---|---|
 | `FLINTRAIL_MODE` | `attach` | `attach`, `launch` or `extension` |
 | `FLINTRAIL_RELAY_PORT` | `8932` | Local port the extension connects to |
-| `FLINTRAIL_RELAY` | on | `off` to not start the extension relay |
+| `FLINTRAIL_RELAY` | on | `off` to not use the extension relay |
+| `FLINTRAIL_RELAY_IDLE_MS` | `600000` | How long the shared relay stays up once no Flintrail is connected |
 | `FLINTRAIL_PAIRING` | on | `off` to not register the pairing host in the browsers |
 | `FLINTRAIL_EXTENSION_IDS` | | Extra extension IDs allowed to pair, comma separated |
 | `FLINTRAIL_DEDICATED_PROFILE` | | `--user-data-dir` of a regular Chrome accepted as the dedicated browser |
@@ -258,7 +264,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 33 end-to-end tests over real MCP, extension included
+npm test                               # build + 40 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```
