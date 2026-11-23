@@ -1,8 +1,9 @@
 // Live driving: tabs, compact snapshots, batched actions, smart waits, network capture.
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Dialog, Frame, Locator, Page, Request } from 'playwright-core';
+import type { BrowserContext, Dialog, Frame, Locator, Page, Request } from 'playwright-core';
 import { AGENT, getDriven, type Driven } from './browser.js';
+import { getRelayClient } from './relay-client.js';
 import { config } from './config.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
@@ -132,7 +133,27 @@ function pageNotes(page: Page): string[] {
   return notes;
 }
 
-async function newPage(where: Driven): Promise<Page> {
+/** In a user browser: open the tab in this window (id from fl_extension tabs), or in a new window. */
+export interface Placement {
+  window?: number;
+  newWindow?: boolean;
+}
+
+/** Tabs being opened, per browser context. */
+const opening = new WeakMap<BrowserContext, Promise<unknown>>();
+
+/**
+ * Opens a tab, one at a time per browser: each opening waits for "the next page" of the context, so two
+ * at once could both get the same tab.
+ */
+function newPage(where: Driven, placement: Placement = {}): Promise<Page> {
+  const run = (opening.get(where.ctx) ?? Promise.resolve()).catch(() => {}).then(() => openPage(where, placement));
+  opening.set(where.ctx, run);
+  return run;
+}
+
+async function openPage(where: Driven, placement: Placement = {}): Promise<Page> {
+  const placed = placement.window !== undefined || !!placement.newWindow;
   const { ctx, browser } = where;
   if (browser) {
     // Open the tab in the background so the window never steals focus.
@@ -150,19 +171,32 @@ async function newPage(where: Driven): Promise<Page> {
         if (t.type === 'page' && /^https?:/.test(t.url) && t.browserContextId) count.set(t.browserContextId, (count.get(t.browserContextId) || 0) + 1);
       }
       const browserContextId = [...count].sort((a, b) => b[1] - a[1])[0]?.[0];
-      await cdp.send('Target.createTarget', { url: 'about:blank', background: true, ...(browserContextId ? { browserContextId } : {}) });
+      // In a user browser the window choice travels in the same command, read by the relay (Chrome ignores it),
+      // so two tabs opened at once never swap windows.
+      const params = {
+        url: 'about:blank', background: true, ...(browserContextId ? { browserContextId } : {}),
+        ...(placement.window !== undefined ? { flintrailWindowId: placement.window } : {}),
+        ...(placement.newWindow ? { flintrailNewWindow: true } : {}),
+      };
+      await cdp.send('Target.createTarget', params);
       const page = await waitPage;
       await cdp.detach().catch(() => {});
       return page;
-    } catch { /* fall back below */ }
+    } catch (e) {
+      // A tab asked for a given window must not silently land elsewhere.
+      if (placed) throw e;
+    }
   }
   return ctx.newPage();
 }
 
 /** Opens a background tab in the named browser (see getDriven), optionally on a URL. */
-export async function openTab(url?: string, browserName?: string): Promise<string> {
+export async function openTab(url?: string, browserName?: string, placement: Placement = {}): Promise<string> {
   const where = await getDriven(browserName);
-  const page = await newPage(where);
+  if ((placement.window !== undefined || placement.newWindow) && !where.viaExtension) {
+    throw new Error('window and newWindow apply to the user\'s browsers only (set browser, see fl_extension).');
+  }
+  const page = await newPage(where, placement);
   const id = register(page, where);
   if (url) {
     await gotoFast(page, url);
@@ -175,8 +209,18 @@ export async function openTab(url?: string, browserName?: string): Promise<strin
 export async function adoptTab(match: string, browserName?: string): Promise<string> {
   const where = await getDriven(browserName);
   const owned = new Set(tabs.values());
-  const page = where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
-  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}".`);
+  const free = () => where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
+  let page = free();
+  // In a user browser, a tab the user shared from the extension belongs to no conversation until one
+  // claims it: the relay then hands it to this process only.
+  if (!page && where.viaExtension) {
+    const claimed = await getRelayClient()?.request('claim', { key: where.name, match });
+    for (let i = 0; claimed && !page && i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      page = free();
+    }
+  }
+  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' (in a user browser, share the tab from the Flintrail extension first)' : ''}.`);
   return register(page, where);
 }
 

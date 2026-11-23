@@ -1,14 +1,19 @@
 const $ = (id) => document.getElementById(id);
 const send = (msg) => chrome.runtime.sendMessage(msg);
 let tab = null;
+let labelLoaded = false;
 
 async function render() {
-  const s = await chrome.storage.local.get(['status', 'statusDetail', 'token', 'port', 'recording']);
+  const s = await chrome.storage.local.get(['status', 'statusDetail', 'token', 'port', 'recording', 'label', 'name']);
   const connected = s.status === 'connected';
   $('dot').className = s.status || '';
   $('status').textContent = connected ? 'Connected to Flintrail.' : (s.statusDetail || 'Not connected.');
   if (!$('token').value && s.token) $('token').value = s.token;
   if (!$('port').value) $('port').value = s.port || 8932;
+  if (!labelLoaded) { $('label').value = s.label || ''; labelLoaded = true; }
+  $('nameInfo').textContent = connected && s.name
+    ? `Agents pick this browser as "${s.name}".`
+    : 'Give each browser or profile a name, so agents pick the right one.';
   $('connect').classList.toggle('hidden', connected);
   $('disconnect').classList.toggle('hidden', !connected);
   $('share').disabled = !connected || !tab;
@@ -40,6 +45,10 @@ async function render() {
 $('connect').onclick = async () => {
   await send({ type: 'connect', token: $('token').value, port: $('port').value });
   setTimeout(render, 400);
+};
+$('saveLabel').onclick = async () => {
+  await send({ type: 'setLabel', label: $('label').value });
+  setTimeout(render, 600);
 };
 $('disconnect').onclick = async () => { await send({ type: 'disconnect' }); render(); };
 $('agentWindow').onclick = async () => {
