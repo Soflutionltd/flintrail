@@ -98,9 +98,9 @@ export function buildServer(): McpServer {
   }));
 
   s.registerTool('fl_act', {
-    description: 'Run SEVERAL actions in one call (fill a whole form, click, submit, wait, extract) and get one fresh snapshot back. Always batch as many actions as possible: one call beats ten.',
-    inputSchema: { tab: z.string(), actions: z.array(actionSchema).min(1), snapshot: z.boolean().optional(), ...snapOpts },
-  }, guard(async ({ tab, actions, snapshot: snap, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, text: t, max })));
+    description: 'Run SEVERAL actions in one call (fill a whole form, click, submit, wait, extract) and get one fresh snapshot back. Always batch as many actions as possible: one call beats ten. When the tab stays on the same page, the snapshot only lists what changed since the last one you received (+ new, ~ changed, - gone): every other element is still there with the same ref. Pass diff=false, or call fl_snapshot, for the whole page.',
+    inputSchema: { tab: z.string(), actions: z.array(actionSchema).min(1), snapshot: z.boolean().optional(), diff: z.boolean().optional().describe('false: always the whole page (default: only the changes when the page is the same).'), ...snapOpts },
+  }, guard(async ({ tab, actions, snapshot: snap, diff, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, diff, text: t, max })));
 
   if (config.passwordSources.length) s.registerTool('fl_login', {
     description: 'Sign in on the open sign-in form with the user\'s saved password: from the browser\'s own password manager, or from a password manager CLI the user configured (1Password, Bitwarden, custom command). Flintrail fills username, password and one-time code itself; the secrets never reach you. A CLI login is only filled when the page domain matches its website. On a multi-step sign-in (e-mail page, then password page), call it on each step. While recording, the flow stores the source and login ID, never a secret.',
@@ -120,9 +120,9 @@ export function buildServer(): McpServer {
   }));
 
   s.registerTool('fl_snapshot', {
-    description: 'Re-read a tab: interactive elements with refs, headings and the start of the text.',
-    inputSchema: { tab: z.string(), ...snapOpts },
-  }, guard(async ({ tab, text: t, max }) => snapshot(getTab(tab), { text: t, max })));
+    description: 'Re-read a tab: interactive elements with refs, headings and the start of the text. Always the whole page, unless diff=true (only what changed since the last snapshot you received).',
+    inputSchema: { tab: z.string(), diff: z.boolean().optional(), ...snapOpts },
+  }, guard(async ({ tab, diff, text: t, max }) => snapshot(getTab(tab), { text: t, max, diff: !!diff })));
 
   s.registerTool('fl_extract', {
     description: 'Run JavaScript in the page and return the result. Fastest way to pull tables, lists or links.',

@@ -200,7 +200,7 @@ test('a flow recorded without the list cannot act in a frame the list now exclud
   try {
     await free.call('fl_record_start', { name: 'inframe' });
     const tab = tabOf(await free.call('fl_open', { url: page }));
-    const snap = await free.call('fl_act', { tab, actions: [{ do: 'wait', ms: 800 }] });
+    const snap = await free.call('fl_act', { tab, diff: false, actions: [{ do: 'wait', ms: 800 }] });
     const ref = /\[(f\d+:e\d+)\] button "Other button"/.exec(snap)?.[1];
     assert.ok(ref, 'without a list the embedded frame is readable');
     await free.call('fl_act', { tab, snapshot: false, actions: [{ do: 'click', ref }] });

@@ -309,7 +309,7 @@ export async function hideForeignFrames(page: Page): Promise<{ restore: () => Pr
   return { restore: async () => { for (const u of undo) await u(); } };
 }
 
-export async function snapshot(page: Page, opts: { max?: number; text?: number } = {}): Promise<string> {
+export async function snapshot(page: Page, opts: { max?: number; text?: number; diff?: boolean } = {}): Promise<string> {
   const away = domainProblem(page.url());
   if (away) return `Blocked: nothing was read from this tab. ${away} Close it with fl_close.`;
   // An embedded frame of a site outside the user's list is not read either.
@@ -324,7 +324,10 @@ export async function snapshot(page: Page, opts: { max?: number; text?: number }
   }).catch(() => null)));
   // The page may have moved while it was being read: what a tab or frame now outside the list returned is dropped.
   const moved = domainProblem(page.url());
-  if (moved) return `Blocked: nothing was read from this tab. ${moved} Close it with fl_close.`;
+  if (moved) {
+    lastSeen.delete(page);
+    return `Blocked: nothing was read from this tab. ${moved} Close it with fl_close.`;
+  }
   const head = reads[0];
   const extra: string[] = [];
   reads.forEach((s, i) => {
@@ -332,11 +335,102 @@ export async function snapshot(page: Page, opts: { max?: number; text?: number }
     if (i > 0 && s?.lines.length && readableFrame(frame)) extra.push(`-- frame ${index} (${frame.url().slice(0, 80)})`, ...s.lines);
   });
   const notes = pageNotes(page);
-  if (!head) return [...notes, `URL: ${page.url()} (page not readable yet)`].join('\n');
-  const out = [...notes, `URL: ${head.url}`, `Title: ${head.title}`, ...head.heads, '', ...head.lines, ...extra];
+  if (!head) {
+    lastSeen.delete(page);
+    return [...notes, `URL: ${page.url()} (page not readable yet)`].join('\n');
+  }
+  const seen: Seen = {
+    url: head.url, title: head.title, max: opts.max ?? 150, text: opts.text ?? 600, more: head.more,
+    heads: head.heads, lines: [...head.lines, ...extra], body: head.body,
+  };
+  const before = lastSeen.get(page);
+  lastSeen.set(page, seen);
+  const delta = opts.diff && before ? changesSince(before, seen) : null;
+  if (delta) return [...notes, ...delta].join('\n');
+  const out = [...notes, `URL: ${head.url}`, `Title: ${head.title}`, ...head.heads, '', ...seen.lines];
   if (head.more) out.push('(list truncated, raise max if needed)');
   if (head.body) out.push('', 'Text: ' + head.body);
   return out.join('\n');
+}
+
+/** What the agent last received about a tab: the next snapshot can be told as a difference from it. */
+interface Seen { url: string; title: string; max: number; text: number; more: boolean; heads: string[]; lines: string[]; body: string }
+const lastSeen = new WeakMap<Page, Seen>();
+
+const refOfLine = (line: string) => /^\[([^\]]+)\]/.exec(line)?.[1];
+
+/**
+ * The changes between two snapshots of the same page, or null when a full snapshot is the better answer:
+ * another page, other options, a truncated list, or so many changes that a difference saves nothing.
+ * Refs are stable on a page (an element keeps its ref for as long as it lives), so unchanged lines can be left out.
+ */
+function changesSince(before: Seen, now: Seen): string[] | null {
+  if (before.url !== now.url || before.max !== now.max || before.text !== now.text || before.more || now.more) return null;
+  const old = new Map<string, string>();
+  for (const line of before.lines) {
+    const ref = refOfLine(line);
+    if (ref) old.set(ref, line);
+  }
+  const changes: string[] = [];
+  const kept = new Set<string>();
+  let same = 0;
+  for (const line of now.lines) {
+    const ref = refOfLine(line);
+    if (!ref) continue; // frame separators
+    kept.add(ref);
+    const was = old.get(ref);
+    if (was === line) same++;
+    else changes.push(`${was === undefined ? '+' : '~'} ${line}`);
+  }
+  for (const [ref, line] of old) if (!kept.has(ref)) changes.push(`- ${line}`);
+  const headsChanged = before.heads.join('\n') !== now.heads.join('\n');
+  const bodyChanged = before.body !== now.body;
+  const full = now.lines.length + now.heads.length + (now.body ? 1 : 0);
+  const told = changes.length + (headsChanged ? now.heads.length : 0) + (bodyChanged ? 1 : 0);
+  // Past half of the page, the whole page is as short and easier to read.
+  if (told * 2 > full) return null;
+  const out = [`URL: ${now.url}`];
+  if (before.title !== now.title) out.push(`Title: ${now.title}`);
+  if (!told) {
+    out.push(`No change since the last snapshot of this tab (${same} elements, same refs).`);
+    return out;
+  }
+  out.push(`Changes since the last snapshot of this tab (+ new, ~ changed, - gone). ${same} other element${same === 1 ? '' : 's'} unchanged, same refs.`);
+  if (headsChanged) out.push(...now.heads);
+  out.push(...changes);
+  if (bodyChanged && now.body) out.push('', textChange(before.body, now.body));
+  return out;
+}
+
+/** The words of the page text that are new, each run with a few words around it; the whole text when most of it changed. */
+function textChange(before: string, now: string): string {
+  const a = before.split(' ');
+  const b = now.split(' ');
+  // Longest common subsequence of words: what is left of `now` is new. The text is a few hundred words at most.
+  const lcs: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+    }
+  }
+  const fresh: boolean[] = new Array<boolean>(b.length).fill(true);
+  for (let i = 0, j = 0; i < a.length && j < b.length;) {
+    if (a[i] === b[j]) { fresh[j] = false; i++; j++; } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) i++; else j++;
+  }
+  const count = fresh.filter(Boolean).length;
+  if (!count) return 'Text: some of it went away, nothing new.';
+  if (count * 2 > b.length) return 'Text: ' + now;
+  const parts: string[] = [];
+  for (let j = 0; j < b.length; j++) {
+    if (!fresh[j]) continue;
+    let end = j;
+    while (end + 1 < b.length && fresh[end + 1]) end++;
+    const from = Math.max(0, j - 3);
+    const to = Math.min(b.length, end + 4);
+    parts.push(`${from > 0 ? '…' : ''}${b.slice(from, j).join(' ')} [${b.slice(j, end + 1).join(' ')}] ${b.slice(end + 1, to).join(' ')}${to < b.length ? '…' : ''}`.replace(/ +/g, ' ').trim());
+    j = end;
+  }
+  return 'Text, new words in [brackets]: ' + parts.join('  ');
 }
 
 function fromRef(page: Page, ref: string): { frame: Frame; key: string } {
@@ -551,7 +645,7 @@ const needsElement = (a: Action) =>
   !PAGE_ACTIONS.has(a.do) && !(a.do === 'press' && !a.ref && !a.selector && !a.role && !a.text && !a.label && !a.placeholder);
 
 /** Batched live actions: one round trip for a whole sequence, then one fresh snapshot. */
-export async function act(page: Page, actions: Action[], opts: { snapshot?: boolean; max?: number; text?: number } = {}) {
+export async function act(page: Page, actions: Action[], opts: { snapshot?: boolean; max?: number; text?: number; diff?: boolean } = {}) {
   const notes: string[] = [];
   for (let i = 0; i < actions.length; i++) {
     const a = actions[i]!;
@@ -596,5 +690,5 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
   if (away) return [...notes, `Blocked: the tab went to another site, nothing was read from it. ${away} Close it with fl_close.`].join('\n');
   if (opts.snapshot === false) return [...notes, ...pageNotes(page), `URL: ${page.url()}`].join('\n');
   await domQuiet(page);
-  return (notes.length ? notes.join('\n') + '\n\n' : '') + (await snapshot(page, opts));
+  return (notes.length ? notes.join('\n') + '\n\n' : '') + (await snapshot(page, { max: opts.max, text: opts.text, diff: opts.diff !== false }));
 }

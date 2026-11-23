@@ -227,6 +227,12 @@ Each recorded desktop step stores the app and a fingerprint of the element: nati
 
 macOS asks for the Accessibility permission on first use, for the app that runs Flintrail (Claude, Cursor, a terminal). On Linux it needs `at-spi2-core` in the graphical session. To use your own build, set `FLINTRAIL_AGENT_DESKTOP` to its path. Flows with desktop steps run one at a time in `fl_run_many`, since they share the app.
 
+## Snapshots that only say what changed
+
+After `fl_act`, when the tab is still on the same page, the snapshot lists only what changed since the last one the agent received: `+` a new element, `~` one whose label, value or state changed, `-` one that is gone, and the new words of the page text. Everything else is still there with the same ref, since an element keeps its ref for as long as it lives on the page. On a page of a few hundred elements, a click that changes one of them costs a few lines instead of the whole page.
+
+The whole page comes back by itself when the tab moved to another page, when more than half of it changed, or when the list was truncated. `diff: false` on `fl_act` forces it, and `fl_snapshot` always returns the whole page unless called with `diff: true`.
+
 ## How replay finds elements again
 
 Each recorded step stores a fingerprint, not a fragile selector: test id, stable id, `name` attribute, ARIA role and accessible name, placeholder, link target, visible text and a short CSS path. At replay time Flintrail tries them from most to least stable and takes the first that matches exactly one element, waiting only for that element, never for the network to go idle.

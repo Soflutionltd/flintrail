@@ -30,7 +30,7 @@ describe('1Password CLI source', () => {
     const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
     const out = await mcp.call('fl_login', { tab });
     assert.match(out, /1password login "Fixture shop".*filled username, password, one-time code, submitted/);
-    const done = await mcp.call('fl_act', { tab, actions: [{ do: 'wait', text: 'Welcome' }] });
+    const done = await mcp.call('fl_act', { tab, diff: false, actions: [{ do: 'wait', text: 'Welcome' }] });
     assert.match(done, /Welcome ann@example.com/);
     assert.ok(!leaks(out + done));
 
@@ -78,7 +78,7 @@ for (const [kind, file] of [['bitwarden', 'fake-bw.mjs'], ['command', 'fake-comm
       const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
       const out = await mcp.call('fl_login', { tab });
       assert.match(out, new RegExp(`${kind} login "Fixture shop".*filled username, password, one-time code, submitted`));
-      const done = await mcp.call('fl_act', { tab, actions: [{ do: 'wait', text: 'Welcome' }] });
+      const done = await mcp.call('fl_act', { tab, diff: false, actions: [{ do: 'wait', text: 'Welcome' }] });
       assert.match(done, /Welcome ann@example.com/);
       assert.ok(!leaks(out + done + (await mcp.call('fl_network', { filter: '/api/login' }))));
     } finally {
@@ -122,7 +122,7 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
     const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
     const out = await mcp.call('fl_login', { tab });
     assert.match(out, /Browser password manager: filled username, password, submitted/);
-    const done = await mcp.call('fl_act', { tab, actions: [{ do: 'wait', text: 'Welcome' }] });
+    const done = await mcp.call('fl_act', { tab, diff: false, actions: [{ do: 'wait', text: 'Welcome' }] });
     assert.match(done, /Welcome ann@example.com/);
     assert.ok(!leaks(out + done + (await mcp.call('fl_network', { filter: '/api/login' }))), 'what the browser filled is masked too');
 

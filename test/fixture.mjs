@@ -203,6 +203,19 @@ export function startFixture(port = 0) {
     if (url.pathname === '/file') { res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="report.bin"' }); return res.end('FILE-CONTENT'); }
     if (url.pathname === '/based') return html('Based', `<base href="${url.searchParams.get('to')}"><h1>Based</h1>`);
     if (url.pathname === '/redir307') { req.resume(); res.writeHead(307, { location: url.searchParams.get('to') }); return res.end(); }
+    // A long list where one action changes little: one row is edited, one is added, one is removed.
+    if (url.pathname === '/board') return html('Board', `<h1>Board</h1><p id="status">Idle</p>
+      <ul id="rows">${Array.from({ length: 40 }, (_, i) => `<li><button type="button" class="row">Task ${i + 1}</button></li>`).join('')}</ul>
+      <button type="button" id="rename">Rename first</button><button type="button" id="add">Add task</button>
+      <button type="button" id="drop">Drop last</button><button type="button" id="reset">Replace all</button>
+      <script>
+        const rows = document.getElementById('rows');
+        const say = document.getElementById('status');
+        document.getElementById('rename').onclick = () => { rows.querySelector('.row').textContent = 'Task renamed'; };
+        document.getElementById('add').onclick = () => { rows.insertAdjacentHTML('beforeend', '<li><button type="button" class="row">Task new</button></li>'); say.textContent = 'Added'; };
+        document.getElementById('drop').onclick = () => { rows.lastElementChild.remove(); };
+        document.getElementById('reset').onclick = () => { rows.innerHTML = Array.from({ length: 40 }, (_, i) => '<li><button type="button" class="row">Other ' + i + '</button></li>').join(''); };
+      </script>`);
     // A page that reports the visit as soon as it loads, like most sites with audience measurement.
     if (url.pathname === '/measured') return html('Measured', `<h1>Measured</h1>
       <label>Plate <input name="plate"></label><button type="button" id="go">Order</button><p id="out"></p>
