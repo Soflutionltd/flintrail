@@ -10,9 +10,12 @@ const items = [
 if (process.env.FAKE_OP_SECOND) {
   items.push({ id: 'fixture2', title: 'Fixture shop, second account', vault, additional_information: 'bob@example.com', urls: [{ href: 'http://127.0.0.1/login-step' }] });
 }
+// FAKE_OP_USERNAME: the first account under another username, to try names a page could show by chance.
+const first = process.env.FAKE_OP_USERNAME || 'ann@example.com';
+items[0].additional_information = first;
 const second = id === 'fixture2';
 const fields = [
-  { id: 'username', type: 'STRING', purpose: 'USERNAME', value: second ? 'bob@example.com' : 'ann@example.com' },
+  { id: 'username', type: 'STRING', purpose: 'USERNAME', value: second ? 'bob@example.com' : first },
   { id: 'password', type: 'CONCEALED', purpose: 'PASSWORD', value: second ? 'Second pass 77' : 'S3cret pass&"42' },
   { id: 'TOTP_test', type: 'OTP', value: 'otpauth://totp/test?secret=JBSWY3DPEHPK3PXP', totp: '123456' },
 ];

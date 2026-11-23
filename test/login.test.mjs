@@ -129,7 +129,7 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
     // The browser's own saved login is for ann: asked for another account, nothing is submitted.
     const other = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
     const sentBefore = site.hits.filter((h) => h.endsWith('/api/login')).length;
-    await assert.rejects(mcp.call('fl_login', { tab: other, account: 'carol@example.com' }), /Refused: the login the browser filled here is for ann@example\.com, the account asked for is carol@example\.com\. Nothing was submitted/);
+    await assert.rejects(mcp.call('fl_login', { tab: other, account: 'carol@example.com' }), /Refused: no saved login for carol@example\.com .*other accounts: the browser's own saved login \(ann@example\.com\)\. Nothing was filled/);
     assert.equal(site.hits.filter((h) => h.endsWith('/api/login')).length, sentBefore);
     assert.match(await mcp.call('fl_login', { tab: other, account: 'ANN@example.com' }), /Browser password manager: filled username, password, submitted/);
     await mcp.call('fl_close', { tab: other });
@@ -229,6 +229,32 @@ describe('a sign-in step that already names the account', () => {
     } finally { await mcp.client.close(); }
   });
 
+  test('a name the page shows by chance does not pick a saved login', async () => {
+    const run = async (username, query) => {
+      const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_USERNAME: username }));
+      try {
+        const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login-step?${query}` }));
+        const before = site.attempts.length;
+        const out = await mcp.call('fl_login', { tab }).catch((e) => e.message);
+        await mcp.call('fl_act', { tab, snapshot: false, actions: [{ do: 'wait', ms: 250 }] });
+        return { out, sent: site.attempts.length - before };
+      } finally { await mcp.client.close(); }
+    };
+    const ann = `as=${encodeURIComponent('ann@example.com')}`;
+    // A plain username is an ordinary word: the page saying "support" is not the account "support".
+    const word = await run('support', `${ann}&note=${encodeURIComponent('Contact support if you are locked out')}`);
+    assert.match(word.out, /Refused: the page asks for the password of ann@example\.com/);
+    assert.equal(word.sent, 0);
+    // The site's contact address in the footer is not the account either.
+    const footer = await run('help@example.com', `${ann}&support=1`);
+    assert.match(footer.out, /Refused: the page asks for the password of ann@example\.com/);
+    assert.equal(footer.sent, 0);
+    // Letters outside ASCII and a leading bullet do not turn one address into another.
+    assert.equal((await run('ann@example.com', `as=${encodeURIComponent('éann@example.com')}`)).sent, 0);
+    assert.equal((await run('joann@example.com', `as=${encodeURIComponent('•ann@example.com')}`)).sent, 0);
+    assert.equal((await run('ann@example.com', `as=${encodeURIComponent('• ann@example.com')}`)).sent, 1);
+  });
+
   test('asked for one account, a saved login for another is never used', async () => {
     const posts = () => site.hits.filter((h) => h.endsWith('/api/login')).length + site.attempts.length;
     const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
@@ -239,6 +265,7 @@ describe('a sign-in step that already names the account', () => {
       await assert.rejects(mcp.call('fl_login', { tab, account: 'carol@example.com' }),
         /Refused: no saved login for carol@example\.com on 127\.0\.0\.1 .*other accounts: "Fixture shop" \(ann@example\.com.*Nothing was filled/);
       await assert.rejects(mcp.call('fl_login', { tab, account: 'carol@example.com', item: 'fixture1' }), /Refused: no saved login for carol@example\.com/);
+      await assert.rejects(mcp.call('fl_login', { tab, account: '  ' }), /account is empty/);
       const typed = await mcp.call('fl_extract', { tab, js: 'return [f.email.value, f.password.value.length]' });
       assert.match(typed, /\["",0\]/);
       assert.equal(posts(), before);
