@@ -7,6 +7,7 @@ const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8">
 
 export function startFixture(port = 0) {
   const orders = [];
+  const visits = { count: 0 };
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     const html = (t, b) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page(t, b)); };
@@ -176,7 +177,24 @@ export function startFixture(port = 0) {
           out.textContent = 'Sent';
         };
       </script>`);
+    // A page that reports the visit as soon as it loads, like most sites with audience measurement.
+    if (url.pathname === '/measured') return html('Measured', `<h1>Measured</h1>
+      <label>Plate <input name="plate"></label><button type="button" id="go">Order</button><p id="out"></p>
+      <script>
+        fetch('/stats/visit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"page":"measured"}' });
+        go.onclick = async () => {
+          await fetch('/api/order', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ plate: document.querySelector('input').value }) });
+          out.textContent = 'Measured order done';
+        };
+      </script>`);
+    if (url.pathname === '/stats/visit' && req.method === 'POST') {
+      req.resume();
+      visits.count++;
+      res.writeHead(204);
+      return res.end();
+    }
     res.writeHead(404).end();
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, url: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, url: `http://127.0.0.1:${server.address().port}` })));
 }

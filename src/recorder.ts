@@ -43,6 +43,8 @@ class Recorder {
   private seq = 1;
   /** Index of the step being performed: the requests it triggers are tied to it. */
   private current = 0;
+  /** False until the first action of the recording: what the start page sends by itself while it loads. */
+  private acted = false;
   /** Tab the recorded actions run in: requests of other tabs are not part of the flow. */
   private page: Page | null = null;
 
@@ -68,6 +70,7 @@ class Recorder {
       formPosts: 0,
     };
     this.current = 0;
+    this.acted = false;
     this.page = null;
     return `Recording "${name}" started${repairFrom !== undefined ? ` (repairing from step ${repairFrom})` : ''}. Every fl_open / fl_act / fl_desktop_act from now on is captured.`;
   }
@@ -119,6 +122,7 @@ class Recorder {
   beginAction(page: Page) {
     if (!this.rec) return;
     this.current = this.rec.steps.length;
+    this.acted = true;
     this.page = page;
   }
 
@@ -191,7 +195,9 @@ class Recorder {
       postData: r.postData()?.slice(0, BODY_LIMIT) || undefined,
       afterStep: this.rec ? this.current : -1,
     };
-    if (this.rec && isWrite(call) && this.fromRecordedTab(r)) this.rec.writes.push(call);
+    // A direct replay opens the start page too, so what that page sends while loading is sent again anyway.
+    const sentByStartPage = !!this.rec && !this.acted && this.rec.steps.length === 0;
+    if (this.rec && isWrite(call) && this.fromRecordedTab(r) && !sentByStartPage) this.rec.writes.push(call);
     this.pending.set(r, { call, t0: Date.now() });
     this.calls.push(call);
     if (this.calls.length > 200) this.calls.shift();

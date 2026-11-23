@@ -176,3 +176,26 @@ test('a flow that types a password never keeps its request', async () => {
   assert.match(saved, /No direct API call kept: the flow handles a password\./);
   assert.doesNotMatch(await mcp.call('fl_flow', { name: 'signin-by-hand' }), /S3cret|"api"/);
 });
+
+test('what the start page sends while it loads does not count against the direct call', async () => {
+  await mcp.call('fl_record_start', { name: 'measured' });
+  const snap = await mcp.call('fl_open', { url: site.url + '/measured' });
+  const tab = tabOf(snap);
+  await mcp.call('fl_act', {
+    tab,
+    actions: [
+      { do: 'fill', ref: refOf(snap, /Plate/), value: 'ME-1', var: 'plate' },
+      { do: 'click', selector: '#go' },
+      { do: 'wait', text: 'Measured order done' },
+    ],
+  });
+  assert.match(await mcp.call('fl_record_stop'), /Direct API call detected: POST \/api\/order\./);
+  await mcp.call('fl_close', { tab });
+
+  const visits = site.visits.count;
+  const run = await mcp.call('fl_run', { name: 'measured', vars: { plate: 'ME-2' }, direct: true });
+  assert.match(run, /^OK "measured" in \d+ ms \(direct POST \/api\/order -> 200/);
+  assert.equal(site.orders.at(-1).plate, 'ME-2');
+  // The direct run opens the start page, so the visit is reported exactly as in a UI run.
+  assert.equal(site.visits.count, visits + 1);
+});
