@@ -34,6 +34,14 @@ interface Recording {
   writes: ApiCall[];
   /** Forms submitted by plain page navigation (POST), which no fetch/XHR capture sees. */
   formPosts: number;
+  /** Write requests sent before the first action, while the first page was loading. */
+  loadWrites: ApiCall[];
+  /** The start URL is the page this recording opened first, not one given to fl_record_start. */
+  startFromOpen: boolean;
+  /** Steps came from the extension while the user performed the task: they arrive after their requests. */
+  demo: boolean;
+  /** Tabs the recorded actions ran in. */
+  tabs: Set<Page>;
 }
 
 class Recorder {
@@ -68,6 +76,10 @@ class Recorder {
       sensitive: false,
       writes: [],
       formPosts: 0,
+      loadWrites: [],
+      startFromOpen: false,
+      demo: false,
+      tabs: new Set(),
     };
     this.current = 0;
     this.acted = false;
@@ -91,7 +103,10 @@ class Recorder {
       vars,
       literals: r.literals,
       startUrl: r.startUrl,
-      calls: r.writes,
+      // A direct replay opens the start page too, so what that page sent while loading is sent again
+      // anyway. True only when the page that loaded was the start page itself, with steps in order.
+      calls: r.startFromOpen && !r.demo && steps[0]?.do !== 'goto' ? r.writes : [...r.loadWrites, ...r.writes],
+      tabs: r.tabs.size,
       formPosts: r.formPosts,
       sensitive: r.sensitive,
     });
@@ -113,7 +128,7 @@ class Recorder {
   }
 
   onOpen(url: string) {
-    if (this.rec && this.rec.steps.length === 0 && !this.rec.startUrl) this.rec.startUrl = url;
+    if (this.rec && this.rec.steps.length === 0 && !this.rec.startUrl) { this.rec.startUrl = url; this.rec.startFromOpen = true; }
     else if (this.rec) this.rec.steps.push({ do: 'goto', url });
     if (this.rec) this.current = Math.max(0, this.rec.steps.length - 1);
   }
@@ -124,6 +139,7 @@ class Recorder {
     this.current = this.rec.steps.length;
     this.acted = true;
     this.page = page;
+    this.rec.tabs.add(page);
   }
 
   addStep(_page: Page, step: Step) {
@@ -166,6 +182,7 @@ class Recorder {
       this.rec.sensitive = true;
       return;
     }
+    this.rec.demo = true;
     const last = this.rec.steps.at(-1);
     // Typing produces several change events on the same field: keep only the final value.
     if (step.do === 'fill' && last?.do === 'fill' && JSON.stringify(last.target) === JSON.stringify(step.target)) {
@@ -176,15 +193,15 @@ class Recorder {
     this.current = this.rec.steps.length - 1;
   }
 
-  /** True when the request comes from the tab being recorded (or when no action ran yet). */
+  /** True when the request comes from the tab being recorded, or when its tab cannot be told (no action yet, service worker). */
   private fromRecordedTab(r: Request): boolean {
     if (!this.page) return true;
-    try { return r.frame().page() === this.page; } catch { return false; }
+    try { return r.frame().page() === this.page; } catch { return true; }
   }
 
   onRequest(r: Request) {
     const type = r.resourceType();
-    if (this.rec && type === 'document' && r.method().toUpperCase() !== 'GET' && this.fromRecordedTab(r)) this.rec.formPosts++;
+    if (this.rec && type === 'document' && r.method().toUpperCase() !== 'GET') this.rec.formPosts++;
     if (type !== 'fetch' && type !== 'xhr') return;
     const headers = r.headers();
     const call: ApiCall = {
@@ -195,9 +212,9 @@ class Recorder {
       postData: r.postData()?.slice(0, BODY_LIMIT) || undefined,
       afterStep: this.rec ? this.current : -1,
     };
-    // A direct replay opens the start page too, so what that page sends while loading is sent again anyway.
-    const sentByStartPage = !!this.rec && !this.acted && this.rec.steps.length === 0;
-    if (this.rec && isWrite(call) && this.fromRecordedTab(r) && !sentByStartPage) this.rec.writes.push(call);
+    if (this.rec && isWrite(call) && this.fromRecordedTab(r)) {
+      (!this.acted && this.rec.steps.length === 0 ? this.rec.loadWrites : this.rec.writes).push(call);
+    }
     this.pending.set(r, { call, t0: Date.now() });
     this.calls.push(call);
     if (this.calls.length > 200) this.calls.shift();

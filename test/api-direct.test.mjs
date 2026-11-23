@@ -199,3 +199,26 @@ test('what the start page sends while it loads does not count against the direct
   // The direct run opens the start page, so the visit is reported exactly as in a UI run.
   assert.equal(site.visits.count, visits + 1);
 });
+
+test('a page-load write counts when the direct run would not open the page that sent it', async () => {
+  // The start URL given here is not the page opened next: a direct run opens /items and skips /measured.
+  await mcp.call('fl_record_start', { name: 'elsewhere', startUrl: site.url + '/items' });
+  const snap = await mcp.call('fl_open', { url: site.url + '/measured' });
+  const tab = tabOf(snap);
+  await mcp.call('fl_act', { tab, actions: [{ do: 'fill', ref: refOf(snap, /Plate/), value: 'EL-1' }, { do: 'click', selector: '#go' }, { do: 'wait', text: 'Measured order done' }] });
+  assert.match(await mcp.call('fl_record_stop'), /No direct API call kept: the flow makes 2 write requests/);
+  await mcp.call('fl_close', { tab });
+  await assert.rejects(mcp.call('fl_run', { name: 'elsewhere', direct: true }), /has no direct API call/);
+});
+
+test('a variable in the start URL rules the direct call out', async () => {
+  // The page is open before the recording starts, and the start URL is given with a variable.
+  const snap = await mcp.call('fl_open', { url: site.url + '/items?c=1' });
+  const tab = tabOf(snap);
+  await mcp.call('fl_record_start', { name: 'varstart', startUrl: site.url + '/items?c={{c}}' });
+  const [item, qty] = snap.split('\n').filter((l) => /text "(Item|Quantity)"/.test(l)).map((l) => /\[([^\]]+)\]/.exec(l)[1]);
+  const out = await mcp.call('fl_act', { tab, actions: [{ do: 'fill', ref: item, value: 'bolt' }, { do: 'fill', ref: qty, value: '3' }, { do: 'click', selector: '#save' }, { do: 'wait', text: 'Stock saved' }] });
+  assert.doesNotMatch(out, /FAILED/);
+  assert.match(await mcp.call('fl_record_stop'), /No direct API call kept: the start URL holds a variable/);
+  await mcp.call('fl_close', { tab });
+});

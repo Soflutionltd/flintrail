@@ -122,18 +122,23 @@ export function findShortcut(input: {
   /** Forms the flow submitted by plain navigation: writes a direct request would skip. */
   formPosts: number;
   sensitive: boolean;
+  /** Number of tabs the recorded actions ran in. */
+  tabs: number;
 }): { shortcut?: ApiShortcut; reason?: string } {
-  const { steps, vars, literals, startUrl, calls, formPosts, sensitive } = input;
+  const { steps, vars, literals, startUrl, calls, formPosts, sensitive, tabs } = input;
   if (!calls.length) return {};
   if (sensitive || steps.some((s) => s.do === 'login')) return { reason: 'the flow handles a password' };
   if (steps.some((s) => s.do === 'request')) return {};
   if (steps.some((s) => s.do === 'desktop')) return { reason: 'the flow also drives a desktop app' };
+  if (tabs > 1) return { reason: 'the flow works in several tabs' };
   if (formPosts) return { reason: 'the flow also submits a form by page navigation, which a direct request would skip' };
   const skipped = steps.find((s) => s.do === 'eval' || s.do === 'download' || s.do === 'upload');
   if (skipped) return { reason: `the flow has a ${skipped.do} step, which a direct request would skip` };
   if (calls.length > 1) return { reason: `the flow makes ${calls.length} write requests, a direct replay handles exactly one` };
   const call = calls[0]!;
   if (!startUrl) return { reason: 'the flow has no start URL' };
+  // A variable that picks the start page may also pick the record the request writes to.
+  if (startUrl.includes('{{')) return { reason: 'the start URL holds a variable' };
   if (call.status === undefined) return { reason: 'the request had not been answered when recording stopped' };
   if (call.status < 200 || call.status >= 300) return { reason: `the site answered HTTP ${call.status} to it` };
   if (steps.slice(call.afterStep + 1).some((s) => !isWait(s))) return { reason: 'other actions follow the request in the flow' };
@@ -148,6 +153,8 @@ export function findShortcut(input: {
   }
   if (target.origin !== origin) return { reason: `it goes to another site (${target.origin})` };
 
+  // fetch('//host/path') leaves the site.
+  if (target.pathname.startsWith('//')) return { reason: 'its path cannot be replayed safely' };
   if (TELEMETRY.test(target.pathname)) return { reason: `it looks like usage reporting (${target.pathname}), not the action itself` };
   const queryNames = Object.fromEntries(target.searchParams);
 
