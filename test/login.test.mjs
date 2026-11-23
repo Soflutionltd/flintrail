@@ -146,6 +146,15 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
       chrome.kill();
       await exited;
     }
-    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    // Chrome's helper processes keep writing to the profile for a moment after the main one is gone.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        rmSync(profile, { recursive: true, force: true });
+        break;
+      } catch (error) {
+        if (attempt === 40) throw error;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
   }
 });
