@@ -6,6 +6,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite takes under two minutes; without a limit a hung test holds the runner for six hours.
+    timeout-minutes: 15
     strategy:
       matrix:
         node: [20, 22]
