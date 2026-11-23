@@ -38,11 +38,13 @@ Flintrail treats the browser like a JIT compiler treats code:
 
 <p align="center"><img src="docs/benchmark.svg" alt="Benchmark" width="880"></p>
 
-Same 5-step task (fill a field, tick a box, change page, click a client-rendered button that calls an API, wait for the result), median of 10 runs, headless Chromium. The numbers are tool-side wall time only. In a real agent every tool call also costs a model turn, so going from 7 calls to 2 saves several more seconds on top.
+Same 5-step task (fill a field, tick a box, change page, click a client-rendered button that calls an API, wait for the result), median of 10 runs, every tool driving the same headless Chromium build. The numbers are tool-side wall time only. In a real agent every tool call also costs a model turn, so going from 7 calls to 2 saves several more seconds on top.
 
-The hatched bar is the floor: the same clicks as a raw Playwright script, with no MCP and no agent. Any tool that clicks through the UI is bounded by it, which is why the per-call ratios stay modest. Flintrail adds about 50 ms per call on top of that floor, Playwright MCP about 260 ms. The only way under the floor is to stop clicking, which is what API replay does.
+One action per call, Flintrail is 3.1× faster than Playwright MCP and 1.7× faster than Chrome DevTools MCP. [agent-browser](https://github.com/vercel-labs/agent-browser), which talks to Chrome over CDP from a Rust daemon, is ahead: 586 ms against 711 ms live, and 28 ms in one call against 56 ms in two for the API replay, because it sends the request from its own process while Flintrail sends it from inside the page, in a tab it opens and closes.
 
-Reproduce it: `npm run bench` (installs nothing global; Playwright MCP is a dependency of `bench/` only).
+The hatched bar is the same clicks as a plain Playwright script, with no MCP and no agent, for reference.
+
+Reproduce it: `npm run bench` (installs nothing global; the other tools are dependencies of `bench/` only).
 
 ## Architecture
 
@@ -226,7 +228,7 @@ npm install
 npx playwright-core install chromium   # once, for tests
 npm test                               # build + 26 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
-npm run bench                          # benchmark vs Playwright MCP
+npm run bench                          # benchmark vs Playwright MCP, Chrome DevTools MCP, agent-browser
 ```
 
 ## Roadmap
@@ -238,7 +240,7 @@ npm run bench                          # benchmark vs Playwright MCP
 
 ## En français
 
-Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,4 s avec Playwright MCP et 0,11 s avec Flintrail en mode API.
+Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,2 s avec Playwright MCP et 0,06 s avec Flintrail en mode API.
 
 L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, on colle le jeton, et l'agent pilote le navigateur. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
 

@@ -1,36 +1,51 @@
 {
   "runs": 10,
-  "date": "2026-10-26T10:49:43.331Z",
-  "node": "v22.23.4",
+  "date": "2026-11-23T13:11:18.440Z",
+  "node": "v25.0.0",
   "results": [
     {
       "label": "Playwright MCP (1 action / call)",
-      "medianMs": 2379,
+      "medianMs": 2181,
       "calls": 7
     },
     {
+      "label": "Chrome DevTools MCP (1 action / call)",
+      "medianMs": 1238,
+      "calls": 8
+    },
+    {
+      "label": "agent-browser (1 action / call)",
+      "medianMs": 586,
+      "calls": 7
+    },
+    {
+      "label": "agent-browser flow run (API)",
+      "medianMs": 28,
+      "calls": 1
+    },
+    {
       "label": "Flintrail live (1 action / call)",
-      "medianMs": 880,
+      "medianMs": 711,
       "calls": 7
     },
     {
       "label": "Flintrail live, batched",
-      "medianMs": 777,
+      "medianMs": 633,
       "calls": 3
     },
     {
       "label": "Flintrail replay (fl_run)",
-      "medianMs": 683,
+      "medianMs": 618,
       "calls": 2
     },
     {
       "label": "Flintrail API replay (fl_run)",
-      "medianMs": 114,
+      "medianMs": 56,
       "calls": 2
     },
     {
-      "label": "Browser floor (raw script)",
-      "medianMs": 549,
+      "label": "Plain Playwright script",
+      "medianMs": 949,
       "calls": 0
     }
   ]
