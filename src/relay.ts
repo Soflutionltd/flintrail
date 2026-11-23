@@ -324,12 +324,27 @@ class ExtensionBridge {
   }
 
   /** Gives a tab the user shared (URL containing match) to this client. */
-  claim(client: ClientConn, match: string): { url: string } | null {
+  async claim(client: ClientConn, match: string): Promise<{ url: string } | null> {
     const view = this.viewOf(client);
-    const tab = [...this.tabsById.values()].filter((t) => !t.owner && String(t.targetInfo.url || '').includes(match)).at(-1);
-    if (!tab) return null;
-    tab.owner = view;
-    if (view.autoAttach) this.announce(tab);
+    const shared = [...this.tabsById.values()].filter((t) => !t.owner && String(t.targetInfo.url || '').includes(match)).at(-1);
+    if (shared) {
+      shared.owner = view;
+      if (view.autoAttach) this.announce(shared);
+      return { url: String(shared.targetInfo.url || '') };
+    }
+    // Not shared: the extension may hand over a tab the user has open, as its settings allow (older extensions do not).
+    if (this.legacy) return null;
+    let found: { tabId?: number | null; targetInfo?: Tab['targetInfo']; refused?: string };
+    try {
+      found = await this.request('adoptTab', { match }, 10000);
+    } catch (e) {
+      if (/Unknown method adoptTab/.test((e as Error).message)) return null;
+      throw e;
+    }
+    if (found.refused) throw new Error(`Refused by the Flintrail extension settings in ${this.key}: ${found.refused}.`);
+    if (typeof found.tabId !== 'number' || !found.targetInfo) return null;
+    const tab = this.addTab(found.tabId, found.targetInfo, view);
+    log(`${this.key}: tab ${found.tabId} taken over by a conversation`);
     return { url: String(tab.targetInfo.url || '') };
   }
 

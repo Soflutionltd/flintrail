@@ -159,6 +159,29 @@ test('password filling follows the extension settings, and only the user answers
   await mcp.call('fl_close', { tab });
 });
 
+test('an agent takes over a tab the user has open, unless the settings say no', async () => {
+  const settings = (v) => sw.evaluate((s) => chrome.storage.local.set({ adoptSettings: s }), v);
+  // The user's own tab, never shared from the extension.
+  const own = await ctx.newPage();
+  await own.goto(site.url + '/details');
+  const adopted = await mcp.call('fl_adopt', { url: '/details', browser: 'chromium', text: 0 });
+  assert.match(adopted, /^Tab t\d+ \[chromium\]/);
+  const tab = /Tab (t\d+)/.exec(adopted)[1];
+  assert.match(await mcp.call('fl_snapshot', { tab }), /details/i);
+  await mcp.call('fl_close', { tab });
+
+  const again = await ctx.newPage();
+  await again.goto(site.url + '/details');
+  // An empty address would match any tab: refused before reaching the browser.
+  await assert.rejects(mcp.call('fl_adopt', { url: '', browser: 'chromium' }), /at least 3|too_small|>=3/i);
+  await settings({ adoptOpenTabs: false });
+  await assert.rejects(mcp.call('fl_adopt', { url: '/details', browser: 'chromium' }), /taking over open tabs is turned off/);
+  await settings({ adoptOpenTabs: true, neverAdopt: ['127.0.0.1'] });
+  await assert.rejects(mcp.call('fl_adopt', { url: '/details', browser: 'chromium' }), /127\.0\.0\.1 is in the Flintrail extension's list of sites agents never take over/);
+  await settings({});
+  await again.close();
+});
+
 test('browser and extension pages, the settings included, are never driven', async () => {
   const settingsPage = `chrome-extension://${new URL(sw.url()).host}/options.html`;
   await assert.rejects(mcp.call('fl_open', { url: settingsPage, browser: 'chromium' }), /never opens browser or extension pages/);

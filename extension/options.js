@@ -8,6 +8,25 @@ function cleanDomain(line) {
   return /^[a-z0-9.-]+\.[a-z0-9-]+$/.test(host) ? host : '';
 }
 
+const ADOPT_DEFAULTS = {
+  adoptOpenTabs: true,
+  neverAdopt: ['1password.com', '1password.eu', '1password.ca', 'bitwarden.com', 'bitwarden.eu', 'lastpass.com', 'dashlane.com', 'keepersecurity.com', 'pass.proton.me'],
+};
+
+async function loadTabs() {
+  const { adoptSettings } = await chrome.storage.local.get('adoptSettings');
+  const s = { ...ADOPT_DEFAULTS, ...(adoptSettings || {}) };
+  $('adoptOpenTabs').checked = s.adoptOpenTabs;
+  $('neverAdopt').value = s.neverAdopt.join('\n');
+}
+
+async function saveTabs() {
+  const neverAdopt = [...new Set($('neverAdopt').value.split('\n').map(cleanDomain).filter(Boolean))];
+  await chrome.storage.local.set({ adoptSettings: { adoptOpenTabs: $('adoptOpenTabs').checked, neverAdopt } });
+  $('savedTabs').textContent = 'Saved.';
+  setTimeout(() => { $('savedTabs').textContent = ''; }, 1500);
+}
+
 async function load() {
   const { fillSettings } = await chrome.storage.local.get('fillSettings');
   const s = { ...DEFAULTS, ...(fillSettings || {}) };
@@ -46,10 +65,13 @@ async function renderHistory() {
 // accessibility tree (to turn the confirmation off, say) is undone.
 let gestureAt = 0;
 for (const type of ['pointerdown', 'keydown']) document.addEventListener(type, (e) => { if (e.isTrusted) gestureAt = Date.now(); }, true);
-const guarded = (fn) => () => (Date.now() - gestureAt < 2000 ? fn() : load());
+const guarded = (fn) => () => (Date.now() - gestureAt < 2000 ? fn() : Promise.all([load(), loadTabs()]));
 for (const id of ['enabled', 'confirm', 'totp', 'allDomains']) $(id).addEventListener('change', guarded(save));
 $('domains').addEventListener('change', guarded(save));
+$('adoptOpenTabs').addEventListener('change', guarded(saveTabs));
+$('neverAdopt').addEventListener('change', guarded(saveTabs));
 $('clear').addEventListener('click', async () => { await chrome.storage.local.set({ fillHistory: [] }); renderHistory(); });
 chrome.storage.onChanged.addListener((changes) => { if (changes.fillHistory) renderHistory(); });
 load();
+loadTabs();
 renderHistory();

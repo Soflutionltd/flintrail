@@ -91,7 +91,7 @@ export function buildServer(): McpServer {
 
   s.registerTool('fl_adopt', {
     description: 'Take control of a tab the user already has open in the browser (first match on a URL substring), e.g. a site they just signed in to by hand. Returns its snapshot.',
-    inputSchema: { url: z.string().describe('Substring of the tab URL'), browser: browserOpt, ...snapOpts },
+    inputSchema: { url: z.string().min(3).describe('Substring of the tab URL (at least 3 characters), e.g. "github.com/settings"'), browser: browserOpt, ...snapOpts },
   }, guard(async ({ url, browser, text: t, max }) => {
     const id = await adoptTab(url, browser);
     return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max }));

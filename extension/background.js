@@ -307,6 +307,8 @@ async function handle(method, p) {
     case 'releaseAll':
       for (const tabId of [...attached]) await detach(tabId, 'conversation closed');
       return {};
+    case 'adoptTab':
+      return adoptOpenTab(p);
     case 'fillPolicy':
       return fillPolicy(p);
     case 'fillAudit':
@@ -376,6 +378,39 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   const { recording } = await store.get('recording');
   if (recording?.tabId === tabId) stopDemo();
 });
+
+// ---------- the user's open tabs ----------
+// An agent may take over a tab the user already has open (fl_adopt), without sharing it first, unless the user
+// turned that off or listed the site. Password manager vaults are listed from the start; banks are for the user to add.
+const ADOPT_DEFAULTS = {
+  adoptOpenTabs: true,
+  neverAdopt: ['1password.com', '1password.eu', '1password.ca', 'bitwarden.com', 'bitwarden.eu', 'lastpass.com', 'dashlane.com', 'keepersecurity.com', 'pass.proton.me'],
+};
+
+async function adoptSettings() {
+  const { adoptSettings: saved } = await store.get('adoptSettings');
+  return { ...ADOPT_DEFAULTS, ...(saved || {}) };
+}
+
+async function adoptOpenTab(p) {
+  if (!(await storageProtected)) return { refused: 'this browser cannot protect the extension settings from web pages, so taking over open tabs stays off' };
+  const settings = await adoptSettings();
+  if (!settings.adoptOpenTabs) return { refused: 'taking over open tabs is turned off in the Flintrail extension settings: share the tab from the extension instead' };
+  const match = String(p.match || '').trim();
+  // An empty or tiny address would match any tab, the last one the user looked at included.
+  if (match.length < 3) return { refused: 'give at least 3 characters of the tab address' };
+  const candidates = (await chrome.tabs.query({}))
+    .filter((t) => t.url && t.url.includes(match) && webUrl(t.url) && t.url !== 'about:blank' && !attached.has(t.id));
+  const hostOf = (t) => { try { return new URL(t.url).hostname.toLowerCase(); } catch { return ''; } };
+  const open = candidates.filter((t) => !hostAllowed(hostOf(t), settings.neverAdopt));
+  if (!open.length) {
+    return candidates.length ? { refused: `${hostOf(candidates[0])} is in the Flintrail extension's list of sites agents never take over` } : { tabId: null };
+  }
+  // The one the user looked at last.
+  const tab = open.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+  const targetInfo = await attach(tab.id);
+  return { tabId: tab.id, targetInfo };
+}
 
 // ---------- password filling ----------
 // The user's settings for the passwords and codes Flintrail fills from their password manager. Only the

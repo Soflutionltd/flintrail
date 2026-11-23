@@ -270,7 +270,7 @@ export async function adoptTab(match: string, browserName?: string): Promise<str
     }
   }
   if (page) assertAllowed(page.url());
-  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' (in a user browser, share the tab from the Flintrail extension first)' : ''}.`);
+  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' that this conversation may take: it is driven by another conversation, or the extension is older than 1.5 (share the tab from the Flintrail popup then)' : ''}.`);
   return register(page, where);
 }
 

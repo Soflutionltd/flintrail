@@ -20,7 +20,8 @@
   textarea:disabled { opacity:.45; }
   textarea:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
   .fixed li { margin:4px 0; color:var(--muted); }
-  #saved { color:var(--ok); font-size:12px; min-height:18px; margin-top:8px; }
+  #saved, #savedTabs { color:var(--ok); font-size:12px; min-height:18px; margin-top:8px; }
+  p.note { color:var(--muted); font-size:13px; margin:12px 0 0; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { color:var(--muted); font-weight:600; }
@@ -46,6 +47,14 @@
     <label class="switch"><input type="checkbox" id="allDomains"><span>Every website<small>Off: only the domains below, one per line (example.com also covers its subdomains).</small></span></label>
     <textarea id="domains" aria-label="Allowed domains" placeholder="github.com&#10;cloudflare.com"></textarea>
     <div id="saved" role="status"></div>
+  </section>
+
+  <section>
+    <h2>Your open tabs</h2>
+    <label class="switch"><input type="checkbox" id="adoptOpenTabs"><span>Agents may take over a tab I have open<small>An agent asks for a tab by its address (fl_adopt) and drives it, without you sharing it first. Off: share the tab from the Flintrail popup.</small></span></label>
+    <p class="note">Never these sites, one per line (example.com also covers its subdomains). Add your banks here.</p>
+    <textarea id="neverAdopt" aria-label="Sites agents never take over"></textarea>
+    <div id="savedTabs" role="status"></div>
   </section>
 
   <section class="fixed">
