@@ -8,6 +8,8 @@ const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8">
 export function startFixture(port = 0) {
   const orders = [];
   const visits = { count: 0 };
+  /** Passwords posted to the two-step sign-in, to check which account's password was sent. */
+  const attempts = [];
   /** Requests worth checking afterwards, as "host path". */
   const hits = [];
   /** Tests flip this to make /switch lead to another site. */
@@ -89,6 +91,24 @@ export function startFixture(port = 0) {
           out.textContent = j.ok ? 'Welcome ' + j.email : 'Wrong credentials';
         };
       </script>`);
+    // Second step of a sign-in in two pages: the account is already chosen and shown, only the password is asked.
+    if (url.pathname === '/login-step') return html('Password', `<h1>Welcome</h1><p id="who">${url.searchParams.get('as')}</p>
+      <form id="f"><label>Password <input name="password" type="password" autocomplete="current-password"></label><button>Next</button></form>
+      <p id="out"></p>
+      <script>
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          await fetch('/api/login-step', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: who.textContent, password: f.password.value }) });
+          out.textContent = 'Step done';
+        };
+      </script>`);
+    if (url.pathname === '/api/login-step' && req.method === 'POST') {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => { attempts.push(JSON.parse(b || '{}')); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}'); });
+      return;
+    }
     if (url.pathname === '/api/login' && req.method === 'POST') {
       let b = '';
       req.on('data', (c) => (b += c));
@@ -244,5 +264,5 @@ export function startFixture(port = 0) {
     }
     res.writeHead(404).end();
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, hits, state, url: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, hits, state, attempts, url: `http://127.0.0.1:${server.address().port}` })));
 }

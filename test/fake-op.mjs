@@ -6,9 +6,14 @@ const items = [
   { id: 'fixture1', title: 'Fixture shop', vault, additional_information: 'ann@example.com', urls: [{ href: 'http://127.0.0.1/login' }] },
   { id: 'other1', title: 'Elsewhere', vault, additional_information: 'bob@example.com', urls: [{ href: 'https://elsewhere.example/login' }] },
 ];
+// FAKE_OP_SECOND=1: a second account on the fixture site, saved under its exact host like a duplicate login would be.
+if (process.env.FAKE_OP_SECOND) {
+  items.push({ id: 'fixture2', title: 'Fixture shop, second account', vault, additional_information: 'bob@example.com', urls: [{ href: 'http://127.0.0.1/login-step' }] });
+}
+const second = id === 'fixture2';
 const fields = [
-  { id: 'username', type: 'STRING', purpose: 'USERNAME', value: 'ann@example.com' },
-  { id: 'password', type: 'CONCEALED', purpose: 'PASSWORD', value: 'S3cret pass&"42' },
+  { id: 'username', type: 'STRING', purpose: 'USERNAME', value: second ? 'bob@example.com' : 'ann@example.com' },
+  { id: 'password', type: 'CONCEALED', purpose: 'PASSWORD', value: second ? 'Second pass 77' : 'S3cret pass&"42' },
   { id: 'TOTP_test', type: 'OTP', value: 'otpauth://totp/test?secret=JBSWY3DPEHPK3PXP', totp: '123456' },
 ];
 

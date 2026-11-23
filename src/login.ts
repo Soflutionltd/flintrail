@@ -119,6 +119,21 @@ async function useBrowserFill(page: Page): Promise<{ text: string; last: Locator
   return { text: `Browser password manager: filled ${filled}`, last, codeWanted: !!m.otp };
 }
 
+/** What the sign-in step says about the account: its visible text and field values, and whether it still asks for a username. */
+async function identityOnPage(page: Page): Promise<{ text: string; asksUsername: boolean }> {
+  const frames = liveFrames(page);
+  const marks = await markAll(frames);
+  const texts = await Promise.all(frames.map((f) => f.evaluate(() => {
+    const values = [...document.querySelectorAll('input')]
+      .filter((i) => ['email', 'text', 'hidden', ''].includes(i.type) && i.value.length < 200)
+      .map((i) => i.value);
+    return `${(document.body?.innerText || '').slice(0, 8000)} ${values.join(' ')}`.toLowerCase();
+  }).catch(() => '')));
+  return { text: texts.join(' '), asksUsername: marks.some((m) => !!m?.user) };
+}
+
+const EMAIL = /[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+/g;
+
 /** The account to use from one CLI source: the one asked for, or the only one whose website matches the page. */
 async function findAccount(page: Page, source: CliSource, wanted?: string): Promise<Account | null> {
   const pageHosts = new Set(liveFrames(page).map((f) => hostOf(f.url())));
@@ -138,6 +153,20 @@ async function findAccount(page: Page, source: CliSource, wanted?: string): Prom
     }
     found = here;
   } else {
+    // A step that already names the account (password page after the e-mail page, account chooser) decides
+    // which saved login to use: a password for another account is a failed attempt on the user's account.
+    const { text, asksUsername } = await identityOnPage(page);
+    const named = found.filter((a) => a.username && text.includes(a.username.toLowerCase()));
+    if (named.length) found = named;
+    else if (!asksUsername) {
+      const shown = [...new Set(text.match(EMAIL) ?? [])];
+      if (found.length > 1) {
+        throw new Error(`Several saved logins match and the page does not say which account it is${shown.length ? ` (it shows ${shown.slice(0, 3).join(', ')})` : ''}: pass item with one of these ids: ${found.map(label).join('; ')}`);
+      }
+      if (shown.length && found[0]!.username.includes('@')) {
+        throw new Error(`Refused: the page asks for the password of ${shown.slice(0, 3).join(' or ')}, the saved login ${label(found[0]!)} is another account. Nothing was filled. Pass item to use it anyway.`);
+      }
+    }
     const exact = found.filter((a) => a.hosts.some((h) => pageHosts.has(h)));
     if (exact.length === 1) found = exact;
   }
