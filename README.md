@@ -100,7 +100,7 @@ The extension is the easiest way in: no command-line flags, no debugging port, w
 
 <p align="center"><img src="docs/extension-popup.png" alt="Flintrail extension popup" width="320"></p>
 
-1. **Install.** Download `flintrail-extension-<version>.zip` from the [latest release](https://github.com/Soflutionltd/flintrail/releases/latest), unzip it, open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and pick the folder. (Chrome Web Store listing in progress.)
+1. **Install** from the [Chrome Web Store](https://chromewebstore.google.com/detail/flintrail/amgonogobcfmneginonbkfjlbbnecchp) (works in Chrome, Edge, Brave and Arc). Or download `flintrail-extension-<version>.zip` from the [latest release](https://github.com/Soflutionltd/flintrail/releases/latest), unzip it, open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and pick the folder.
 2. **Run Flintrail in extension mode**, for example in Claude Desktop:
    ```json
    { "mcpServers": { "flintrail": { "command": "npx", "args": ["-y", "flintrail@latest"], "env": { "FLINTRAIL_MODE": "extension" } } } }
