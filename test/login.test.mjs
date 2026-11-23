@@ -100,12 +100,15 @@ test('FLINTRAIL_PASSWORDS=off removes fl_login', async () => {
 const chromeBin = chromium.executablePath();
 test('browser source: the browser\'s own saved password, confirmed by a real click', { skip: !existsSync(chromeBin) && 'Chromium not installed' }, async () => {
   const profile = mkdtempSync(join(tmpdir(), 'flintrail-pm-'));
+  // Linux CI runners forbid the unprivileged user namespaces Chrome's sandbox needs (Playwright passes the same flag).
   const chrome = spawn(chromeBin, ['--headless=new', '--use-mock-keychain', '--password-store=basic', '--remote-debugging-port=0',
+    ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
     `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
   let mcp;
   try {
     const portFile = join(profile, 'DevToolsActivePort');
     for (let i = 0; i < 100 && !existsSync(portFile); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.ok(existsSync(portFile), `Chrome did not start (exit code ${chrome.exitCode})`);
     const cdpUrl = `http://127.0.0.1:${readFileSync(portFile, 'utf8').split('\n')[0]}`;
     // Seed the profile the way the user would by saving a password once.
     const seed = await chromium.connectOverCDP(cdpUrl);
@@ -137,9 +140,12 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
     await assert.rejects(mcp.call('fl_login', { tab: blank }), /No saved login for 127\.0\.0\.1 \(tried browser\)/);
   } finally {
     await mcp?.client.close();
-    const exited = new Promise((r) => chrome.once('exit', r));
-    chrome.kill();
-    await exited;
+    // A Chrome that already exited never emits 'exit' again: waiting for it would hang the suite.
+    if (chrome.exitCode === null && chrome.signalCode === null) {
+      const exited = new Promise((r) => chrome.once('exit', r));
+      chrome.kill();
+      await exited;
+    }
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });
