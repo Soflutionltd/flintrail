@@ -217,6 +217,8 @@ const renderText = (text: string, vars: Record<string, string>, encode: (v: stri
 /** Builds the request to send, each variable escaped for the place it lands in. */
 export function renderShortcut(shortcut: ApiShortcut, vars: Record<string, string>): RenderedRequest {
   const request: RenderedRequest = { method: shortcut.method, url: renderText(shortcut.url, vars, encodeURIComponent) };
+  // An empty value in the first path segment would turn "/{{v}}/x" into "//x", which is another host.
+  if (!request.url.startsWith('/') || request.url.startsWith('//')) throw new Error('The direct request has no valid path with these values (an empty variable?).');
   if (shortcut.json !== undefined) request.body = JSON.stringify(renderJson(shortcut.json, vars));
   else if (shortcut.form) {
     request.body = new URLSearchParams(shortcut.form.map(([k, v]): [string, string] => [k, renderText(v, vars, (x) => x)])).toString();

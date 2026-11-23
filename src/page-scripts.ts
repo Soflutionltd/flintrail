@@ -186,13 +186,17 @@ export async function fetchScript(args: {
   body?: string;
   headers?: Record<string, string>;
   max: number;
+  /** Do not follow a redirect: report it instead. */
+  manualRedirect?: boolean;
 }): Promise<{ status: number; contentType: string; body: string; redirectedTo?: string }> {
   const r = await fetch(args.url, {
     method: args.method,
     headers: args.headers,
     body: args.body,
     credentials: 'include',
+    ...(args.manualRedirect ? { redirect: 'manual' as const } : {}),
   });
+  if (r.type === 'opaqueredirect') return { status: 0, contentType: '', body: '', redirectedTo: '' };
   const text = await r.text();
   return {
     status: r.status,

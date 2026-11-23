@@ -240,7 +240,8 @@ export function getTab(id: string): Page {
 }
 
 export function listTabs(): string[] {
-  return [...tabs].filter(([, p]) => !p.isClosed()).map(([id, p]) => `${id}  [${stateOf(p).browser}]  ${p.url()}`);
+  return [...tabs].filter(([, p]) => !p.isClosed())
+    .map(([id, p]) => `${id}  [${stateOf(p).browser}]  ${domainProblem(p.url()) ? '(on a site outside the allowed list: close it with fl_close)' : p.url()}`);
 }
 
 export async function closeTab(id: string) {
@@ -282,21 +283,53 @@ export async function withNavigation<T>(page: Page, fn: () => Promise<T>): Promi
   }
 }
 
+/** A child frame the agent may read: loaded (a frame still on about:blank may be about to load anything) and on an allowed site. */
+function readableFrame(frame: Frame): boolean {
+  const url = frame.url();
+  if (!config.allowedDomains.length) return true;
+  return /^https?:/.test(url) && !domainProblem(url);
+}
+
+/** Hides the embedded frames the agent may not read, for the time of a screenshot. */
+export async function hideForeignFrames(page: Page): Promise<{ restore: () => Promise<void> }> {
+  const undo: (() => Promise<void>)[] = [];
+  for (const frame of page.frames().slice(1)) {
+    if (frame.isDetached() || readableFrame(frame)) continue;
+    try {
+      const el = await frame.frameElement();
+      const before = await el.evaluate((node) => {
+        const e = node as HTMLElement;
+        const was = e.style.visibility;
+        e.style.setProperty('visibility', 'hidden', 'important');
+        return was;
+      });
+      undo.push(async () => { await el.evaluate((node, was) => { (node as HTMLElement).style.visibility = was; }, before).catch(() => {}); });
+    } catch { /* the frame went away */ }
+  }
+  return { restore: async () => { for (const u of undo) await u(); } };
+}
+
 export async function snapshot(page: Page, opts: { max?: number; text?: number } = {}): Promise<string> {
   const away = domainProblem(page.url());
   if (away) return `Blocked: nothing was read from this tab. ${away} Close it with fl_close.`;
   // An embedded frame of a site outside the user's list is not read either.
-  const frames = page.frames().filter((f, i) => !f.isDetached() && (i === 0 || !domainProblem(f.url()))).slice(0, 6);
+  // Each frame keeps its index in page.frames(): a ref "f2:e1" must lead back to that very frame.
+  const frames = page.frames().map((frame, index) => ({ frame, index }))
+    .filter(({ frame, index }) => !frame.isDetached() && (index === 0 || readableFrame(frame))).slice(0, 6);
   // Frames are read in parallel: one round trip instead of one per frame.
-  const reads = await Promise.all(frames.map((f, i) => f.evaluate(snapshotScript, {
-    max: i === 0 ? opts.max ?? 150 : 40,
-    text: i === 0 ? opts.text ?? 600 : 0,
-    prefix: i === 0 ? '' : `f${i}:`,
+  const reads = await Promise.all(frames.map(({ frame, index }) => frame.evaluate(snapshotScript, {
+    max: index === 0 ? opts.max ?? 150 : 40,
+    text: index === 0 ? opts.text ?? 600 : 0,
+    prefix: index === 0 ? '' : `f${index}:`,
   }).catch(() => null)));
+  // The page may have moved while it was being read: what a tab or frame now outside the list returned is dropped.
+  const moved = domainProblem(page.url());
+  if (moved) return `Blocked: nothing was read from this tab. ${moved} Close it with fl_close.`;
   const head = reads[0];
   const extra: string[] = [];
   reads.forEach((s, i) => {
-    if (i > 0 && s?.lines.length) extra.push(`-- frame ${i} (${frames[i]!.url().slice(0, 80)})`, ...s.lines);
+    const { frame, index } = frames[i]!;
+    if (i > 0 && s?.lines.length && readableFrame(frame)) extra.push(`-- frame ${index} (${frame.url().slice(0, 80)})`, ...s.lines);
   });
   const notes = pageNotes(page);
   if (!head) return [...notes, `URL: ${page.url()} (page not readable yet)`].join('\n');
@@ -311,6 +344,7 @@ function fromRef(page: Page, ref: string): { frame: Frame; key: string } {
   if (m) {
     const frame = page.frames()[Number(m[1])];
     if (!frame) throw new Error(`Frame for ref ${ref} is gone, take a new snapshot.`);
+    if (!readableFrame(frame)) throw new Error(`Blocked: ref ${ref} is in a frame of another site. ${domainProblem(frame.url()) ?? ''}`);
     return { frame, key: m[2]! };
   }
   return { frame: page.mainFrame(), key: ref };
@@ -321,13 +355,21 @@ export function elementByRef(page: Page, ref: string): Locator {
   return frame.locator(`[data-fl="${key}"]`).first();
 }
 
+/** With a list of allowed sites, a selector may not step into an embedded frame: use the frame's refs (f1:e3). */
+export function mainFrameSelector(selector: string): string {
+  if (config.allowedDomains.length && /enter-frame|content-frame/i.test(selector)) {
+    throw new Error('Blocked: with FLINTRAIL_ALLOWED_DOMAINS set, a selector cannot enter a frame. Use the refs of that frame from the snapshot.');
+  }
+  return selector;
+}
+
 function liveLocator(page: Page, a: Action): { loc: Locator; frame: Frame } | null {
   const main = page.mainFrame();
   if (a.ref) {
     const { frame, key } = fromRef(page, a.ref);
     return { loc: frame.locator(`[data-fl="${key}"]`), frame };
   }
-  if (a.selector) return { loc: page.locator(a.selector), frame: main };
+  if (a.selector) return { loc: page.locator(mainFrameSelector(a.selector)), frame: main };
   if (a.role) return { loc: page.getByRole(a.role as Parameters<Page['getByRole']>[0], { name: a.name, exact: !!a.exact }), frame: main };
   if (a.text) return { loc: page.getByText(a.text, { exact: !!a.exact }), frame: main };
   if (a.label) return { loc: page.getByLabel(a.label), frame: main };
@@ -384,6 +426,11 @@ export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record
   if (a.do === 'download') {
     mkdirSync(config.downloadsDir, { recursive: true });
     const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), loc.click({ timeout: TIMEOUT })]);
+    const away = domainProblem(dl.url());
+    if (away) {
+      await dl.cancel().catch(() => {});
+      throw new Error(`Blocked: the file comes from another site, it was not saved. ${away}`);
+    }
     const path = join(config.downloadsDir, dl.suggestedFilename());
     await dl.saveAs(path);
     return { download: path };
@@ -471,9 +518,12 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
         body: fillVars(a.body, vars),
         headers: a.headers,
         max: 20000,
+        // With a list of allowed sites a redirect is not followed: it could carry the request to another site.
+        manualRedirect: config.allowedDomains.length > 0,
       });
-      const away = r.redirectedTo ? domainProblem(r.redirectedTo) : null;
-      if (away) throw new Error(`Blocked: the request was redirected to another site, its answer is not returned. ${away}`);
+      if (r.redirectedTo !== undefined && config.allowedDomains.length) {
+        throw new Error('Blocked: the site answered with a redirect, which is not followed while FLINTRAIL_ALLOWED_DOMAINS is set. Request the final address directly.');
+      }
       if (r.status >= 400) throw new Error(`HTTP ${r.status}: ${r.body.slice(0, 200)}`);
       return r.contentType.includes('json') ? safeJson(r.body) : r.body;
     }

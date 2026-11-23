@@ -1,11 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
+import { domainProblem } from './domains.js';
 import { getRelayClient } from './relay-client.js';
 import { localProfiles, matchProfiles } from './profiles.js';
 import { slug } from './relay-protocol.js';
@@ -145,8 +146,17 @@ export function buildServer(): McpServer {
     try {
       const page = getTab(tab);
       const opts = { type: 'jpeg' as const, quality: 55, scale: 'css' as const };
-      const target = ref ? elementByRef(page, ref) : selector ? page.locator(selector).first() : null;
-      const buf = target ? await target.screenshot({ ...opts, timeout: 8000 }) : await page.screenshot({ ...opts, fullPage: !!full });
+      const target = ref ? elementByRef(page, ref) : selector ? page.locator(mainFrameSelector(selector)).first() : null;
+      // Embedded frames of sites outside the user's list are hidden for the picture.
+      const hidden = await hideForeignFrames(page);
+      let buf: Buffer;
+      try {
+        buf = target ? await target.screenshot({ ...opts, timeout: 8000 }) : await page.screenshot({ ...opts, fullPage: !!full });
+      } finally {
+        await hidden.restore();
+      }
+      // The tab may have moved to another site while the picture was taken.
+      getTab(tab);
       return { content: [{ type: 'image', data: buf.toString('base64'), mimeType: 'image/jpeg' }] };
     } catch (e) {
       return { ...text(redact(`Error: ${(e as Error).message}`)), isError: true };
@@ -278,7 +288,10 @@ export function buildServer(): McpServer {
           if (!tabs) continue;
           try {
             const open = await relay.request('tabs', { key: b.key }) as { origin: string; title: string; window: number; attached: boolean }[];
-            for (const t of open) lines.push(`  window ${t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
+            // Tabs on sites outside the user's list are not described to the agent.
+            const outside = open.filter((t) => t.origin && domainProblem(t.origin)).length;
+            if (outside) lines.push(`  ${outside} tab(s) on sites outside the allowed list, not shown.`);
+            for (const t of open.filter((x) => !x.origin || !domainProblem(x.origin))) lines.push(`  window ${t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
           } catch (e) { lines.push(`  tabs unavailable: ${(e as Error).message}`); }
         }
         // Profiles of this computer with no connected window: fl_open opens them on demand.

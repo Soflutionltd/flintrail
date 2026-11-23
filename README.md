@@ -247,10 +247,12 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 Set `FLINTRAIL_ALLOWED_DOMAINS` to keep the agent on the sites you chose, for example `"FLINTRAIL_ALLOWED_DOMAINS": "example.com,*.example.org"`. With a list:
 
 - `fl_open`, `goto`, a flow's start URL and the `request` action are refused for any other site, before anything is sent.
-- If an allowed address redirects elsewhere, or a click leads to another site, Flintrail stops: the page is not read, no further action runs on it, and the agent is told to close the tab. Embedded frames of other sites are left out of snapshots.
-- `fl_adopt` refuses a tab that is on another site.
+- If an allowed address redirects elsewhere, or a click or a replayed step leads to another site, Flintrail stops: the page is not read, no further action runs on it, and the agent is told to close the tab.
+- Embedded frames of other sites are left out of snapshots, hidden in screenshots, never filled by `fl_login`, and cannot be reached by a ref or a selector.
+- `fl_adopt` refuses a tab that is on another site, a file served by another site is not downloaded, `fl_network` only shows requests to allowed sites, and `request` does not follow redirects.
+- A list Flintrail cannot read (a typo, an empty entry) stops it at startup instead of opening every site.
 
-The list is read from the environment when Flintrail starts: the agent has no tool to change it. It bounds where the agent goes and what it reads, not what the pages themselves load (their scripts, images and analytics still come from wherever the site takes them), and JavaScript run with `eval` or `fl_extract` runs inside an allowed page with that page's own network access.
+The list is read from the environment when Flintrail starts: the agent has no tool to change it. It bounds where the agent goes and what it reads, not what the pages themselves load (their scripts, images and analytics still come from wherever the site takes them), and JavaScript run with `eval` or `fl_extract` runs inside an allowed page with that page's own network access. Desktop tools (`fl_desktop`, `fl_desktop_act`) are not covered: they read whatever app is on screen.
 
 ## Configuration
 
@@ -278,7 +280,7 @@ The list is read from the environment when Flintrail starts: the agent has no to
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 44 end-to-end tests over real MCP, extension included
+npm test                               # build + end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```

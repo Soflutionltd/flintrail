@@ -5,6 +5,7 @@ import type { DesktopStep } from './desktop.js';
 import type { TargetDescriptor } from './page-scripts.js';
 import { BODY_LIMIT, describeShortcut, findShortcut, isWrite } from './api-shortcut.js';
 import { loadFlow, saveFlow, type Flow } from './store.js';
+import { domainProblem } from './domains.js';
 
 export interface ApiCall {
   id: number;
@@ -234,6 +235,8 @@ class Recorder {
 
   apiCalls(filter?: string, limit = 30): string {
     const list = this.calls
+      // Requests to sites outside the user's list are not shown: their bodies and answers belong to those sites.
+      .filter((c) => !domainProblem(c.url))
       .filter((c) => !filter || c.url.includes(filter))
       .filter((c) => !/\.(js|css|png|jpe?g|svg|woff2?)(\?|$)/.test(c.url))
       .slice(-limit);

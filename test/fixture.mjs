@@ -8,6 +8,10 @@ const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8">
 export function startFixture(port = 0) {
   const orders = [];
   const visits = { count: 0 };
+  /** Requests worth checking afterwards, as "host path". */
+  const hits = [];
+  /** Tests flip this to make /switch lead to another site. */
+  const state = { away: '' };
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     const html = (t, b) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page(t, b)); };
@@ -90,6 +94,7 @@ export function startFixture(port = 0) {
       req.on('data', (c) => (b += c));
       req.on('end', () => {
         const o = JSON.parse(b || '{}');
+        hits.push(`${(req.headers.host || '').split(':')[0]} /api/login`);
         const ok = o.email === 'ann@example.com' && o.password === 'S3cret pass&"42' && (o.otp === undefined || o.otp === '123456');
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok, email: o.email }));
@@ -180,7 +185,23 @@ export function startFixture(port = 0) {
     // Ways off the site: a link and a redirect to the address given in ?to=.
     if (url.pathname === '/away') return html('Away', `<h1>Leaving</h1><a id="out" href="${url.searchParams.get('to')}">Partner site</a>`);
     if (url.pathname === '/bounce') { res.writeHead(302, { location: url.searchParams.get('to') }); return res.end(); }
-    if (url.pathname === '/secret') return html('Secret', '<h1>Other site secret</h1>');
+    if (url.pathname === '/secret') return html('Secret', `<h1>Other site secret</h1><a href="/x">Private link one</a>
+      <button type="button" id="ob" onclick="fetch('/clicked')">Other button</button>
+      <script>fetch('/api/secret.json')</script>`);
+    if (url.pathname === '/api/secret.json') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('{"secret":"TOPSECRET-JSON"}'); }
+    if (['/clicked', '/inner-clicked', '/sink'].includes(url.pathname)) { req.resume(); hits.push(`${(req.headers.host || '').split(':')[0]} ${url.pathname}`); res.writeHead(204, { 'access-control-allow-origin': '*' }); return res.end(); }
+    // A page that embeds another site first, then a frame of its own.
+    if (url.pathname === '/embed') return html('Embed', `<h1>Embedding</h1>
+      <iframe id="foreign" src="${url.searchParams.get('to')}" width="400" height="200"></iframe>
+      <iframe id="own" src="/inner" width="400" height="120"></iframe>`);
+    if (url.pathname === '/inner') return html('Inner', `<button type="button" onclick="fetch('/inner-clicked')">Inner button</button>`);
+    // A link whose destination the test changes between recording and replay.
+    if (url.pathname === '/hop') return html('Hop', '<h1>Hop</h1><a id="next" href="/switch">Next</a>');
+    if (url.pathname === '/switch') { res.writeHead(302, { location: state.away || '/landing' }); return res.end(); }
+    if (url.pathname === '/landing') return html('Landing', '<h1>Landed here</h1>');
+    if (url.pathname === '/dl') return html('Files', `<a id="get" href="${url.searchParams.get('to')}">Get the file</a>`);
+    if (url.pathname === '/file') { res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="report.bin"' }); return res.end('FILE-CONTENT'); }
+    if (url.pathname === '/redir307') { req.resume(); res.writeHead(307, { location: url.searchParams.get('to') }); return res.end(); }
     // A page that reports the visit as soon as it loads, like most sites with audience measurement.
     if (url.pathname === '/measured') return html('Measured', `<h1>Measured</h1>
       <label>Plate <input name="plate"></label><button type="button" id="go">Order</button><p id="out"></p>
@@ -200,5 +221,5 @@ export function startFixture(port = 0) {
     }
     res.writeHead(404).end();
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, url: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, hits, state, url: `http://127.0.0.1:${server.address().port}` })));
 }

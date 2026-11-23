@@ -3,14 +3,21 @@ import { join } from 'node:path';
 
 /** "example.com" is that host only, "*.example.com" is example.com and all its subdomains. Ports are ignored. */
 export function parseDomains(list: string): string[] {
-  return list.split(',').map((raw) => {
+  const rules: string[] = [];
+  const bad: string[] = [];
+  for (const raw of list.split(',')) {
     const rule = raw.trim().toLowerCase();
-    if (!rule) return '';
+    if (!rule) continue;
     const wildcard = rule.startsWith('*.');
     // Accept a pasted URL or host:port, keep the host.
-    const host = (wildcard ? rule.slice(2) : rule).replace(/^[a-z]+:\/\//, '').replace(/[/:?#].*$/, '').replace(/\.$/, '');
-    return host ? (wildcard ? `*.${host}` : host) : '';
-  }).filter(Boolean);
+    const host = (wildcard ? rule.slice(2) : rule).replace(/^https?:\/\//, '').replace(/[/:?#].*$/, '').replace(/\.$/, '');
+    // A name with a dot, an IPv4 address or "localhost": anything else is a typo, and a typo must not open every site.
+    if (/^(localhost|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)$/.test(host)) rules.push(wildcard ? `*.${host}` : host);
+    else bad.push(raw.trim());
+  }
+  if (bad.length) throw new Error(`FLINTRAIL_ALLOWED_DOMAINS: cannot read ${bad.map((b) => `"${b}"`).join(', ')}. Use host names such as example.com or *.example.com, comma separated.`);
+  if (list.trim() && !rules.length) throw new Error('FLINTRAIL_ALLOWED_DOMAINS is set but lists no site.');
+  return rules;
 }
 
 const env = process.env;

@@ -6,6 +6,8 @@ import { runDesktopStep, snapshotApp } from './desktop.js';
 import { signIn } from './login.js';
 import { describeShortcut, renderShortcut } from './api-shortcut.js';
 import { fetchScript } from './page-scripts.js';
+import { config } from './config.js';
+import { assertAllowed } from './domains.js';
 import { loadFlow, saveFlow } from './store.js';
 
 export interface RunResult {
@@ -47,12 +49,12 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
     });
     let answer: { status: number; contentType: string; body: string; redirectedTo?: string };
     try {
-      answer = await (await web()).evaluate(fetchScript, { ...request, max: 20000 });
+      answer = await (await web()).evaluate(fetchScript, { ...request, max: 20000, manualRedirect: config.allowedDomains.length > 0 });
     } catch (e) {
       return stopped((e as Error).message.split('\n')[0]!);
     }
     // A redirect (expired session sent to the sign-in page) or a page instead of the recorded JSON is not a success.
-    if (answer.redirectedTo) return stopped(`the site redirected it to ${answer.redirectedTo.slice(0, 160)} (session expired?)`);
+    if (answer.redirectedTo !== undefined) return stopped(`the site redirected it${answer.redirectedTo ? ` to ${answer.redirectedTo.slice(0, 160)}` : ''} (session expired?)`);
     if (answer.status >= 200 && answer.status < 300 && flow.api.answersJson && !answer.contentType.includes('json')) {
       return stopped(`the site answered ${answer.contentType || 'no content type'} where it answered JSON when recorded`);
     }
@@ -81,6 +83,8 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
         continue;
       }
       const p = await web();
+      // A step may have led to a site outside the user's list: stop there, do and read nothing more.
+      assertAllowed(p.url());
       if (s.do === 'login') {
         await signIn(p, { item: s.item, source: s.source, submit: s.submit });
         continue;
