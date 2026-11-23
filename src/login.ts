@@ -100,7 +100,7 @@ const markAll = (frames: Frame[]) => Promise.all(frames.map((f) => f.evaluate(ma
 const field = (frame: Frame, k: string) => frame.locator(`[data-fl-login="${k}"]`).first();
 
 /** The browser's password manager already filled the form: confirm with a real click so the page can read it. */
-async function useBrowserFill(page: Page): Promise<{ text: string; last: Locator; codeWanted: boolean } | null> {
+async function useBrowserFill(page: Page, expected?: string): Promise<{ text: string; last: Locator; codeWanted: boolean } | null> {
   const frames = liveFrames(page);
   let marks = await markAll(frames);
   if (!marks.some((m) => m?.user || m?.pass)) return null;
@@ -112,6 +112,16 @@ async function useBrowserFill(page: Page): Promise<{ text: string; last: Locator
   if (i < 0) return null;
   const m = marks[i]!;
   const frame = frames[i]!;
+  if (expected) {
+    // The browser chose the login by itself: check it is the account the user asked for before anything is submitted.
+    const typed = m.user ? (await field(frame, 'user').inputValue({ timeout: TIMEOUT })).trim().toLowerCase() : '';
+    const ok = typed ? typed === expected : namedOnPage(expected, (await identityOnPage(page)).text);
+    if (!ok) {
+      throw new Error(typed
+        ? `Refused: the login the browser filled here is for ${typed.slice(0, 80)}, the account asked for is ${expected}. Nothing was submitted.`
+        : `Refused: the page does not show that the login the browser filled here is for ${expected}. Nothing was submitted.`);
+    }
+  }
   const last = field(frame, m.pass ? 'pass' : 'user');
   await last.click({ timeout: TIMEOUT });
   if (m.pass) remember(await field(frame, 'pass').inputValue({ timeout: TIMEOUT }), Infinity);
@@ -159,7 +169,7 @@ function namedOnPage(username: string, text: string): boolean {
 }
 
 /** The account to use from one CLI source: the one asked for, or the only one whose website matches the page. */
-async function findAccount(page: Page, source: CliSource, wanted?: string): Promise<Account | null> {
+async function findAccount(page: Page, source: CliSource, wanted?: string, expected?: string, others: string[] = []): Promise<Account | null> {
   const pageHosts = new Set(liveFrames(page).map((f) => hostOf(f.url())));
   const pageSites = new Set([...pageHosts].map(siteOf));
   const w = wanted?.toLowerCase();
@@ -169,6 +179,15 @@ async function findAccount(page: Page, source: CliSource, wanted?: string): Prom
   let found = matchOf(await source.accounts(page.url(), false));
   if (!found.length) found = matchOf(await source.accounts(page.url(), true));
   if (!found.length) return null;
+  if (expected) {
+    // The user said whose account this is: a saved login for anyone else is never used, even if it is the only one.
+    const same = found.filter((a) => a.username.trim().toLowerCase() === expected);
+    if (!same.length) {
+      others.push(...found.filter((a) => sitesOf(a).some((s) => pageSites.has(s))).map(label));
+      return null;
+    }
+    found = same;
+  }
   if (w) {
     const here = found.filter((a) => sitesOf(a).some((s) => pageSites.has(s)));
     if (!here.length) {
@@ -252,7 +271,9 @@ async function useAccount(page: Page, account: Account) {
  * Signs in on the visible step of a sign-in form. Sources are tried in the configured order; item (an ID, title or
  * username) or source restrict the choice. Returns what to record in a flow: the source and the account ref, never a secret.
  */
-export async function signIn(page: Page, opts: { item?: string; source?: string; submit?: boolean }): Promise<{ text: string; source: string; item?: string }> {
+export async function signIn(page: Page, opts: { item?: string; source?: string; submit?: boolean; account?: string }): Promise<{ text: string; source: string; item?: string }> {
+  const expected = opts.account?.trim().toLowerCase() || undefined;
+  const others: string[] = [];
   const all = getSources().filter((s) => !opts.source || s.kind === opts.source);
   if (!all.length) throw new Error(opts.source ? `Password source "${opts.source}" is not configured in FLINTRAIL_PASSWORDS.` : 'fl_login is off (FLINTRAIL_PASSWORDS=off).');
   let done: { text: string; last: Locator; codeWanted: boolean } | null = null;
@@ -261,10 +282,10 @@ export async function signIn(page: Page, opts: { item?: string; source?: string;
   for (const s of all) {
     if (s.kind === 'browser') {
       if (opts.item) continue;
-      done = await useBrowserFill(page);
+      done = await useBrowserFill(page, expected);
       source = 'browser';
     } else {
-      const account = await findAccount(page, s, opts.item);
+      const account = await findAccount(page, s, opts.item, expected, others);
       if (!account) continue;
       done = await useAccount(page, account);
       source = account.source;
@@ -275,6 +296,9 @@ export async function signIn(page: Page, opts: { item?: string; source?: string;
   if (!done) {
     const tried = all.map((s) => s.kind).join(', ');
     const sites = [...new Set(liveFrames(page).map((f) => siteOf(hostOf(f.url()))))].join(', ');
+    if (expected) {
+      throw new Error(`Refused: no saved login for ${expected.slice(0, 80)} on ${sites} (tried ${tried}).${others.length ? ` The logins saved for this site are for other accounts: ${[...new Set(others)].slice(0, 5).join('; ')}.` : ''} Nothing was filled: ask the user, do not sign in with another account.`);
+    }
     throw new Error(opts.item
       ? `No saved login "${opts.item}" in ${tried}.`
       : `No saved login for ${sites} (tried ${tried}), or no sign-in field visible yet. Open the sign-in form first; for the browser source, sign in by hand once and let the browser save the password; or add a password manager to FLINTRAIL_PASSWORDS (1password, bitwarden, command).`);

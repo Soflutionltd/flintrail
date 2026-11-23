@@ -126,6 +126,14 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
     assert.match(done, /Welcome ann@example.com/);
     assert.ok(!leaks(out + done + (await mcp.call('fl_network', { filter: '/api/login' }))), 'what the browser filled is masked too');
 
+    // The browser's own saved login is for ann: asked for another account, nothing is submitted.
+    const other = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
+    const sentBefore = site.hits.filter((h) => h.endsWith('/api/login')).length;
+    await assert.rejects(mcp.call('fl_login', { tab: other, account: 'carol@example.com' }), /Refused: the login the browser filled here is for ann@example\.com, the account asked for is carol@example\.com\. Nothing was submitted/);
+    assert.equal(site.hits.filter((h) => h.endsWith('/api/login')).length, sentBefore);
+    assert.match(await mcp.call('fl_login', { tab: other, account: 'ANN@example.com' }), /Browser password manager: filled username, password, submitted/);
+    await mcp.call('fl_close', { tab: other });
+
     await mcp.call('fl_record_start', { name: 'browser-signin' });
     const rec = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
     await mcp.call('fl_login', { tab: rec });
@@ -219,6 +227,44 @@ describe('a sign-in step that already names the account', () => {
       assert.equal(long.sent, 0);
       assert.ok(long.out.length < 700, `message of ${long.out.length} characters`);
     } finally { await mcp.client.close(); }
+  });
+
+  test('asked for one account, a saved login for another is never used', async () => {
+    const posts = () => site.hits.filter((h) => h.endsWith('/api/login')).length + site.attempts.length;
+    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
+    try {
+      // A plain sign-in form that names nobody, and the only saved login is ann's.
+      const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+      const before = posts();
+      await assert.rejects(mcp.call('fl_login', { tab, account: 'carol@example.com' }),
+        /Refused: no saved login for carol@example\.com on 127\.0\.0\.1 .*other accounts: "Fixture shop" \(ann@example\.com.*Nothing was filled/);
+      await assert.rejects(mcp.call('fl_login', { tab, account: 'carol@example.com', item: 'fixture1' }), /Refused: no saved login for carol@example\.com/);
+      const typed = await mcp.call('fl_extract', { tab, js: 'return [f.email.value, f.password.value.length]' });
+      assert.match(typed, /\["",0\]/);
+      assert.equal(posts(), before);
+
+      // The account asked for is the saved one, whatever the case: it signs in, and a recorded flow keeps the lock.
+      await mcp.call('fl_record_start', { name: 'locked-signin', startUrl: `${site.url}/login` });
+      assert.match(await mcp.call('fl_login', { tab, account: 'Ann@Example.com' }), /filled username, password, one-time code, submitted/);
+      await mcp.call('fl_record_stop');
+      assert.match(await mcp.call('fl_flow', { name: 'locked-signin' }), /"account": "Ann@Example\.com"/);
+      await mcp.call('fl_close', { tab });
+    } finally { await mcp.client.close(); }
+
+    // Two saved logins: asking for bob on a step that names ann fills nothing.
+    const two = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_SECOND: '1' }));
+    try {
+      const tab = tabOf(await two.call('fl_open', { url: `${site.url}/login-step?as=${encodeURIComponent('ann@example.com')}` }));
+      const before = posts();
+      await assert.rejects(two.call('fl_login', { tab, account: 'bob@example.com' }), /Refused: the page asks for the password of ann@example\.com/);
+      assert.equal(posts(), before);
+      await two.call('fl_close', { tab });
+      const own = tabOf(await two.call('fl_open', { url: `${site.url}/login-step?as=${encodeURIComponent('bob@example.com')}` }));
+      assert.match(await two.call('fl_login', { tab: own, account: 'bob@example.com' }), /bob@example\.com.*filled password, submitted/);
+      await two.call('fl_act', { tab: own, snapshot: false, actions: [{ do: 'wait', text: 'Step done' }] });
+      assert.deepEqual(site.attempts.at(-1), { email: 'bob@example.com', password: 'Second pass 77' });
+      await two.call('fl_close', { tab: own });
+    } finally { await two.client.close(); }
   });
 
   test('a single saved login is not used for another account the page names', async () => {

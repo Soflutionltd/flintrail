@@ -43,6 +43,8 @@ export interface Action {
   /** login steps: password source, login ID in that source, and whether to press Enter after filling. */
   source?: string;
   item?: string;
+  /** login: the account the user asked for; a saved login for another account is refused. */
+  account?: string;
   submit?: boolean;
 }
 

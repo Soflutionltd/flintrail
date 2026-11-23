@@ -204,6 +204,8 @@ Logins from a CLI source are only filled in frames whose domain matches the logi
 "env": { "FLINTRAIL_PASSWORDS": "browser,1password" }
 ```
 
+Whose account: when a sign-in step already names the account (the password page after the e-mail page), `fl_login` uses the saved login of that account and fills nothing if none matches. When you tell the agent whose account to work on, it passes `account` (a username or e-mail) and `fl_login` then refuses a saved login for anyone else, even when it is the only one for the site, instead of signing in to your own account by mistake.
+
 Not supported: Apple Passwords (iCloud Keychain) has no command-line access. One-time codes sent by SMS, e-mail or phone prompt: `fl_login` says so and the agent asks you.
 
 ## Desktop apps
