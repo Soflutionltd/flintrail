@@ -21,6 +21,16 @@ export function parseDomains(list: string): string[] {
 }
 
 const env = process.env;
+
+/** A list that cannot be read stops Flintrail with one clear line, never with every site open. */
+function allowedDomainsOrExit(): string[] {
+  try {
+    return parseDomains(env.FLINTRAIL_ALLOWED_DOMAINS || '');
+  } catch (e) {
+    process.stderr.write(`${(e as Error).message}\n`);
+    process.exit(1);
+  }
+}
 const port = Number(env.FLINTRAIL_PORT || 9222);
 const home = env.FLINTRAIL_HOME || join(homedir(), '.flintrail');
 
@@ -36,7 +46,7 @@ export const config = {
   /** user-data-dir of a dedicated automation profile in a regular Chrome (e.g. one 1Password can connect to). */
   dedicatedProfile: env.FLINTRAIL_DEDICATED_PROFILE || '',
   /** Sites the agent may open, read and send requests to. Empty: any site. */
-  allowedDomains: parseDomains(env.FLINTRAIL_ALLOWED_DOMAINS || ''),
+  allowedDomains: allowedDomainsOrExit(),
   home,
   flowsDir: join(home, 'flows'),
   profileDir: env.FLINTRAIL_PROFILE || join(home, 'profile'),

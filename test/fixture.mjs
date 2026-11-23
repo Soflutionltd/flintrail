@@ -201,6 +201,7 @@ export function startFixture(port = 0) {
     if (url.pathname === '/landing') return html('Landing', '<h1>Landed here</h1>');
     if (url.pathname === '/dl') return html('Files', `<a id="get" href="${url.searchParams.get('to')}">Get the file</a>`);
     if (url.pathname === '/file') { res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="report.bin"' }); return res.end('FILE-CONTENT'); }
+    if (url.pathname === '/based') return html('Based', `<base href="${url.searchParams.get('to')}"><h1>Based</h1>`);
     if (url.pathname === '/redir307') { req.resume(); res.writeHead(307, { location: url.searchParams.get('to') }); return res.end(); }
     // A page that reports the visit as soon as it loads, like most sites with audience measurement.
     if (url.pathname === '/measured') return html('Measured', `<h1>Measured</h1>

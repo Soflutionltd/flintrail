@@ -252,7 +252,7 @@ Set `FLINTRAIL_ALLOWED_DOMAINS` to keep the agent on the sites you chose, for ex
 - `fl_adopt` refuses a tab that is on another site, a file served by another site is not downloaded, `fl_network` only shows requests to allowed sites, and `request` does not follow redirects.
 - A list Flintrail cannot read (a typo, an empty entry) stops it at startup instead of opening every site.
 
-The list is read from the environment when Flintrail starts: the agent has no tool to change it. It bounds where the agent goes and what it reads, not what the pages themselves load (their scripts, images and analytics still come from wherever the site takes them), and JavaScript run with `eval` or `fl_extract` runs inside an allowed page with that page's own network access. Desktop tools (`fl_desktop`, `fl_desktop_act`) are not covered: they read whatever app is on screen.
+The list is read from the environment when Flintrail starts: the agent has no tool to change it. It bounds where the agent goes and what it reads, not what the pages themselves load (their scripts, images and analytics still come from wherever the site takes them), and JavaScript run with `eval` or `fl_extract` runs inside an allowed page with that page's own network access. Console messages (`fl_console`) include what embedded frames log. Desktop tools (`fl_desktop`, `fl_desktop_act`) are not covered: they read whatever app is on screen. Host names only: an internationalised name goes in its punycode form, IPv6 addresses are not supported.
 
 ## Configuration
 

@@ -7,7 +7,7 @@ import { signIn } from './login.js';
 import { describeShortcut, renderShortcut } from './api-shortcut.js';
 import { fetchScript } from './page-scripts.js';
 import { config } from './config.js';
-import { assertAllowed } from './domains.js';
+import { assertAllowed, domainProblem } from './domains.js';
 import { loadFlow, saveFlow } from './store.js';
 
 export interface RunResult {
@@ -42,6 +42,8 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
   } else if (opts.direct && flow.api) {
     const what = describeShortcut(flow.api);
     const request = renderShortcut(flow.api, vars);
+    // With a list, send the full address: a <base> tag in the page cannot point the path elsewhere.
+    if (config.allowedDomains.length) request.url = new URL(request.url, (await web()).url()).href;
     const stopped = (why: string): RunResult => ({
       ok: false, tab: id, ms: Date.now() - t0, outputs,
       // A request that may have reached the site is never sent again through the UI: it could write twice.
@@ -124,7 +126,7 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
     tail = last?.do === 'desktop' && lastApp
       ? await snapshotApp(lastApp, { max: 60 }).catch(() => '')
       : page ? await snapshot(page, { text: 400 }) : '';
-  } else if (page) tail = `URL: ${(page as Page).url()}`;
+  } else if (page) tail = domainProblem((page as Page).url()) ? 'Blocked: the tab ended on a site outside the allowed list. Close it with fl_close.' : `URL: ${(page as Page).url()}`;
   const where = id ? `, tab ${id}` : '';
   return { ok: true, tab: id, ms, outputs, text: `OK "${name}" in ${ms} ms (${flow.steps.length} steps${where}).\n${outputs.join('\n')}\n\n${tail}` };
 }

@@ -289,9 +289,10 @@ export function buildServer(): McpServer {
           try {
             const open = await relay.request('tabs', { key: b.key }) as { origin: string; title: string; window: number; attached: boolean }[];
             // Tabs on sites outside the user's list are not described to the agent.
-            const outside = open.filter((t) => t.origin && domainProblem(t.origin)).length;
+            const offList = (t: { origin: string }) => config.allowedDomains.length > 0 && (!t.origin || !!domainProblem(t.origin));
+            const outside = open.filter(offList).length;
             if (outside) lines.push(`  ${outside} tab(s) on sites outside the allowed list, not shown.`);
-            for (const t of open.filter((x) => !x.origin || !domainProblem(x.origin))) lines.push(`  window ${t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
+            for (const t of open.filter((x) => !offList(x))) lines.push(`  window ${t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
           } catch (e) { lines.push(`  tabs unavailable: ${(e as Error).message}`); }
         }
         // Profiles of this computer with no connected window: fl_open opens them on demand.

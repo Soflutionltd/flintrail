@@ -383,6 +383,8 @@ const unstableId = (id: string) => /\d{3,}|[a-f0-9]{8,}|:/.test(id);
 /** Finds a recorded element again, trying the most stable clues first. */
 export async function resolveTarget(page: Page, d: TargetDescriptor, timeout = 7000): Promise<Locator | null> {
   const frame = (d.frameUrl && page.frames().find((f) => f.url().split('?')[0] === d.frameUrl)) || page.mainFrame();
+  // A flow recorded without the list may target a frame of a site the list now excludes.
+  if (frame !== page.mainFrame() && !readableFrame(frame)) throw new Error(`Blocked: this step targets a frame of another site. ${domainProblem(frame.url()) ?? ''}`);
   const c: Locator[] = [];
   if (d.testid) c.push(frame.locator(`[data-testid="${quote(d.testid)}"],[data-test="${quote(d.testid)}"],[data-qa="${quote(d.testid)}"]`));
   if (d.id && !unstableId(d.id)) c.push(frame.locator(`[id="${quote(d.id)}"]`));
@@ -426,7 +428,9 @@ export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record
   if (a.do === 'download') {
     mkdirSync(config.downloadsDir, { recursive: true });
     const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), loc.click({ timeout: TIMEOUT })]);
-    const away = domainProblem(dl.url());
+    // A file the allowed page builds itself (blob:, data:) has no other site behind it.
+    const source = dl.url().replace(/^blob:/, '');
+    const away = source.startsWith('data:') ? null : domainProblem(source);
     if (away) {
       await dl.cancel().catch(() => {});
       throw new Error(`Blocked: the file comes from another site, it was not saved. ${away}`);
@@ -514,7 +518,8 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
       assertAllowed(absolute);
       const r = await page.evaluate(fetchScript, {
         method: (a.method || 'GET').toUpperCase(),
-        url: fillVars(a.url, vars)!,
+        // With a list, the checked address is the one sent: a <base> tag in the page cannot point a relative URL elsewhere.
+        url: config.allowedDomains.length ? absolute : target,
         body: fillVars(a.body, vars),
         headers: a.headers,
         max: 20000,

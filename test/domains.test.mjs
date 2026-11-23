@@ -192,3 +192,34 @@ test('a list that cannot be read stops Flintrail instead of opening every site',
     assert.match(r.stderr, /FLINTRAIL_ALLOWED_DOMAINS/);
   }
 });
+
+test('a flow recorded without the list cannot act in a frame the list now excludes', async () => {
+  const env = testEnv();
+  const free = await connect(env);
+  const page = `${site.url}/embed?to=${enc(other + '/secret')}`;
+  try {
+    await free.call('fl_record_start', { name: 'inframe' });
+    const tab = tabOf(await free.call('fl_open', { url: page }));
+    const snap = await free.call('fl_act', { tab, actions: [{ do: 'wait', ms: 800 }] });
+    const ref = /\[(f\d+:e\d+)\] button "Other button"/.exec(snap)?.[1];
+    assert.ok(ref, 'without a list the embedded frame is readable');
+    await free.call('fl_act', { tab, snapshot: false, actions: [{ do: 'click', ref }] });
+    await free.call('fl_record_stop');
+  } finally { await free.client.close(); }
+
+  const strict = await connect({ ...env, FLINTRAIL_ALLOWED_DOMAINS: '127.0.0.1' });
+  try {
+    const before = site.hits.length;
+    const run = await strict.call('fl_run', { name: 'inframe' }).catch((e) => e.message);
+    assert.match(run, /FAILED at step 1.*Blocked: this step targets a frame of another site/s);
+    assert.deepEqual(site.hits.slice(before), []);
+  } finally { await strict.client.close(); }
+});
+
+test('a <base> tag cannot point a relative request at another site', async () => {
+  const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/based?to=${enc(other + '/')}`, text: 0 }));
+  const before = site.hits.length;
+  await mcp.call('fl_act', { tab, snapshot: false, actions: [{ do: 'request', url: '/sink' }, { do: 'request', url: 'sink' }] });
+  assert.deepEqual(site.hits.slice(before), ['127.0.0.1 /sink', '127.0.0.1 /sink']);
+  await mcp.call('fl_close', { tab });
+});
