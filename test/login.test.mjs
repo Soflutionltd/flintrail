@@ -187,6 +187,40 @@ describe('a sign-in step that already names the account', () => {
     } finally { await mcp.client.close(); }
   });
 
+  test('look-alike, hidden and labelled account names are told apart', async () => {
+    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
+    const attempt = async (query) => {
+      const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login-step?${query}` }));
+      const before = site.attempts.length;
+      const out = await mcp.call('fl_login', { tab }).catch((e) => e.message);
+      await mcp.call('fl_act', { tab, snapshot: false, actions: [{ do: 'wait', ms: 250 }] });
+      await mcp.call('fl_close', { tab });
+      return { out, sent: site.attempts.length - before };
+    };
+    const as = (v) => `as=${encodeURIComponent(v)}`;
+    try {
+      // The saved login is ann@example.com. Another account whose name contains it is not it.
+      assert.deepEqual((await attempt(as('joann@example.com'))).sent, 0);
+      assert.deepEqual((await attempt(as('ann@example.com.evil.test'))).sent, 0);
+      // Partly hidden names: the one that fits is used, the one that cannot fit is refused.
+      assert.deepEqual((await attempt(as('a••@example.com'))).sent, 1);
+      assert.deepEqual((await attempt(as('an*@example.com'))).sent, 1);
+      const hidden = await attempt(as('c••••@example.com'));
+      assert.match(hidden.out, /Refused: the page asks for the password of c••••@example\.com/);
+      assert.equal(hidden.sent, 0);
+      assert.deepEqual((await attempt(as('a••@other.test'))).sent, 0);
+      // Named in a label rather than in the text.
+      assert.deepEqual((await attempt('label=' + encodeURIComponent('ann@example.com'))).sent, 1);
+      assert.deepEqual((await attempt('label=' + encodeURIComponent('carol@example.com'))).sent, 0);
+      // A support address in the footer is not an account: the step that names nobody still signs in.
+      assert.deepEqual((await attempt('support=1')).sent, 1);
+      // A very long address read on the page is cut in the message.
+      const long = await attempt(as(`${'x'.repeat(400)}@example.com`));
+      assert.equal(long.sent, 0);
+      assert.ok(long.out.length < 700, `message of ${long.out.length} characters`);
+    } finally { await mcp.client.close(); }
+  });
+
   test('a single saved login is not used for another account the page names', async () => {
     const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
     try {

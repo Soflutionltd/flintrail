@@ -92,7 +92,9 @@ export function startFixture(port = 0) {
         };
       </script>`);
     // Second step of a sign-in in two pages: the account is already chosen and shown, only the password is asked.
-    if (url.pathname === '/login-step') return html('Password', `<h1>Welcome</h1><p id="who">${url.searchParams.get('as')}</p>
+    if (url.pathname === '/login-step') return html('Password', `<h1>Welcome</h1><p id="who">${url.searchParams.get('as') || ''}</p>
+      ${url.searchParams.get('label') ? `<button type="button" aria-label="Account: ${url.searchParams.get('label')}">A</button>` : ''}
+      ${url.searchParams.get('support') ? '<footer>Need help? <a href="mailto:help@example.com">help@example.com</a></footer>' : ''}
       <form id="f"><label>Password <input name="password" type="password" autocomplete="current-password"></label><button>Next</button></form>
       <p id="out"></p>
       <script>
