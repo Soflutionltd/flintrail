@@ -90,9 +90,11 @@ Clients connect to `http://host:8931/mcp` with `Authorization: Bearer <token>`. 
 |---|---|---|
 | `attach` (default) | Your desktop. Keep your logged-in sessions. | Connects over CDP to a dedicated **Chrome for Testing**. On macOS Flintrail finds it, restarts it with a local debugging port if needed (tabs are restored) and opens its own tabs in the background. |
 | `launch` | Servers, CI, Docker. | `FLINTRAIL_MODE=launch` starts Chromium with a persistent profile in `~/.flintrail/profile`, headless by default. |
-| `extension` | Anyone, any Chromium browser, no debugging port. | `FLINTRAIL_MODE=extension` and the Flintrail extension installed. See below. |
+| `extension` | Anyone, any Chromium browser, no debugging port. | `FLINTRAIL_MODE=extension`: no dedicated browser, only the user's browsers through the extension. See below. |
 
-Flintrail refuses to attach to a personal browser (Brave, Edge, Opera, or on macOS anything that is not Chrome for Testing) unless `FLINTRAIL_ALLOW_ANY_BROWSER=1`. Your everyday browser stays yours.
+In every mode, the browsers where the Flintrail extension is installed are also reachable, several at once: `fl_open` takes `browser: "brave"`, `"chrome"`, `"edge"`... (`fl_extension` lists them), and without it uses the dedicated browser (`"agent"`).
+
+Flintrail refuses to attach to a personal browser (Brave, Edge, Opera, or on macOS anything that is not Chrome for Testing) unless `FLINTRAIL_ALLOW_ANY_BROWSER=1`. Your everyday browser stays yours. To drive a regular Chrome instead (for example so a password manager can connect to it), start it with its own `--user-data-dir` and set `FLINTRAIL_DEDICATED_PROFILE` to that same path: only a browser running that profile is accepted.
 
 ## Browser extension
 
@@ -101,13 +103,17 @@ The extension is the easiest way in: no command-line flags, no debugging port, w
 <p align="center"><img src="docs/extension-popup.png" alt="Flintrail extension popup" width="320"></p>
 
 1. **Install** from the [Chrome Web Store](https://chromewebstore.google.com/detail/flintrail/amgonogobcfmneginonbkfjlbbnecchp) (works in Chrome, Edge, Brave and Arc). Or download `flintrail-extension-<version>.zip` from the [latest release](https://github.com/Soflutionltd/flintrail/releases/latest), unzip it, open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and pick the folder.
-2. **Run Flintrail in extension mode**, for example in Claude Desktop:
+2. **Run Flintrail**, for example in Claude Desktop (any mode works; `extension` if you have no dedicated browser):
    ```json
    { "mcpServers": { "flintrail": { "command": "npx", "args": ["-y", "flintrail@latest"], "env": { "FLINTRAIL_MODE": "extension" } } } }
    ```
-3. **Connect.** Click the Flintrail icon, paste the token from `~/.flintrail/token`, click *Connect*. The extension reconnects by itself afterwards.
+3. **That's it.** The extension pairs with Flintrail by itself and reconnects whenever both are running. Ask the agent to "open this in Brave" and it drives Brave.
 
-How it works: Flintrail starts a relay on `127.0.0.1:8932`. The extension connects to it with the token and executes CDP commands with `chrome.debugger`, one tab at a time. Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged. The agent only sees tabs it opened itself or tabs you share with *Share with agent*. Chrome shows its "started debugging this browser" bar while a tab is driven, by design.
+Pairing: at startup Flintrail registers a native messaging host (`com.soflution.flintrail`) in every Chromium browser installed for your user account (macOS and Linux). The browser lets only the Flintrail extension start it, and it hands the extension the relay token, so you never copy it. On Windows, or with `FLINTRAIL_PAIRING=off`, paste the token from `~/.flintrail/token` in the extension popup instead.
+
+How it works: Flintrail starts a relay on `127.0.0.1:8932`. Each extension connects to it with the token and executes CDP commands with `chrome.debugger`, one tab at a time. Playwright sees an ordinary CDP browser, so every tool, recording and replay works unchanged. The agent only sees tabs it opened itself or tabs you share with *Share with agent*.
+
+Agent window: the agent never opens tabs in the window you work in. Click *Use this window for the agent* in the popup of the window you leave to it; without a choice, or once that window is closed, it opens a window of its own in the background. Chrome shows its "started debugging this browser" bar in every window while a tab is driven (the browser enforces this, extensions cannot hide it), so the extension releases tabs left unused for 5 minutes; the agent takes one back with `fl_adopt`.
 
 ### Teach by demonstration
 
@@ -138,10 +144,12 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_run_many` | Replay a flow for many variable sets in parallel tabs. |
 | `fl_flows` / `fl_flow` | List flows, inspect one. |
 | `fl_flow_set_var` | Turn a recorded value into a `{{variable}}`, for flows taught by demonstration. |
-| `fl_extension` | Extension connection status. |
+| `fl_extension` | Browsers Flintrail can drive: the dedicated one and every connected user browser, by name. |
 | `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand. |
 | `fl_login` | Sign in with your saved password (browser password manager, 1Password, Bitwarden or your own command). Flintrail fills it, the agent never sees it. See [Sign in](#sign-in). |
 | `fl_tabs` / `fl_close` | Manage tabs. |
+| `fl_desktop` | Snapshot a native desktop app (Finder, Mail, Preview, Notes, any app) with `[dN]` refs, through the OS accessibility tree. Without `app`, lists running apps. See [Desktop apps](#desktop-apps). |
+| `fl_desktop_act` | Run many actions on a desktop app in one call: `click`, `dblclick`, `rightclick`, `fill`, `type`, `clear`, `press`, `select`, `check`, `uncheck`, `toggle`, `expand`, `collapse`, `focus`, `scroll`, `get`, `wait`, `launch`, `quit`. Recorded like browser actions. |
 
 ### Example
 
@@ -192,6 +200,27 @@ Logins from a CLI source are only filled in frames whose domain matches the logi
 
 Not supported: Apple Passwords (iCloud Keychain) has no command-line access. One-time codes sent by SMS, e-mail or phone prompt: `fl_login` says so and the agent asks you.
 
+## Desktop apps
+
+Flintrail also drives native apps on macOS, Windows and Linux, through the operating system's accessibility tree rather than screenshots, using [agent-desktop](https://github.com/vercel-labs/agent-desktop) (Apache-2.0, installed as an optional dependency). It is headless: actions go through the accessibility API, the pointer does not move and no window comes to the front, so you keep working while the agent does.
+
+The same record and replay engine applies, so **one flow can mix web and desktop steps**: download an invoice on a supplier's site, then file it in a desktop app, replayed in about a second with no model in the loop.
+
+```jsonc
+{ "tool": "fl_desktop", "app": "Calculator" }          // localized, English name or bundle id
+{ "tool": "fl_desktop_act", "app": "Calculator", "actions": [
+  { "do": "click", "ref": "d6" },
+  { "do": "click", "role": "button", "name": "Ajouter" },
+  { "do": "fill",  "ref": "d12", "value": "invoice", "var": "query" },
+  { "do": "press", "key": "return" },
+  { "do": "get",   "ref": "d1" }
+]}
+```
+
+Each recorded desktop step stores the app and a fingerprint of the element: native automation id when it is stable (ids that carry live state are skipped), then role and exact accessible name, and its rank among equal matches. Replay tries the id first, then role and name, and waits for the element. A stale ref during a live session is healed the same way, once.
+
+macOS asks for the Accessibility permission on first use, for the app that runs Flintrail (Claude, Cursor, a terminal). On Linux it needs `at-spi2-core` in the graphical session. To use your own build, set `FLINTRAIL_AGENT_DESKTOP` to its path. Flows with desktop steps run one at a time in `fl_run_many`, since they share the app.
+
 ## How replay finds elements again
 
 Each recorded step stores a fingerprint, not a fragile selector: test id, stable id, `name` attribute, ARIA role and accessible name, placeholder, link target, visible text and a short CSS path. At replay time Flintrail tries them from most to least stable and takes the first that matches exactly one element, waiting only for that element, never for the network to go idle.
@@ -203,6 +232,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 - Flows are plain JSON in `~/.flintrail/flows`, easy to review and version.
 - The HTTP transport requires a bearer token (constant-time comparison) and binds to `127.0.0.1` by default.
 - `eval` and `request` run inside the page with the page's own privileges, nothing more.
+- The pairing host only answers the Flintrail extension ID (the browser enforces `allowed_origins`), and the relay only listens on `127.0.0.1`.
 
 ## Configuration
 
@@ -210,6 +240,10 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 |---|---|---|
 | `FLINTRAIL_MODE` | `attach` | `attach`, `launch` or `extension` |
 | `FLINTRAIL_RELAY_PORT` | `8932` | Local port the extension connects to |
+| `FLINTRAIL_RELAY` | on | `off` to not start the extension relay |
+| `FLINTRAIL_PAIRING` | on | `off` to not register the pairing host in the browsers |
+| `FLINTRAIL_EXTENSION_IDS` | | Extra extension IDs allowed to pair, comma separated |
+| `FLINTRAIL_DEDICATED_PROFILE` | | `--user-data-dir` of a regular Chrome accepted as the dedicated browser |
 | `FLINTRAIL_CDP_URL` | `http://127.0.0.1:9222` | Browser to attach to |
 | `FLINTRAIL_PORT` | `9222` | Debugging port used when Flintrail starts Chrome for Testing |
 | `FLINTRAIL_CHROME` | auto | Browser executable |
@@ -224,7 +258,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 ```bash
 npm install
 npx playwright-core install chromium   # once, for tests
-npm test                               # build + 26 end-to-end tests over real MCP, extension included
+npm test                               # build + 33 end-to-end tests over real MCP, extension included
 npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```
@@ -240,9 +274,11 @@ npm run bench                          # benchmark vs Playwright MCP
 
 Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,4 s avec Playwright MCP et 0,11 s avec Flintrail en mode API.
 
-L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, on colle le jeton, et l'agent pilote le navigateur. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
+L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, elle se jumelle toute seule avec Flintrail, et l'agent pilote le navigateur qu'on lui nomme (Brave, Chrome, Edge…), plusieurs à la fois. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
 
 Pour se connecter, l'agent utilise `fl_login` avec vos mots de passe habituels : ceux enregistrés dans le navigateur (sans réglage), ou 1Password, Bitwarden ou tout autre gestionnaire par sa ligne de commande. Flintrail remplit le formulaire lui-même, l'agent ne voit jamais ni le mot de passe ni le code.
+
+Flintrail pilote aussi les applications du bureau (Finder, Mail, Aperçu, Notes, n'importe quelle app) avec `fl_desktop` et `fl_desktop_act`, par l'arbre d'accessibilité du système et non par captures d'écran, sans bouger la souris ni passer la fenêtre au premier plan. Un même parcours enregistré peut enchaîner des étapes web et des étapes desktop, et se rejouer sans IA.
 
 ## License
 

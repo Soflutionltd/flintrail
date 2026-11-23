@@ -31,26 +31,60 @@ async function waitFor(fn, ms = 10000) {
 before(async () => {
   site = await startFixture();
   const relayPort = await freePort();
-  mcp = await connect(testEnv({ FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(relayPort), FLINTRAIL_TOKEN: token }));
-  // The "user's browser": a normal Chromium with the Flintrail extension installed.
-  ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'flintrail-ext-')), {
+  // The "user's browser" profile. Flintrail registers its pairing host in it at startup, so the
+  // extension fetches the token by itself: nobody pastes anything.
+  const userDataDir = mkdtempSync(join(tmpdir(), 'flintrail-ext-'));
+  mcp = await connect(testEnv({
+    FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(relayPort), FLINTRAIL_TOKEN: token,
+    FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir, FLINTRAIL_EXTENSION_WAIT: '1500',
+  }));
+  // A normal Chromium with the Flintrail extension installed.
+  ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: true,
     // Extensions need the full Chromium (new headless), not the headless shell.
     ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }),
     args: [`--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`],
   });
   sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
-  await sw.evaluate(async ([token, port]) => {
-    await chrome.storage.local.set({ token, port, autoConnect: true });
-    await connect();
-  }, [token, relayPort]);
-  await waitFor(async () => /Extension connected/.test(await mcp.call('fl_extension')));
+  await waitFor(async () => /Extension connected/.test(await mcp.call('fl_extension')), 20000);
 });
 
 after(async () => {
   await ctx?.close();
   await mcp?.client.close();
   site?.server.close();
+});
+
+test('the extension pairs by itself and is listed by name', async () => {
+  assert.match(sw.url(), /^chrome-extension:\/\/hgkglidmccenjlhdcplcpkgbadonplnb\//);
+  const { paired } = await sw.evaluate(() => chrome.storage.local.get('paired'));
+  assert.equal(paired, true);
+  assert.match(await mcp.call('fl_extension'), /^chromium: Extension connected/m);
+  await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'safari' }), /Browser "safari" is not connected to Flintrail\. Connected: chromium/);
+  const snap = await mcp.call('fl_open', { url: site.url, browser: 'chromium', text: 0 });
+  assert.match(snap, /^Tab t\d+ \[chromium\]/);
+  await mcp.call('fl_close', { tab: /Tab (t\d+)/.exec(snap)[1] });
+});
+
+test('agent tabs open only in the agent window, never in the user\'s window', async () => {
+  // The user works in one window and picks another one for the agent.
+  const userWindow = await sw.evaluate(async () => (await chrome.windows.getAll())[0].id);
+  const agentWindowId = await sw.evaluate(async () => (await chrome.windows.create({ focused: false, url: 'about:blank' })).id);
+  await sw.evaluate((id) => chrome.storage.session.set({ agentWindow: id }), agentWindowId);
+  const snap = await mcp.call('fl_open', { url: site.url, text: 0 });
+  const tab = /Tab (t\d+)/.exec(snap)[1];
+  const windowOf = () => sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '/*' })).map((t) => t.windowId), site.url);
+  assert.deepEqual(await windowOf(), [agentWindowId]);
+  assert.notEqual(agentWindowId, userWindow);
+  await mcp.call('fl_close', { tab });
+
+  // The agent window was closed: the agent opens a window of its own instead of using the user's.
+  await sw.evaluate((id) => chrome.windows.remove(id), agentWindowId);
+  const again = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url, text: 0 }))[1];
+  const [w] = await windowOf();
+  assert.notEqual(w, userWindow);
+  assert.notEqual(w, agentWindowId);
+  await mcp.call('fl_close', { tab: again });
 });
 
 test('agent drives the browser through the extension', async () => {

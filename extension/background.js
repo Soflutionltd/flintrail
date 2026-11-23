@@ -35,16 +35,51 @@ function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
-async function connect() {
-  const { token, port = 8932 } = await store.get(['token', 'port']);
-  if (!token) { await setStatus('idle', 'Paste the token from ~/.flintrail/token'); return; }
+const HOST_NAME = 'com.soflution.flintrail';
+
+// Ask the local Flintrail for its token through native messaging. The browser only starts the host
+// for this extension's ID, so no other extension or web page can read the token this way.
+async function pair() {
+  try {
+    const r = await chrome.runtime.sendNativeMessage(HOST_NAME, { type: 'pair' });
+    if (r?.type !== 'paired' || !r.token) return false;
+    await store.set({ token: r.token, port: Number(r.port) || 8932, paired: true });
+    return true;
+  } catch {
+    return false; // Flintrail never ran on this computer, or pairing is turned off: manual token still works.
+  }
+}
+
+// Stable per-browser id, so a reconnecting browser keeps its name on the Flintrail side.
+async function instanceId() {
+  const { instance } = await store.get('instance');
+  if (instance) return instance;
+  const fresh = crypto.randomUUID();
+  await store.set({ instance: fresh });
+  return fresh;
+}
+
+// One connection attempt at a time: install, startup and the alarm can all fire together, and two
+// parallel attempts would open two sockets that answer each other's requests.
+let connecting = null;
+function connect() {
+  if (!connecting) connecting = openConnection().finally(() => { connecting = null; });
+  return connecting;
+}
+
+async function openConnection() {
+  let { token } = await store.get('token');
+  if (!token && await pair()) ({ token } = await store.get('token'));
+  if (!token) { await setStatus('idle', 'Start Flintrail once on this computer, or paste the token from ~/.flintrail/token'); return; }
+  const { port = 8932 } = await store.get('port');
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  const instance = await instanceId();
   await setStatus('connecting');
   const sock = new WebSocket(`ws://127.0.0.1:${port}/extension`);
   ws = sock;
   sock.onopen = () => {
     sock.send(JSON.stringify({
-      type: 'hello', token, version: VERSION, userAgent: navigator.userAgent,
+      type: 'hello', token, version: VERSION, userAgent: navigator.userAgent, instance,
       browser: (navigator.userAgentData?.brands || []).map((b) => b.brand).filter((b) => !/Not.A.Brand|Chromium/i.test(b))[0] || 'Chromium',
     }));
   };
@@ -55,6 +90,8 @@ async function connect() {
     clearInterval(pingTimer);
     for (const tabId of [...attached]) await detach(tabId);
     const bad = ev.code === 4401;
+    // The token changed on the Flintrail side (new install, new computer): pair again, then retry.
+    if (bad && await pair() && (await store.get('token')).token !== token) { connect(); return; }
     await setStatus(bad ? 'error' : 'disconnected', bad ? 'Wrong token' : 'Flintrail is not running (it starts with your agent).');
   };
   sock.onerror = () => {};
@@ -106,24 +143,57 @@ async function attach(tabId) {
     attached.add(tabId);
     refreshBadge();
   }
+  lastUsed.set(tabId, Date.now());
   return targetInfoFor(tabId);
 }
 
 async function detach(tabId) {
+  lastUsed.delete(tabId);
   if (!attached.delete(tabId)) return;
   try { await chrome.debugger.detach({ tabId }); } catch { /* already gone */ }
   refreshBadge();
 }
 
+// ---------- agent window ----------
+// The agent opens its tabs only in the window the user picked in the popup, never in the window the
+// user works in. Window ids change when the browser restarts, so the choice lives in session storage
+// and is forgotten on restart rather than pointing at the wrong window.
+async function agentWindow() {
+  const { agentWindow: id } = await chrome.storage.session.get('agentWindow');
+  if (typeof id === 'number') {
+    try { await chrome.windows.get(id); return { windowId: id }; } catch { /* closed since */ }
+  }
+  // No window picked, or it was closed: open one for the agent, without taking the focus.
+  const win = await chrome.windows.create({ focused: false, url: 'about:blank' });
+  await chrome.storage.session.set({ agentWindow: win.id });
+  return { windowId: win.id, blankTabId: win.tabs?.[0]?.id };
+}
+
+// The debugging bar shows in every window while any tab is driven: release tabs left idle.
+const IDLE_RELEASE_MS = 5 * 60 * 1000;
+const lastUsed = new Map();
+async function releaseIdleTabs() {
+  const now = Date.now();
+  for (const tabId of [...attached]) {
+    if (now - (lastUsed.get(tabId) ?? now) < IDLE_RELEASE_MS) continue;
+    await detach(tabId);
+    send({ type: 'detached', tabId });
+  }
+}
+
 async function handle(method, p) {
   switch (method) {
     case 'createTab': {
-      const tab = await chrome.tabs.create({ url: 'about:blank', active: !p.background });
+      const { windowId, blankTabId } = await agentWindow();
+      const tab = blankTabId !== undefined
+        ? await chrome.tabs.get(blankTabId)
+        : await chrome.tabs.create({ windowId, url: 'about:blank', active: !p.background });
       const targetInfo = await attach(tab.id);
       if (p.url && p.url !== 'about:blank') chrome.tabs.update(tab.id, { url: p.url });
       return { tabId: tab.id, targetInfo };
     }
     case 'send':
+      lastUsed.set(p.tabId, Date.now());
       return chrome.debugger.sendCommand(p.sessionId ? { tabId: p.tabId, sessionId: p.sessionId } : { tabId: p.tabId }, p.method, p.params);
     case 'closeTab':
       await chrome.tabs.remove(p.tabId).catch(() => {});
@@ -215,7 +285,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return reply({ recording: !!recording && sender.tab?.id === recording.tabId });
       }
       case 'connect':
-        await store.set({ token: msg.token.trim(), port: Number(msg.port) || 8932, autoConnect: true });
+        // An empty token field means "pair automatically".
+        if (msg.token.trim()) await store.set({ token: msg.token.trim(), port: Number(msg.port) || 8932, autoConnect: true });
+        else { await chrome.storage.local.remove('token'); await store.set({ autoConnect: true }); }
         ws?.close();
         ws = null;
         await connect();
@@ -237,6 +309,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return reply({ text: 'Tab released.' });
       case 'isShared':
         return reply({ shared: attached.has(msg.tabId) });
+      case 'setAgentWindow':
+        await chrome.storage.session.set({ agentWindow: msg.windowId });
+        return reply({ text: 'The agent will open its tabs in this window only.' });
+      case 'getAgentWindow': {
+        const { agentWindow: id } = await chrome.storage.session.get('agentWindow');
+        return reply({ windowId: typeof id === 'number' ? id : null });
+      }
       case 'demoStart':
         return reply({ text: await startDemo(msg.name, msg.tab) });
       case 'demoStop':
@@ -248,14 +327,19 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 
 // Reconnect automatically: on browser start, on install, and every 30 s while Flintrail is down.
 async function autoConnect() {
-  const { autoConnect: on = true, token } = await store.get(['autoConnect', 'token']);
-  if (on && token) connect();
+  const { autoConnect: on = true } = await store.get('autoConnect');
+  if (on) connect();
 }
-chrome.runtime.onStartup.addListener(autoConnect);
+const ensureAlarm = () => chrome.alarms.create('flintrail-reconnect', { periodInMinutes: 0.5 });
+chrome.runtime.onStartup.addListener(() => { ensureAlarm(); autoConnect(); });
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.storage.local.remove('recording');
-  chrome.alarms.create('flintrail-reconnect', { periodInMinutes: 0.5 });
+  ensureAlarm();
   autoConnect();
 });
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'flintrail-reconnect') autoConnect(); });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name !== 'flintrail-reconnect') return;
+  autoConnect();
+  releaseIdleTabs();
+});
 autoConnect();

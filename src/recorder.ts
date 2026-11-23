@@ -1,6 +1,7 @@
 // Records live actions into a replayable flow, and keeps a short log of the site's own API calls.
 import type { Page, Request, Response } from 'playwright-core';
 import type { Action, Step } from './engine.js';
+import type { DesktopStep } from './desktop.js';
 import type { TargetDescriptor } from './page-scripts.js';
 import { loadFlow, saveFlow, type Flow } from './store.js';
 
@@ -49,7 +50,7 @@ class Recorder {
       repairFrom,
       base,
     };
-    return `Recording "${name}" started${repairFrom !== undefined ? ` (repairing from step ${repairFrom})` : ''}. Every fl_open / fl_act from now on is captured.`;
+    return `Recording "${name}" started${repairFrom !== undefined ? ` (repairing from step ${repairFrom})` : ''}. Every fl_open / fl_act / fl_desktop_act from now on is captured.`;
   }
 
   stop(save: boolean): string {
@@ -80,6 +81,11 @@ class Recorder {
 
   addStep(_page: Page, step: Step) {
     if (this.rec) this.rec.steps.push(step);
+  }
+
+  /** A step on a native desktop app (fl_desktop_act), stored with its element fingerprint. */
+  addDesktopStep(step: DesktopStep) {
+    if (this.rec) this.rec.steps.push({ do: 'desktop', desktop: step });
   }
 
   /** Returns a warning when a value was deliberately not recorded. */

@@ -1,8 +1,9 @@
-// Extension relay. The Flintrail browser extension connects here over a local WebSocket and drives tabs
-// with chrome.debugger. Playwright connects to a private CDP endpoint on the same server, and the relay
-// translates between the two, so the whole engine works unchanged on top of any Chromium browser.
+// Extension relay. Flintrail browser extensions connect here over a local WebSocket and drive tabs with
+// chrome.debugger. Several browsers can be connected at once (Brave, Chrome, Edge...): each one gets its
+// own private CDP endpoint, and the relay translates between Playwright and that extension, so the whole
+// engine works unchanged on top of any Chromium browser.
 //
-//   Playwright ──CDP──▶ /cdp/<secret> ──▶ relay ──JSON──▶ /extension ──▶ chrome.debugger (one tab each)
+//   Playwright ──CDP──▶ /cdp/<secret> ──▶ bridge "brave" ──JSON──▶ /extension ──▶ chrome.debugger
 //
 // Only tabs that Flintrail opened, or that the user explicitly shared from the extension, are visible.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -25,14 +26,30 @@ interface CdpMessage {
   sessionId?: string;
 }
 
+interface Hello {
+  token?: string;
+  version?: string;
+  userAgent?: string;
+  browser?: string;
+  instance?: string;
+}
+
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 
 const BROWSER_SESSION = 'flintrail-browser';
 
-export class ExtensionRelay {
+/** "Google Chrome" -> chrome, "Microsoft Edge" -> edge, "Brave" -> brave. */
+export function browserKey(brand: string | undefined): string {
+  const b = (brand || 'chromium').toLowerCase();
+  if (b.includes('edge')) return 'edge';
+  if (b.includes('chrome')) return 'chrome';
+  if (b.includes('opera') || b.includes('opr')) return 'opera';
+  return b.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'chromium';
+}
+
+/** One connected browser extension and the Playwright session driving it. */
+export class ExtensionBridge {
   readonly cdpPath = '/cdp/' + randomBytes(16).toString('hex');
-  private server: Server | null = null;
-  private ext: WebSocket | null = null;
   private cdp: WebSocket | null = null;
   private pending = new Map<number, Pending>();
   private nextId = 1;
@@ -41,87 +58,49 @@ export class ExtensionRelay {
   private tabsById = new Map<number, Tab>();
   private childSessions = new Map<string, number>();
   private autoAttach = false;
-  private waiters: (() => void)[] = [];
-  info: { userAgent?: string; version?: string; browser?: string } = {};
+  private closeListeners: (() => void)[] = [];
 
-  constructor(private readonly token: string, readonly port: number) {}
+  constructor(readonly key: string, readonly instance: string, readonly info: Hello, private ext: WebSocket, private readonly port: number) {}
 
-  get connected() { return !!this.ext && this.ext.readyState === WebSocket.OPEN; }
+  get connected() { return this.ext.readyState === WebSocket.OPEN; }
   get cdpUrl() { return `ws://127.0.0.1:${this.port}${this.cdpPath}`; }
 
-  start(): Promise<void> {
-    const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
-    this.server = createServer((_req, res) => { res.writeHead(404).end(); });
-    this.server.on('upgrade', (req, socket, head) => {
-      const path = (req.url || '').split('?')[0];
-      if (path === '/extension') wss.handleUpgrade(req, socket, head, (ws) => this.onExtension(ws));
-      else if (path === this.cdpPath) wss.handleUpgrade(req, socket, head, (ws) => this.onCdp(ws));
-      else socket.destroy();
-    });
-    return new Promise((resolve, reject) => {
-      this.server!.once('error', reject);
-      this.server!.listen(this.port, '127.0.0.1', () => resolve());
-    });
+  onClose(fn: () => void) { this.closeListeners.push(fn); }
+
+  /** The extension reconnected (service worker restart): keep the name, swap the socket. */
+  replaceSocket(ws: WebSocket) {
+    const old = this.ext;
+    this.ext = ws;
+    old.close(4000, 'replaced');
   }
 
-  waitForExtension(ms: number): Promise<void> {
-    if (this.connected) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error(
-        `The Flintrail extension is not connected. Open it in your browser, paste the token from ${config.home}/token and click Connect.`)), ms);
-      this.waiters.push(() => { clearTimeout(t); resolve(); });
-    });
-  }
-
-  // ---------- extension side ----------
-
-  private onExtension(ws: WebSocket) {
-    let authed = false;
-    const kick = setTimeout(() => { if (!authed) ws.close(4401, 'no hello'); }, 5000);
-    ws.on('message', async (raw: RawData) => {
-      let m: any;
-      try { m = JSON.parse(String(raw)); } catch { return; }
-      if (!authed) {
-        if (m.type !== 'hello' || !this.checkToken(String(m.token || ''))) { ws.close(4401, 'bad token'); return; }
-        authed = true;
-        clearTimeout(kick);
-        if (this.ext && this.ext !== ws) this.ext.close(4000, 'replaced');
-        this.ext = ws;
-        this.info = { userAgent: m.userAgent, version: m.version, browser: m.browser };
-        ws.send(JSON.stringify({ type: 'welcome', recording: recorder.status() }));
-        this.waiters.splice(0).forEach((w) => w());
-        return;
-      }
-      await this.onExtensionMessage(m);
-    });
-    ws.on('close', () => {
-      if (this.ext !== ws) return;
-      this.ext = null;
-      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('extension disconnected')); }
-      this.pending.clear();
-      this.tabsBySession.clear();
-      this.tabsById.clear();
-      this.childSessions.clear();
-      this.cdp?.close();
-    });
-  }
-
-  private checkToken(t: string) {
-    const a = Buffer.from(t), b = Buffer.from(this.token);
-    return a.length === b.length && timingSafeEqual(a, b);
+  closed(ws: WebSocket) {
+    if (this.ext !== ws) return false;
+    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('extension disconnected')); }
+    this.pending.clear();
+    this.tabsBySession.clear();
+    this.tabsById.clear();
+    this.childSessions.clear();
+    this.cdp?.close();
+    this.closeListeners.splice(0).forEach((fn) => fn());
+    return true;
   }
 
   private request(method: string, params: Record<string, unknown>, timeout = 30000): Promise<any> {
-    if (!this.connected) return Promise.reject(new Error('extension not connected'));
+    if (!this.connected) return Promise.reject(new Error(`${this.key}: extension not connected`));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`extension timeout on ${method}`)); }, timeout);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${this.key}: extension timeout on ${method}`)); }, timeout);
       this.pending.set(id, { resolve, reject, timer });
-      this.ext!.send(JSON.stringify({ id, method, params }));
+      this.ext.send(JSON.stringify({ id, method, params }));
     });
   }
 
-  private async onExtensionMessage(m: any) {
+  send(message: Record<string, unknown>) {
+    if (this.connected) this.ext.send(JSON.stringify(message));
+  }
+
+  async onExtensionMessage(m: any) {
     if (typeof m.id === 'number' && this.pending.has(m.id)) {
       const p = this.pending.get(m.id)!;
       this.pending.delete(m.id);
@@ -143,10 +122,10 @@ export class ExtensionRelay {
         try {
           text = m.action === 'start' ? recorder.start(m.name, 'Recorded by demonstration', m.url) : recorder.stop(true);
         } catch (e) { text = `Error: ${(e as Error).message}`; }
-        this.ext?.send(JSON.stringify({ type: 'demoResult', reqId: m.reqId, text }));
+        this.send({ type: 'demoResult', reqId: m.reqId, text });
         return;
       }
-      case 'ping': this.ext?.send(JSON.stringify({ type: 'pong' })); return;
+      case 'ping': this.send({ type: 'pong' }); return;
     }
   }
 
@@ -189,7 +168,7 @@ export class ExtensionRelay {
 
   // ---------- Playwright side ----------
 
-  private onCdp(ws: WebSocket) {
+  onCdp(ws: WebSocket) {
     if (this.cdp) this.cdp.close();
     this.cdp = ws;
     this.autoAttach = false;
@@ -255,6 +234,103 @@ export class ExtensionRelay {
         // Browser-level domains (downloads, permissions, window bounds) are not exposed to extensions.
         return {};
     }
+  }
+}
+
+export class ExtensionRelay {
+  private server: Server | null = null;
+  private bridges = new Map<string, ExtensionBridge>();
+  private waiters: (() => void)[] = [];
+
+  constructor(private readonly token: string, readonly port: number) {}
+
+  /** Connected browsers, by name (brave, chrome, edge, chrome-2 ...). */
+  list(): ExtensionBridge[] {
+    return [...this.bridges.values()].filter((b) => b.connected);
+  }
+
+  get(key: string): ExtensionBridge | undefined {
+    const b = this.bridges.get(key.toLowerCase());
+    return b?.connected ? b : undefined;
+  }
+
+  get connected() { return this.list().length > 0; }
+
+  start(): Promise<void> {
+    const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
+    this.server = createServer((_req, res) => { res.writeHead(404).end(); });
+    this.server.on('upgrade', (req, socket, head) => {
+      const path = (req.url || '').split('?')[0];
+      if (path === '/extension') { wss.handleUpgrade(req, socket, head, (ws) => this.onExtension(ws)); return; }
+      const bridge = [...this.bridges.values()].find((b) => b.cdpPath === path);
+      if (bridge) wss.handleUpgrade(req, socket, head, (ws) => bridge.onCdp(ws));
+      else socket.destroy();
+    });
+    return new Promise((resolve, reject) => {
+      this.server!.once('error', reject);
+      this.server!.listen(this.port, '127.0.0.1', () => resolve());
+    });
+  }
+
+  /** Waits for a browser by name, or for any browser when no name is given. */
+  waitFor(key: string | undefined, ms: number): Promise<ExtensionBridge> {
+    const pick = () => (key ? this.get(key) : this.list()[0]);
+    const found = pick();
+    if (found) return Promise.resolve(found);
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const t = setTimeout(() => {
+        done = true;
+        const names = this.list().map((b) => b.key);
+        reject(new Error(key
+          ? `Browser "${key}" is not connected to Flintrail.${names.length ? ` Connected: ${names.join(', ')}.` : ''} Open it: the Flintrail extension connects by itself.`
+          : 'No browser is connected to Flintrail. Open a browser where the Flintrail extension is installed: it connects by itself.'));
+      }, ms);
+      const check = () => {
+        if (done) return;
+        const b = pick();
+        if (b) { done = true; clearTimeout(t); resolve(b); } else this.waiters.push(check);
+      };
+      this.waiters.push(check);
+    });
+  }
+
+  private onExtension(ws: WebSocket) {
+    let bridge: ExtensionBridge | null = null;
+    const kick = setTimeout(() => { if (!bridge) ws.close(4401, 'no hello'); }, 5000);
+    ws.on('message', async (raw: RawData) => {
+      let m: any;
+      try { m = JSON.parse(String(raw)); } catch { return; }
+      if (!bridge) {
+        if (m.type !== 'hello' || !this.checkToken(String(m.token || ''))) { ws.close(4401, 'bad token'); return; }
+        clearTimeout(kick);
+        bridge = this.register(ws, m as Hello);
+        ws.send(JSON.stringify({ type: 'welcome', name: bridge.key, recording: recorder.status() }));
+        this.waiters.splice(0).forEach((w) => w());
+        return;
+      }
+      await bridge.onExtensionMessage(m);
+    });
+    ws.on('close', () => {
+      if (bridge?.closed(ws)) this.bridges.delete(bridge.key);
+    });
+  }
+
+  private register(ws: WebSocket, hello: Hello): ExtensionBridge {
+    const instance = String(hello.instance || randomBytes(8).toString('hex'));
+    const same = [...this.bridges.values()].find((b) => b.instance === instance);
+    if (same) { same.replaceSocket(ws); return same; }
+    const base = browserKey(hello.browser);
+    let key = base;
+    for (let n = 2; this.bridges.has(key); n++) key = `${base}-${n}`;
+    const bridge = new ExtensionBridge(key, instance, hello, ws, this.port);
+    this.bridges.set(key, bridge);
+    return bridge;
+  }
+
+  private checkToken(t: string) {
+    const a = Buffer.from(t), b = Buffer.from(this.token);
+    return a.length === b.length && timingSafeEqual(a, b);
   }
 }
 

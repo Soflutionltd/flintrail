@@ -60,5 +60,8 @@
   },
   "bugs": {
     "url": "https://github.com/Soflutionltd/flintrail/issues"
+  },
+  "optionalDependencies": {
+    "agent-desktop": "^1.0.2"
   }
 }
