@@ -108,6 +108,7 @@ async function openConnection() {
     if (!welcomed && m.type === 'welcome') {
       if (m.mac !== await hmac(token, 'relay:' + cnonce)) { sock.close(); await setStatus('error', 'The program on the relay port is not Flintrail.'); return; }
       welcomed = true;
+      quickRetries = 0;
       await store.set({ name: m.name || '' });
     }
     if (welcomed) onMessage(m);
@@ -122,6 +123,7 @@ async function openConnection() {
     if (bad && await pair() && (await store.get('token')).token !== token) { connect(); return; }
     if (!welcomed && (await store.get('status')).status === 'error') return;
     await setStatus(bad ? 'error' : 'disconnected', bad ? 'Wrong token' : 'Flintrail is not running (it starts with your agent).');
+    if (!bad) retrySoon();
   };
   sock.onerror = () => {};
 }
@@ -386,6 +388,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   })();
   return true;
 });
+
+// The relay is a detached daemon that takes a moment to listen when Flintrail starts, or when a newer
+// Flintrail replaces it: retry after 1, 2, 4, 8 and 16 s before leaving it to the 30 s alarm.
+let quickRetries = 0;
+function retrySoon() {
+  if (quickRetries < 5) setTimeout(autoConnect, 1000 * 2 ** quickRetries++);
+}
 
 // Reconnect automatically: on browser start, on install, and every 30 s while Flintrail is down.
 async function autoConnect() {
