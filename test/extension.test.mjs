@@ -168,7 +168,7 @@ test('upload, dialogs and coordinate clicks work through the extension too', asy
   const up = await mcp.call('fl_open', { url: site.url + '/upload', text: 0 });
   const upTab = /Tab (t\d+)/.exec(up)[1];
   assert.match(await mcp.call('fl_act', { tab: upTab, actions: [{ do: 'upload', selector: '#file', files: [file] }] }), /Got releve\.csv:3/);
-  assert.match(await mcp.call('fl_act', { tab: upTab, actions: [{ do: 'upload', ref: refOf(up, /Choose files/), files: [file] }] }), /Got releve\.csv:3/);
+  assert.match(await mcp.call('fl_act', { tab: upTab, diff: false, actions: [{ do: 'upload', ref: refOf(up, /Choose files/), files: [file] }] }), /Got releve\.csv:3/);
   await mcp.call('fl_close', { tab: upTab });
 
   const dlg = await mcp.call('fl_open', { url: site.url + '/dialogs', text: 0 });

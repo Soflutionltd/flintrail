@@ -1,6 +1,7 @@
 // Signs in on the open sign-in form. Either the browser's own password manager has filled it (Flintrail only
 // confirms with a real click), or Flintrail reads a password manager CLI and fills the form itself. Either way
 // the agent only gets the list of fields filled: passwords and one-time codes are masked in every tool result.
+import { domainProblem } from './domains.js';
 import type { Frame, Locator, Page } from 'playwright-core';
 import { config } from './config.js';
 import { withNavigation } from './engine.js';
@@ -45,7 +46,8 @@ export function siteOf(host: string): string {
 let sources: SourceSpec[] | null = null;
 const getSources = () => (sources ??= parseSources(config.passwordSources));
 
-const liveFrames = (page: Page) => page.frames().filter((f) => !f.isDetached() && /^https?:/.test(f.url()));
+// A sign-in form embedded from a site outside the user's list is never filled.
+const liveFrames = (page: Page) => page.frames().filter((f) => !f.isDetached() && /^https?:/.test(f.url()) && !domainProblem(f.url()));
 const label = (a: Account) => `"${a.title}" (${[a.username, a.where, `id ${a.ref}`].filter(Boolean).join(', ')})`;
 const sitesOf = (a: Account) => [...new Set(a.hosts.map(siteOf))];
 

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config.js';
+import type { ApiShortcut } from './api-shortcut.js';
 import type { Step } from './engine.js';
 
 export interface Flow {
@@ -9,6 +10,8 @@ export interface Flow {
   startUrl: string | null;
   vars: string[];
   steps: Step[];
+  /** The single write request the UI steps end on, when it can replace them (fl_run direct). */
+  api?: ApiShortcut;
   createdAt: string;
   updatedAt: string;
   runs: number;

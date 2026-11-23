@@ -114,7 +114,7 @@ test('upload through a button that opens the file chooser, or straight into a hi
   const tab = /Tab (t\d+)/.exec(snap)[1];
   const viaButton = await mcp.call('fl_act', { tab, actions: [{ do: 'upload', ref: refOf(snap, /Choose files/), files: [a, b] }] });
   assert.match(viaButton, /Got releve\.csv:28,facture\.pdf:8/);
-  const viaInput = await mcp.call('fl_act', { tab, actions: [{ do: 'upload', selector: '#file', files: [b] }] });
+  const viaInput = await mcp.call('fl_act', { tab, diff: false, actions: [{ do: 'upload', selector: '#file', files: [b] }] });
   assert.match(viaInput, /Got facture\.pdf:8/);
   const missing = await mcp.call('fl_act', { tab, actions: [{ do: 'upload', selector: '#file', files: [join(dir, 'nope.csv')] }] });
   assert.match(missing, /FAILED upload: File not found/);

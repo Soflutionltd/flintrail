@@ -1,14 +1,16 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
+import { domainProblem } from './domains.js';
 import { getRelayClient } from './relay-client.js';
 import { localProfiles, matchProfiles } from './profiles.js';
 import { slug } from './relay-protocol.js';
+import { bindVariable, describeShortcut } from './api-shortcut.js';
 import { listFlows, loadFlow, saveFlow } from './store.js';
 
 import { VERSION } from './version.js';
@@ -96,9 +98,9 @@ export function buildServer(): McpServer {
   }));
 
   s.registerTool('fl_act', {
-    description: 'Run SEVERAL actions in one call (fill a whole form, click, submit, wait, extract) and get one fresh snapshot back. Always batch as many actions as possible: one call beats ten.',
-    inputSchema: { tab: z.string(), actions: z.array(actionSchema).min(1), snapshot: z.boolean().optional(), ...snapOpts },
-  }, guard(async ({ tab, actions, snapshot: snap, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, text: t, max })));
+    description: 'Run SEVERAL actions in one call (fill a whole form, click, submit, wait, extract) and get one fresh snapshot back. Always batch as many actions as possible: one call beats ten. When the tab stays on the same page, the snapshot only lists what changed since the last one you received (+ new, ~ changed, - gone): every other element is still there with the same ref. Pass diff=false, or call fl_snapshot, for the whole page.',
+    inputSchema: { tab: z.string(), actions: z.array(actionSchema).min(1), snapshot: z.boolean().optional(), diff: z.boolean().optional().describe('false: always the whole page (default: only the changes when the page is the same).'), ...snapOpts },
+  }, guard(async ({ tab, actions, snapshot: snap, diff, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, diff, text: t, max })));
 
   if (config.passwordSources.length) s.registerTool('fl_login', {
     description: 'Sign in on the open sign-in form with the user\'s saved password: from the browser\'s own password manager, or from a password manager CLI the user configured (1Password, Bitwarden, custom command). Flintrail fills username, password and one-time code itself; the secrets never reach you. A CLI login is only filled when the page domain matches its website. On a multi-step sign-in (e-mail page, then password page), call it on each step. While recording, the flow stores the source and login ID, never a secret.',
@@ -118,9 +120,9 @@ export function buildServer(): McpServer {
   }));
 
   s.registerTool('fl_snapshot', {
-    description: 'Re-read a tab: interactive elements with refs, headings and the start of the text.',
-    inputSchema: { tab: z.string(), ...snapOpts },
-  }, guard(async ({ tab, text: t, max }) => snapshot(getTab(tab), { text: t, max })));
+    description: 'Re-read a tab: interactive elements with refs, headings and the start of the text. Always the whole page, unless diff=true (only what changed since the last snapshot you received).',
+    inputSchema: { tab: z.string(), diff: z.boolean().optional(), ...snapOpts },
+  }, guard(async ({ tab, diff, text: t, max }) => snapshot(getTab(tab), { text: t, max, diff: !!diff })));
 
   s.registerTool('fl_extract', {
     description: 'Run JavaScript in the page and return the result. Fastest way to pull tables, lists or links.',
@@ -144,8 +146,17 @@ export function buildServer(): McpServer {
     try {
       const page = getTab(tab);
       const opts = { type: 'jpeg' as const, quality: 55, scale: 'css' as const };
-      const target = ref ? elementByRef(page, ref) : selector ? page.locator(selector).first() : null;
-      const buf = target ? await target.screenshot({ ...opts, timeout: 8000 }) : await page.screenshot({ ...opts, fullPage: !!full });
+      const target = ref ? elementByRef(page, ref) : selector ? page.locator(mainFrameSelector(selector)).first() : null;
+      // Embedded frames of sites outside the user's list are hidden for the picture.
+      const hidden = await hideForeignFrames(page);
+      let buf: Buffer;
+      try {
+        buf = target ? await target.screenshot({ ...opts, timeout: 8000 }) : await page.screenshot({ ...opts, fullPage: !!full });
+      } finally {
+        await hidden.restore();
+      }
+      // The tab may have moved to another site while the picture was taken.
+      getTab(tab);
       return { content: [{ type: 'image', data: buf.toString('base64'), mimeType: 'image/jpeg' }] };
     } catch (e) {
       return { ...text(redact(`Error: ${(e as Error).message}`)), isError: true };
@@ -196,17 +207,17 @@ export function buildServer(): McpServer {
 
   s.registerTool('fl_run', {
     description: 'Replay a recorded flow at browser speed, no LLM. On failure (site changed) it stops at the failing step and returns the page so the flow can be repaired.',
-    inputSchema: { name: z.string(), vars: z.record(z.string(), z.string()).optional(), tab: z.string().optional(), browser: browserOpt },
-  }, guard(async ({ name, vars, tab, browser }) => (await runFlow(name, vars || {}, tab, { browser })).text));
+    inputSchema: { name: z.string(), vars: z.record(z.string(), z.string()).optional(), tab: z.string().optional(), browser: browserOpt, direct: z.boolean().optional().describe('Send the flow\'s recorded API request alone instead of replaying the UI steps (only for flows where fl_record_stop or fl_flows reports a direct API call). It writes on the site without going through its interface: ask the user before the first direct run of a flow. A refusal (HTTP 4xx) falls back to the UI steps; any other failure stops without replaying, to never write twice.') },
+  }, guard(async ({ name, vars, tab, browser, direct }) => (await runFlow(name, vars || {}, tab, { browser, direct })).text));
 
   s.registerTool('fl_run_many', {
     description: 'Replay the same flow for many variable sets in parallel, each in its own background tab.',
-    inputSchema: { name: z.string(), runs: z.array(z.record(z.string(), z.string())).min(1), concurrency: z.number().optional(), keepTabs: z.boolean().optional(), browser: browserOpt },
-  }, guard(async ({ name, runs, concurrency, keepTabs, browser }) => runMany(name, runs, concurrency ?? 4, !!keepTabs, browser)));
+    inputSchema: { name: z.string(), runs: z.array(z.record(z.string(), z.string())).min(1), concurrency: z.number().optional(), keepTabs: z.boolean().optional(), browser: browserOpt, direct: z.boolean().optional().describe('Send each run as the flow\'s direct API request, as in fl_run.') },
+  }, guard(async ({ name, runs, concurrency, keepTabs, browser, direct }) => runMany(name, runs, concurrency ?? 4, !!keepTabs, browser, !!direct)));
 
   s.registerTool('fl_flows', { description: 'List recorded flows with their variables and last timing.', inputSchema: {} },
     guard(async () => listFlows()
-      .map((f) => `${f.name}: ${f.steps.length} steps, vars [${f.vars.join(', ')}], ${f.runs} runs${f.lastMs ? `, last ${f.lastMs} ms` : ''}. ${f.description}`)
+      .map((f) => `${f.name}: ${f.steps.length} steps, vars [${f.vars.join(', ')}], ${f.runs} runs${f.lastMs ? `, last ${f.lastMs} ms` : ''}${f.api ? `, direct API call ${describeShortcut(f.api)}` : ''}. ${f.description}`)
       .join('\n') || 'No flows yet.'));
 
   s.registerTool('fl_flow', { description: 'Show a flow with all its steps and element fingerprints.', inputSchema: { name: z.string() } },
@@ -236,8 +247,20 @@ export function buildServer(): McpServer {
     else if (st.value !== undefined) st.value = `{{${v}}}`; else st.url = `{{${v}}}`;
     f.vars = [...new Set([...f.vars, v])];
     f.updatedAt = new Date().toISOString();
+    // The direct API call must carry the new variable too, or it would keep sending the recorded value.
+    let direct = '';
+    if (f.api) {
+      const bound = st.value !== undefined && was !== undefined ? bindVariable(f.api, was, v) : null;
+      if (bound) {
+        f.api = bound;
+        direct = ' The direct API call uses it too.';
+      } else {
+        delete f.api;
+        direct = ' The direct API call was removed: the recorded value is not found exactly once in its request.';
+      }
+    }
     saveFlow(f);
-    return `Step ${step} of "${name}" now uses {{${v}}} (recorded value was "${was}").`;
+    return `Step ${step} of "${name}" now uses {{${v}}} (recorded value was "${was}").${direct}`;
   }));
 
   s.registerTool('fl_extension', {
@@ -265,7 +288,11 @@ export function buildServer(): McpServer {
           if (!tabs) continue;
           try {
             const open = await relay.request('tabs', { key: b.key }) as { origin: string; title: string; window: number; attached: boolean }[];
-            for (const t of open) lines.push(`  window ${t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
+            // Tabs on sites outside the user's list are not described to the agent.
+            const offList = (t: { origin: string }) => config.allowedDomains.length > 0 && (!t.origin || !!domainProblem(t.origin));
+            const outside = open.filter(offList).length;
+            if (outside) lines.push(`  ${outside} tab(s) on sites outside the allowed list, not shown.`);
+            for (const t of open.filter((x) => !offList(x))) lines.push(`  window ${t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
           } catch (e) { lines.push(`  tabs unavailable: ${(e as Error).message}`); }
         }
         // Profiles of this computer with no connected window: fl_open opens them on demand.

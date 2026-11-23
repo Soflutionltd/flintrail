@@ -1,7 +1,36 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+/** "example.com" is that host only, "*.example.com" is example.com and all its subdomains. Ports are ignored. */
+export function parseDomains(list: string): string[] {
+  const rules: string[] = [];
+  const bad: string[] = [];
+  for (const raw of list.split(',')) {
+    const rule = raw.trim().toLowerCase();
+    if (!rule) continue;
+    const wildcard = rule.startsWith('*.');
+    // Accept a pasted URL or host:port, keep the host.
+    const host = (wildcard ? rule.slice(2) : rule).replace(/^https?:\/\//, '').replace(/[/:?#].*$/, '').replace(/\.$/, '');
+    // A name with a dot, an IPv4 address or "localhost": anything else is a typo, and a typo must not open every site.
+    if (/^(localhost|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)$/.test(host)) rules.push(wildcard ? `*.${host}` : host);
+    else bad.push(raw.trim());
+  }
+  if (bad.length) throw new Error(`FLINTRAIL_ALLOWED_DOMAINS: cannot read ${bad.map((b) => `"${b}"`).join(', ')}. Use host names such as example.com or *.example.com, comma separated.`);
+  if (list.trim() && !rules.length) throw new Error('FLINTRAIL_ALLOWED_DOMAINS is set but lists no site.');
+  return rules;
+}
+
 const env = process.env;
+
+/** A list that cannot be read stops Flintrail with one clear line, never with every site open. */
+function allowedDomainsOrExit(): string[] {
+  try {
+    return parseDomains(env.FLINTRAIL_ALLOWED_DOMAINS || '');
+  } catch (e) {
+    process.stderr.write(`${(e as Error).message}\n`);
+    process.exit(1);
+  }
+}
 const port = Number(env.FLINTRAIL_PORT || 9222);
 const home = env.FLINTRAIL_HOME || join(homedir(), '.flintrail');
 
@@ -16,6 +45,8 @@ export const config = {
   allowAnyBrowser: env.FLINTRAIL_ALLOW_ANY_BROWSER === '1',
   /** user-data-dir of a dedicated automation profile in a regular Chrome (e.g. one 1Password can connect to). */
   dedicatedProfile: env.FLINTRAIL_DEDICATED_PROFILE || '',
+  /** Sites the agent may open, read and send requests to. Empty: any site. */
+  allowedDomains: allowedDomainsOrExit(),
   home,
   flowsDir: join(home, 'flows'),
   profileDir: env.FLINTRAIL_PROFILE || join(home, 'profile'),

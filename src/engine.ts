@@ -5,6 +5,7 @@ import type { BrowserContext, Dialog, Frame, Locator, Page, Request } from 'play
 import { AGENT, getDriven, type Driven } from './browser.js';
 import { getRelayClient } from './relay-client.js';
 import { config } from './config.js';
+import { assertAllowed, domainProblem } from './domains.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
 import type { DesktopStep } from './desktop.js';
@@ -220,6 +221,7 @@ export async function adoptTab(match: string, browserName?: string): Promise<str
       page = free();
     }
   }
+  if (page) assertAllowed(page.url());
   if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' (in a user browser, share the tab from the Flintrail extension first)' : ''}.`);
   return register(page, where);
 }
@@ -232,19 +234,31 @@ export function tabBrowser(id: string): string {
 export function getTab(id: string): Page {
   const p = tabs.get(id);
   if (!p || p.isClosed()) throw new Error(`Tab ${id} not found: closed, or released by the extension after 5 minutes without use. Use fl_open, or fl_adopt to take an open tab back.`);
+  const why = domainProblem(p.url());
+  if (why) throw new Error(`Blocked: tab ${id} went to a site the agent may not work on. ${why} Close it with fl_close.`);
   return p;
 }
 
 export function listTabs(): string[] {
-  return [...tabs].filter(([, p]) => !p.isClosed()).map(([id, p]) => `${id}  [${stateOf(p).browser}]  ${p.url()}`);
+  return [...tabs].filter(([, p]) => !p.isClosed())
+    .map(([id, p]) => `${id}  [${stateOf(p).browser}]  ${domainProblem(p.url()) ? '(on a site outside the allowed list: close it with fl_close)' : p.url()}`);
 }
 
 export async function closeTab(id: string) {
-  await getTab(id).close();
+  const page = tabs.get(id);
+  if (!page || page.isClosed()) throw new Error(`Tab ${id} not found.`);
+  await page.close();
 }
 
 export async function gotoFast(page: Page, url: string) {
+  assertAllowed(url);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  // The allowed address may redirect elsewhere: nothing is read from that page.
+  const why = domainProblem(page.url());
+  if (why) {
+    await page.goto('about:blank').catch(() => {});
+    throw new Error(`Blocked: ${url} redirected to another site. ${why}`);
+  }
 }
 
 /** Lets a client-side app finish re-rendering before we read it. Never waits on the network. */
@@ -269,25 +283,186 @@ export async function withNavigation<T>(page: Page, fn: () => Promise<T>): Promi
   }
 }
 
-export async function snapshot(page: Page, opts: { max?: number; text?: number } = {}): Promise<string> {
-  const frames = page.frames().filter((f) => !f.isDetached()).slice(0, 6);
+/** A child frame the agent may read: loaded (a frame still on about:blank may be about to load anything) and on an allowed site. */
+function readableFrame(frame: Frame): boolean {
+  const url = frame.url();
+  if (!config.allowedDomains.length) return true;
+  return /^https?:/.test(url) && !domainProblem(url);
+}
+
+/** Hides the embedded frames the agent may not read, for the time of a screenshot. */
+export async function hideForeignFrames(page: Page): Promise<{ restore: () => Promise<void> }> {
+  const undo: (() => Promise<void>)[] = [];
+  for (const frame of page.frames().slice(1)) {
+    if (frame.isDetached() || readableFrame(frame)) continue;
+    try {
+      const el = await frame.frameElement();
+      const before = await el.evaluate((node) => {
+        const e = node as HTMLElement;
+        const was = e.style.visibility;
+        e.style.setProperty('visibility', 'hidden', 'important');
+        return was;
+      });
+      undo.push(async () => { await el.evaluate((node, was) => { (node as HTMLElement).style.visibility = was; }, before).catch(() => {}); });
+    } catch { /* the frame went away */ }
+  }
+  return { restore: async () => { for (const u of undo) await u(); } };
+}
+
+export async function snapshot(page: Page, opts: { max?: number; text?: number; diff?: boolean } = {}): Promise<string> {
+  const away = domainProblem(page.url());
+  if (away) return `Blocked: nothing was read from this tab. ${away} Close it with fl_close.`;
+  // An embedded frame of a site outside the user's list is not read either.
+  // Each frame keeps its index in page.frames(): a ref "f2:e1" must lead back to that very frame.
+  const frames = page.frames().map((frame, index) => ({ frame, index }))
+    .filter(({ frame, index }) => !frame.isDetached() && (index === 0 || readableFrame(frame))).slice(0, 6);
   // Frames are read in parallel: one round trip instead of one per frame.
-  const reads = await Promise.all(frames.map((f, i) => f.evaluate(snapshotScript, {
-    max: i === 0 ? opts.max ?? 150 : 40,
-    text: i === 0 ? opts.text ?? 600 : 0,
-    prefix: i === 0 ? '' : `f${i}:`,
+  const reads = await Promise.all(frames.map(({ frame, index }) => frame.evaluate(snapshotScript, {
+    max: index === 0 ? opts.max ?? 150 : 40,
+    text: index === 0 ? opts.text ?? 600 : 0,
+    prefix: index === 0 ? '' : `f${index}:`,
   }).catch(() => null)));
+  // The page may have moved while it was being read: what a tab or frame now outside the list returned is dropped.
+  const moved = domainProblem(page.url());
+  if (moved) {
+    lastSeen.delete(page);
+    return `Blocked: nothing was read from this tab. ${moved} Close it with fl_close.`;
+  }
   const head = reads[0];
   const extra: string[] = [];
   reads.forEach((s, i) => {
-    if (i > 0 && s?.lines.length) extra.push(`-- frame ${i} (${frames[i]!.url().slice(0, 80)})`, ...s.lines);
+    const { frame, index } = frames[i]!;
+    if (i > 0 && s?.lines.length && readableFrame(frame)) extra.push(`-- frame ${index} (${frame.url().slice(0, 80)})`, ...s.lines);
   });
   const notes = pageNotes(page);
-  if (!head) return [...notes, `URL: ${page.url()} (page not readable yet)`].join('\n');
-  const out = [...notes, `URL: ${head.url}`, `Title: ${head.title}`, ...head.heads, '', ...head.lines, ...extra];
+  if (!head) {
+    lastSeen.delete(page);
+    return [...notes, `URL: ${page.url()} (page not readable yet)`].join('\n');
+  }
+  const seen: Seen = {
+    url: head.url, title: head.title, max: opts.max ?? 150, text: opts.text ?? 600, more: head.more,
+    heads: head.heads, lines: [...head.lines, ...extra], body: head.body,
+  };
+  const before = lastSeen.get(page);
+  lastSeen.set(page, seen);
+  const delta = opts.diff && before ? changesSince(before, seen) : null;
+  if (delta) return [...notes, ...delta].join('\n');
+  const out = [...notes, `URL: ${head.url}`, `Title: ${head.title}`, ...head.heads, '', ...seen.lines];
   if (head.more) out.push('(list truncated, raise max if needed)');
   if (head.body) out.push('', 'Text: ' + head.body);
   return out.join('\n');
+}
+
+/** What the agent last received about a tab: the next snapshot can be told as a difference from it. */
+interface Seen { url: string; title: string; max: number; text: number; more: boolean; heads: string[]; lines: string[]; body: string }
+const lastSeen = new WeakMap<Page, Seen>();
+
+const refOfLine = (line: string) => /^\[([^\]]+)\]/.exec(line)?.[1];
+
+/**
+ * The changes between two snapshots of the same page, or null when a full snapshot is the better answer:
+ * another page, other options, a truncated list, or so many changes that a difference saves nothing.
+ * Refs are stable on a page (an element keeps its ref for as long as it lives), so unchanged lines can be left out.
+ */
+function changesSince(before: Seen, now: Seen): string[] | null {
+  if (before.url !== now.url || before.max !== now.max || before.text !== now.text || before.more || now.more) return null;
+  // Embedded frames added, removed or sent to another address: the frame headers carry that, so tell the whole page.
+  const frames = (seen: Seen) => seen.lines.filter((l) => !refOfLine(l)).join('\n');
+  if (frames(before) !== frames(now)) return null;
+  const old = new Map<string, string>();
+  for (const line of before.lines) {
+    const ref = refOfLine(line);
+    if (ref) old.set(ref, line);
+  }
+  const changes: string[] = [];
+  const kept: string[] = [];
+  let same = 0;
+  for (const line of now.lines) {
+    const ref = refOfLine(line);
+    if (!ref) continue;
+    const was = old.get(ref);
+    if (was !== undefined) kept.push(ref);
+    if (was === line) same++;
+    else changes.push(`${was === undefined ? '+' : '~'} ${line}`);
+  }
+  // A difference cannot say where things are: when the elements that stayed changed order (a sorted list), tell the whole page.
+  const still = new Set(kept);
+  if (before.lines.map(refOfLine).filter((r): r is string => !!r && still.has(r)).join(' ') !== kept.join(' ')) return null;
+  for (const [ref, line] of old) if (!still.has(ref)) changes.push(`- ${line}`);
+  const goneHeads = before.heads.filter((h) => !now.heads.includes(h));
+  const headsChanged = before.heads.join('\n') !== now.heads.join('\n');
+  const bodyChanged = before.body !== now.body;
+  const full = now.lines.length + now.heads.length + (now.body ? 1 : 0);
+  const told = changes.length + (headsChanged ? Math.max(1, now.heads.length + goneHeads.length) : 0) + (bodyChanged ? 1 : 0);
+  const out = [`URL: ${now.url}`];
+  if (before.title !== now.title) out.push(`Title: ${now.title}`);
+  if (!told) {
+    // Only what a snapshot shows was compared: the listed elements, the headings and the first characters of text.
+    out.push(`No change since the last snapshot of this tab in the elements, headings and text it shows (${same} element${same === 1 ? '' : 's'}, same refs).`);
+    return out;
+  }
+  // Past half of the page, the whole page is as short and easier to read.
+  if (told * 2 > full) return null;
+  out.push(`Changes since the last snapshot of this tab (+ new, ~ changed, - gone). ${same} other element${same === 1 ? '' : 's'} unchanged, same refs.`);
+  if (headsChanged) out.push(...now.heads, ...goneHeads.map((h) => `- ${h}`));
+  out.push(...changes);
+  if (bodyChanged) out.push('', textChange(before.body, now.body));
+  return out;
+}
+
+/** The words of the page text that are new or gone, each run with a few words around it; the whole text when most of it changed. */
+function textChange(before: string, now: string): string {
+  if (!now) return 'Text: none left.';
+  const a = before ? before.split(' ') : [];
+  const b = now.split(' ');
+  // Words the two texts share at both ends are set aside first: the comparison below then stays small.
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const am = a.slice(head, a.length - tail);
+  const bm = b.slice(head, b.length - tail);
+  const fresh: boolean[] = new Array<boolean>(b.length).fill(false);
+  const gone: string[] = [];
+  if (am.length * bm.length > 250_000) {
+    // Too long to compare word by word without stalling every tab: the middle is told whole.
+    for (let j = 0; j < bm.length; j++) fresh[head + j] = true;
+  } else {
+    // Longest common subsequence of words: what is left of `now` is new, what is left of `before` is gone.
+    const lcs: number[][] = Array.from({ length: am.length + 1 }, () => new Array<number>(bm.length + 1).fill(0));
+    for (let i = am.length - 1; i >= 0; i--) {
+      for (let j = bm.length - 1; j >= 0; j--) {
+        lcs[i]![j] = am[i] === bm[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < am.length && j < bm.length) {
+      if (am[i] === bm[j]) { i++; j++; } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) gone.push(am[i++]!); else fresh[head + j++] = true;
+    }
+    while (i < am.length) gone.push(am[i++]!);
+    while (j < bm.length) fresh[head + j++] = true;
+  }
+  const count = fresh.filter(Boolean).length;
+  if (count * 2 > b.length) return 'Text: ' + now;
+  const wentAway = gone.length ? `Text, words gone: ${gone.slice(0, 60).join(' ')}${gone.length > 60 ? '…' : ''}` : '';
+  if (!count) return wentAway || 'Text: unchanged words, spacing aside.';
+  const parts: string[] = [];
+  for (let j = 0; j < b.length; j++) {
+    if (!fresh[j]) continue;
+    let end = j;
+    while (end + 1 < b.length && fresh[end + 1]) end++;
+    const from = Math.max(0, j - 3);
+    const to = Math.min(b.length, end + 4);
+    parts.push(`${from > 0 ? '…' : ''}${b.slice(from, j).join(' ')} [${b.slice(j, end + 1).join(' ')}] ${b.slice(end + 1, to).join(' ')}${to < b.length ? '…' : ''}`.replace(/ +/g, ' ').trim());
+    j = end;
+  }
+  return 'Text, new words in [brackets]: ' + parts.join('  ') + (wentAway ? '\n' + wentAway : '');
+}
+
+/** Drops what a tab was last told as: its next snapshot is the whole page. For a snapshot whose text is not returned to the agent. */
+export function forgetSnapshot(page: Page) {
+  lastSeen.delete(page);
 }
 
 function fromRef(page: Page, ref: string): { frame: Frame; key: string } {
@@ -295,6 +470,7 @@ function fromRef(page: Page, ref: string): { frame: Frame; key: string } {
   if (m) {
     const frame = page.frames()[Number(m[1])];
     if (!frame) throw new Error(`Frame for ref ${ref} is gone, take a new snapshot.`);
+    if (!readableFrame(frame)) throw new Error(`Blocked: ref ${ref} is in a frame of another site. ${domainProblem(frame.url()) ?? ''}`);
     return { frame, key: m[2]! };
   }
   return { frame: page.mainFrame(), key: ref };
@@ -305,13 +481,21 @@ export function elementByRef(page: Page, ref: string): Locator {
   return frame.locator(`[data-fl="${key}"]`).first();
 }
 
+/** With a list of allowed sites, a selector may not step into an embedded frame: use the frame's refs (f1:e3). */
+export function mainFrameSelector(selector: string): string {
+  if (config.allowedDomains.length && /enter-frame|content-frame/i.test(selector)) {
+    throw new Error('Blocked: with FLINTRAIL_ALLOWED_DOMAINS set, a selector cannot enter a frame. Use the refs of that frame from the snapshot.');
+  }
+  return selector;
+}
+
 function liveLocator(page: Page, a: Action): { loc: Locator; frame: Frame } | null {
   const main = page.mainFrame();
   if (a.ref) {
     const { frame, key } = fromRef(page, a.ref);
     return { loc: frame.locator(`[data-fl="${key}"]`), frame };
   }
-  if (a.selector) return { loc: page.locator(a.selector), frame: main };
+  if (a.selector) return { loc: page.locator(mainFrameSelector(a.selector)), frame: main };
   if (a.role) return { loc: page.getByRole(a.role as Parameters<Page['getByRole']>[0], { name: a.name, exact: !!a.exact }), frame: main };
   if (a.text) return { loc: page.getByText(a.text, { exact: !!a.exact }), frame: main };
   if (a.label) return { loc: page.getByLabel(a.label), frame: main };
@@ -325,6 +509,8 @@ const unstableId = (id: string) => /\d{3,}|[a-f0-9]{8,}|:/.test(id);
 /** Finds a recorded element again, trying the most stable clues first. */
 export async function resolveTarget(page: Page, d: TargetDescriptor, timeout = 7000): Promise<Locator | null> {
   const frame = (d.frameUrl && page.frames().find((f) => f.url().split('?')[0] === d.frameUrl)) || page.mainFrame();
+  // A flow recorded without the list may target a frame of a site the list now excludes.
+  if (frame !== page.mainFrame() && !readableFrame(frame)) throw new Error(`Blocked: this step targets a frame of another site. ${domainProblem(frame.url()) ?? ''}`);
   const c: Locator[] = [];
   if (d.testid) c.push(frame.locator(`[data-testid="${quote(d.testid)}"],[data-test="${quote(d.testid)}"],[data-qa="${quote(d.testid)}"]`));
   if (d.id && !unstableId(d.id)) c.push(frame.locator(`[id="${quote(d.id)}"]`));
@@ -368,6 +554,13 @@ export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record
   if (a.do === 'download') {
     mkdirSync(config.downloadsDir, { recursive: true });
     const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), loc.click({ timeout: TIMEOUT })]);
+    // A file the allowed page builds itself (blob:, data:) has no other site behind it.
+    const source = dl.url().replace(/^blob:/, '');
+    const away = source.startsWith('data:') ? null : domainProblem(source);
+    if (away) {
+      await dl.cancel().catch(() => {});
+      throw new Error(`Blocked: the file comes from another site, it was not saved. ${away}`);
+    }
     const path = join(config.downloadsDir, dl.suggestedFilename());
     await dl.saveAs(path);
     return { download: path };
@@ -445,13 +638,23 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
       return page.evaluate(`(async () => { ${body} })()`);
     }
     case 'request': {
+      const target = fillVars(a.url, vars)!;
+      let absolute = target;
+      try { absolute = new URL(target, page.url()).href; } catch { /* refused below when a list is set */ }
+      assertAllowed(absolute);
       const r = await page.evaluate(fetchScript, {
         method: (a.method || 'GET').toUpperCase(),
-        url: fillVars(a.url, vars)!,
+        // With a list, the checked address is the one sent: a <base> tag in the page cannot point a relative URL elsewhere.
+        url: config.allowedDomains.length ? absolute : target,
         body: fillVars(a.body, vars),
         headers: a.headers,
         max: 20000,
+        // With a list of allowed sites a redirect is not followed: it could carry the request to another site.
+        manualRedirect: config.allowedDomains.length > 0,
       });
+      if (r.redirectedTo !== undefined && config.allowedDomains.length) {
+        throw new Error('Blocked: the site answered with a redirect, which is not followed while FLINTRAIL_ALLOWED_DOMAINS is set. Request the final address directly.');
+      }
       if (r.status >= 400) throw new Error(`HTTP ${r.status}: ${r.body.slice(0, 200)}`);
       return r.contentType.includes('json') ? safeJson(r.body) : r.body;
     }
@@ -474,11 +677,14 @@ const needsElement = (a: Action) =>
   !PAGE_ACTIONS.has(a.do) && !(a.do === 'press' && !a.ref && !a.selector && !a.role && !a.text && !a.label && !a.placeholder);
 
 /** Batched live actions: one round trip for a whole sequence, then one fresh snapshot. */
-export async function act(page: Page, actions: Action[], opts: { snapshot?: boolean; max?: number; text?: number } = {}) {
+export async function act(page: Page, actions: Action[], opts: { snapshot?: boolean; max?: number; text?: number; diff?: boolean } = {}) {
   const notes: string[] = [];
   for (let i = 0; i < actions.length; i++) {
     const a = actions[i]!;
+    recorder.beginAction(page);
     try {
+      // A click may have led to a site outside the user's list: stop there, read nothing.
+      assertAllowed(page.url());
       if (!needsElement(a)) {
         const v = await performPage(page, a);
         recorder.addStep(page, { ...a, ref: undefined } as Step);
@@ -512,7 +718,9 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
       break;
     }
   }
+  const away = domainProblem(page.url());
+  if (away) return [...notes, `Blocked: the tab went to another site, nothing was read from it. ${away} Close it with fl_close.`].join('\n');
   if (opts.snapshot === false) return [...notes, ...pageNotes(page), `URL: ${page.url()}`].join('\n');
   await domQuiet(page);
-  return (notes.length ? notes.join('\n') + '\n\n' : '') + (await snapshot(page, opts));
+  return (notes.length ? notes.join('\n') + '\n\n' : '') + (await snapshot(page, { max: opts.max, text: opts.text, diff: opts.diff !== false }));
 }

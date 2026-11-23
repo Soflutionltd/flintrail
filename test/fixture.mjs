@@ -7,6 +7,11 @@ const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8">
 
 export function startFixture(port = 0) {
   const orders = [];
+  const visits = { count: 0 };
+  /** Requests worth checking afterwards, as "host path". */
+  const hits = [];
+  /** Tests flip this to make /switch lead to another site. */
+  const state = { away: '' };
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     const html = (t, b) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page(t, b)); };
@@ -89,6 +94,7 @@ export function startFixture(port = 0) {
       req.on('data', (c) => (b += c));
       req.on('end', () => {
         const o = JSON.parse(b || '{}');
+        hits.push(`${(req.headers.host || '').split(':')[0]} /api/login`);
         const ok = o.email === 'ann@example.com' && o.password === 'S3cret pass&"42' && (o.otp === undefined || o.otp === '123456');
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok, email: o.email }));
@@ -100,6 +106,10 @@ export function startFixture(port = 0) {
       req.on('data', (c) => (b += c));
       req.on('end', () => {
         const o = JSON.parse(b || '{}');
+        // A plate the server chokes on: the request arrived, the answer is an error.
+        // A session that expired: like many sites, the API sends the caller to the sign-in page.
+        if (o.plate === 'EXPIRED') { res.writeHead(302, { location: '/login' }); return res.end(); }
+        if (o.plate === 'BOOM') { res.writeHead(500, { 'content-type': 'text/plain' }); return res.end('server error'); }
         const ticket = 'T' + (1000 + orders.length);
         orders.push({ ...o, ticket });
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -107,7 +117,132 @@ export function startFixture(port = 0) {
       });
       return;
     }
+    // A site whose API wants a token only its own page script knows: a direct call without it is refused.
+    if (url.pathname === '/guarded') return html('Guarded', `<h1>Guarded order</h1>
+      <label>Plate <input name="plate"></label>
+      <button type="button" id="go">Order</button><p id="out"></p>
+      <script>
+        go.onclick = async () => {
+          const r = await fetch('/api/guarded', { method: 'POST', headers: { 'content-type': 'application/json', 'x-page-token': 'tok-' + Date.now() },
+            body: JSON.stringify({ plate: document.querySelector('input').value }) });
+          out.textContent = r.ok ? 'Guarded order done' : 'Refused';
+        };
+      </script>`);
+    if (url.pathname === '/api/guarded' && req.method === 'POST') {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => {
+        if (!req.headers['x-page-token']) { res.writeHead(403, { 'content-type': 'application/json' }); return res.end('{"error":"token"}'); }
+        orders.push({ ...JSON.parse(b || '{}'), guarded: true });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+      });
+      return;
+    }
+    // A classic form posted by page navigation, then a button that calls the API.
+    if (url.pathname === '/native') return html('Native', `<h1>Basket</h1>
+      <form method="post" action="/native-step"><button>Add to basket</button></form>`);
+    if (url.pathname === '/native-step' && req.method === 'POST') {
+      req.resume();
+      return html('Pay', `<h1>Pay</h1><button type="button" id="pay">Pay</button><p id="out"></p>
+        <script>
+          pay.onclick = async () => {
+            await fetch('/api/order', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ plate: 'NATIVE' }) });
+            out.textContent = 'Paid';
+          };
+        </script>`);
+    }
+    // An API with the record ID in its path, a query string and a number in its body.
+    if (url.pathname === '/items') return html('Items', `<h1>Stock</h1>
+      <label>Item <input name="item"></label><label>Quantity <input name="qty"></label>
+      <button type="button" id="save">Save</button><p id="out"></p>
+      <script>
+        save.onclick = async () => {
+          const [item, qty] = [...document.querySelectorAll('input')].map((i) => i.value);
+          await fetch('/api/items/' + encodeURIComponent(item) + '?mode=fast', { method: 'PUT', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ qty: Number(qty), unit: 'box' }) });
+          out.textContent = 'Stock saved';
+        };
+      </script>`);
+    if (url.pathname.startsWith('/api/items/') && req.method === 'PUT') {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => {
+        orders.push({ item: decodeURIComponent(url.pathname.slice('/api/items/'.length)), mode: url.searchParams.get('mode'), ...JSON.parse(b || '{}') });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+      });
+      return;
+    }
+    // A request that carries a session token next to its data.
+    if (url.pathname === '/tokened') return html('Tokened', `<h1>Tokened</h1><button type="button" id="send">Send</button><p id="out"></p>
+      <script>
+        send.onclick = async () => {
+          await fetch('/api/order', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ plate: 'TK-1', csrf: 'abc123' }) });
+          out.textContent = 'Sent';
+        };
+      </script>`);
+    // Ways off the site: a link and a redirect to the address given in ?to=.
+    if (url.pathname === '/away') return html('Away', `<h1>Leaving</h1><a id="out" href="${url.searchParams.get('to')}">Partner site</a>`);
+    if (url.pathname === '/bounce') { res.writeHead(302, { location: url.searchParams.get('to') }); return res.end(); }
+    if (url.pathname === '/secret') return html('Secret', `<h1>Other site secret</h1><a href="/x">Private link one</a>
+      <button type="button" id="ob" onclick="fetch('/clicked')">Other button</button>
+      <script>fetch('/api/secret.json')</script>`);
+    if (url.pathname === '/api/secret.json') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('{"secret":"TOPSECRET-JSON"}'); }
+    if (['/clicked', '/inner-clicked', '/sink'].includes(url.pathname)) { req.resume(); hits.push(`${(req.headers.host || '').split(':')[0]} ${url.pathname}`); res.writeHead(204, { 'access-control-allow-origin': '*' }); return res.end(); }
+    // A page that embeds another site first, then a frame of its own.
+    if (url.pathname === '/embed') return html('Embed', `<h1>Embedding</h1>
+      <iframe id="foreign" src="${url.searchParams.get('to')}" width="400" height="200"></iframe>
+      <iframe id="own" src="/inner" width="400" height="120"></iframe>`);
+    if (url.pathname === '/inner') return html('Inner', `<button type="button" onclick="fetch('/inner-clicked')">Inner button</button>`);
+    // A link whose destination the test changes between recording and replay.
+    if (url.pathname === '/hop') return html('Hop', '<h1>Hop</h1><a id="next" href="/switch">Next</a>');
+    if (url.pathname === '/switch') { res.writeHead(302, { location: state.away || '/landing' }); return res.end(); }
+    if (url.pathname === '/landing') return html('Landing', '<h1>Landed here</h1>');
+    if (url.pathname === '/dl') return html('Files', `<a id="get" href="${url.searchParams.get('to')}">Get the file</a>`);
+    if (url.pathname === '/file') { res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="report.bin"' }); return res.end('FILE-CONTENT'); }
+    if (url.pathname === '/based') return html('Based', `<base href="${url.searchParams.get('to')}"><h1>Based</h1>`);
+    if (url.pathname === '/redir307') { req.resume(); res.writeHead(307, { location: url.searchParams.get('to') }); return res.end(); }
+    // A long list where one action changes little: one row is edited, one is added, one is removed.
+    if (url.pathname === '/board') return html('Board', `<h1>Board</h1><p id="status">Idle</p>
+      <ul id="rows">${Array.from({ length: 40 }, (_, i) => `<li><button type="button" class="row">Task ${i + 1}</button></li>`).join('')}</ul>
+      <button type="button" id="rename">Rename first</button><button type="button" id="add">Add task</button>
+      <button type="button" id="drop">Drop last</button><button type="button" id="reset">Replace all</button>
+      <script>
+        const rows = document.getElementById('rows');
+        const say = document.getElementById('status');
+        document.getElementById('rename').onclick = () => { rows.querySelector('.row').textContent = 'Task renamed'; };
+        document.getElementById('add').onclick = () => { rows.insertAdjacentHTML('beforeend', '<li><button type="button" class="row">Task new</button></li>'); say.textContent = 'Added'; };
+        document.getElementById('drop').onclick = () => { rows.lastElementChild.remove(); };
+        document.getElementById('reset').onclick = () => { rows.innerHTML = Array.from({ length: 40 }, (_, i) => '<li><button type="button" class="row">Other ' + i + '</button></li>').join(''); };
+      </script>`);
+    // Changes a difference by ref cannot tell: a list sorted the other way, a heading or a message that goes away.
+    if (url.pathname === '/sorted') return html('Sorted', `<h2 id="alert">Error: card declined</h2><p id="note">Payment refused by the bank</p>
+      <ul id="fruits"><li><button type="button">Apple</button></li><li><button type="button">Banana</button></li><li><button type="button">Cherry</button></li></ul>
+      <button type="button" id="sort">Sort desc</button><button type="button" id="dismiss">Dismiss</button><button type="button" id="clear">Clear note</button>
+      <script>
+        document.getElementById('sort').onclick = () => { const l = document.getElementById('fruits'); [...l.children].reverse().forEach((c) => l.appendChild(c)); };
+        document.getElementById('dismiss').onclick = () => document.getElementById('alert').remove();
+        document.getElementById('clear').onclick = () => document.getElementById('note').remove();
+      </script>`);
+    // A page that reports the visit as soon as it loads, like most sites with audience measurement.
+    if (url.pathname === '/measured') return html('Measured', `<h1>Measured</h1>
+      <label>Plate <input name="plate"></label><button type="button" id="go">Order</button><p id="out"></p>
+      <script>
+        fetch('/stats/visit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"page":"measured"}' });
+        go.onclick = async () => {
+          await fetch('/api/order', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ plate: document.querySelector('input').value }) });
+          out.textContent = 'Measured order done';
+        };
+      </script>`);
+    if (url.pathname === '/stats/visit' && req.method === 'POST') {
+      req.resume();
+      visits.count++;
+      res.writeHead(204);
+      return res.end();
+    }
     res.writeHead(404).end();
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, url: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, hits, state, url: `http://127.0.0.1:${server.address().port}` })));
 }

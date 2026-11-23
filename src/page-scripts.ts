@@ -186,15 +186,24 @@ export async function fetchScript(args: {
   body?: string;
   headers?: Record<string, string>;
   max: number;
-}): Promise<{ status: number; contentType: string; body: string }> {
+  /** Do not follow a redirect: report it instead. */
+  manualRedirect?: boolean;
+}): Promise<{ status: number; contentType: string; body: string; redirectedTo?: string }> {
   const r = await fetch(args.url, {
     method: args.method,
     headers: args.headers,
     body: args.body,
     credentials: 'include',
+    ...(args.manualRedirect ? { redirect: 'manual' as const } : {}),
   });
+  if (r.type === 'opaqueredirect') return { status: 0, contentType: '', body: '', redirectedTo: '' };
   const text = await r.text();
-  return { status: r.status, contentType: r.headers.get('content-type') || '', body: text.slice(0, args.max) };
+  return {
+    status: r.status,
+    contentType: r.headers.get('content-type') || '',
+    body: text.slice(0, args.max),
+    ...(r.redirected ? { redirectedTo: r.url } : {}),
+  };
 }
 
 /** Answers the next alert / confirm / prompt of the page itself, then restores the native functions. */
