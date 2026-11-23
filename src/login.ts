@@ -119,8 +119,8 @@ async function useBrowserFill(page: Page, expected?: string, skipped?: string[])
     // The browser chose the login by itself. Its values are readable now that a real click confirmed them:
     // unless they are shown to be the account the user asked for, this source is left aside and nothing is submitted.
     const typed = m.user ? (await field(frame, 'user').inputValue({ timeout: TIMEOUT })).trim().toLowerCase() : '';
-    const id = typed ? null : await identityOnPage(page);
-    const onlyExpected = !!id && namedOnPage(expected, id) && id.emails.size + id.masked.length === 1;
+    const id = typed ? null : await identityOnPage(page, new Set([siteOf(hostOf(frame.url()))]));
+    const onlyExpected = !!id && !id.partial && namedOnPage(expected, id) && accountsOn(id).length === 1;
     if (typed ? typed !== expected : !onlyExpected) {
       skipped?.push(typed ? `the browser's own saved login (${typed.slice(0, 80)})` : "the browser's own saved login (the page does not show whose it is)");
       return null;
@@ -130,52 +130,84 @@ async function useBrowserFill(page: Page, expected?: string, skipped?: string[])
   return { text: `Browser password manager: filled ${filled}`, last, codeWanted: !!m.otp };
 }
 
-/** Accounts a sign-in step names: whole addresses, partly hidden ones, and what its fields hold. */
-interface Identity { emails: Set<string>; masked: { head: string; tail: string; domain: string; shown: string }[]; values: Set<string>; asksUsername: boolean }
+/**
+ * Accounts a sign-in step shows: whole addresses, partly hidden ones, anything else that looks like an account but
+ * cannot be read for sure (`unclear`), and what its fields hold. `partial`: the page was too large to read whole.
+ */
+interface Identity { emails: Set<string>; masked: { head: string; tail: string; domain: string; shown: string }[]; unclear: Set<string>; values: Set<string>; asksUsername: boolean; partial: boolean }
 
-const ADDRESS = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu;
+const ADDRESS = /^[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+$/u;
 /** An address shown partly hidden, as sign-in pages do: "a••••@example.com", "jo***n@example.com". */
 const HIDDEN = /^([\p{L}\p{N}._%+-]+)[•●·*]+([\p{L}\p{N}._%+-]*)@([\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+)$/u;
 
-/** Reads what the visible sign-in step says about the account, leaving out contact links and footers. */
-async function identityOnPage(page: Page): Promise<Identity> {
-  const frames = liveFrames(page);
+/** Runs in the page: the visible text, labels and field values of a sign-in step, without footers and contact links. */
+function readIdentity(): { text: string; values: string[]; partial: boolean } {
+  const MAX_NODES = 40000;
+  const MAX_CHARS = 300000;
+  const skip = 'footer, a[href^="mailto:"], script, style, noscript, template, option, select, textarea, [aria-hidden="true"], [hidden]';
+  const seenEl = new Map<Element, boolean>();
+  // Only what the user can see: an account kept in a hidden part of the page (another signed-in account, a chooser
+  // that is closed) is not the account this step is about.
+  const visible = (el: Element): boolean => {
+    let v = seenEl.get(el);
+    if (v !== undefined) return v;
+    const r = el.getBoundingClientRect();
+    v = !el.closest(skip)
+      && r.width > 0 && r.height > 0 && r.bottom > -2000 && r.right > -2000 && r.left < innerWidth + 4000
+      && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+    seenEl.set(el, v);
+    return v;
+  };
+  const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+  const parts: string[] = [];
+  let size = 0;
+  let nodes = 0;
+  let partial = false;
+  let lastBlock: Element | null = null;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (++nodes > MAX_NODES || size > MAX_CHARS) { partial = true; break; }
+    const el = n.parentElement;
+    const t = n.nodeValue || '';
+    if (!el || !t.trim() || !visible(el)) continue;
+    // Text nodes of one line are joined as they read ("<b>ann</b>@example.com"), separate blocks get a space.
+    const block = el.closest('p, div, li, td, th, h1, h2, h3, h4, h5, h6, label, button, section, form, header, main') || el;
+    parts.push(block === lastBlock ? t : ` ${t}`);
+    lastBlock = block;
+    size += t.length;
+  }
+  const inputs = [...document.querySelectorAll('input')];
+  const values = [
+    ...inputs.filter((i) => ['email', 'text', ''].includes(i.type) && visible(i)),
+    // The account chosen on an earlier step is often carried in a hidden field.
+    ...inputs.filter((i) => i.type === 'hidden' && /identifier|e-?mail|user|login|account/i.test(`${i.name} ${i.id}`)),
+  ].filter((i) => i.value && i.value.length < 200).map((i) => i.value.trim());
+  // Some sites name the account in a label rather than in the text (avatar button, account chip).
+  const labels = [...document.querySelectorAll('[aria-label],[title],[data-email],[data-identifier]')].slice(0, 2000)
+    .filter(visible)
+    .map((e) => [e.getAttribute('aria-label'), e.getAttribute('title'), e.getAttribute('data-email'), e.getAttribute('data-identifier')].join(' ').slice(0, 400));
+  return { text: `${parts.join('')} ${labels.join(' ')}`, values, partial };
+}
+
+/** Reads what the visible sign-in step says about the account, in the frames of the given websites only. */
+async function identityOnPage(page: Page, sites: Set<string>): Promise<Identity> {
+  // An embedded frame of another website (advert, chat widget) says nothing about the account of this sign-in.
+  const frames = liveFrames(page).filter((f) => sites.has(siteOf(hostOf(f.url()))));
   const marks = await markAll(frames);
-  const read = await Promise.all(frames.map((f) => f.evaluate(() => {
-    // Text outside footers and contact links: an address there is how to reach the site, not the account.
-    const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
-    const parts: string[] = [];
-    let size = 0;
-    for (let n = walker.nextNode(), seen = 0; n && seen < 6000 && size < 20000; n = walker.nextNode(), seen++) {
-      const el = n.parentElement;
-      if (!el || el.closest('footer, a[href^="mailto:"], script, style, noscript, template')) continue;
-      const t = (n.nodeValue || '').trim();
-      if (!t) continue;
-      parts.push(t);
-      size += t.length;
-    }
-    const values = [...document.querySelectorAll('input')]
-      .filter((i) => ['email', 'text', 'hidden', ''].includes(i.type) && i.value && i.value.length < 200)
-      .map((i) => i.value.trim());
-    // Some sites name the account in a label rather than in the text (avatar button, account chip).
-    const labels = [...document.querySelectorAll('[aria-label],[title],[data-email],[data-identifier]')].slice(0, 300)
-      .filter((e) => !e.closest('footer, a[href^="mailto:"]'))
-      .map((e) => [e.getAttribute('aria-label'), e.getAttribute('title'), e.getAttribute('data-email'), e.getAttribute('data-identifier')].join(' '));
-    return { text: `${parts.join(' ')} ${labels.join(' ')}`, values };
-  }).catch(() => ({ text: '', values: [] as string[] }))));
-  const id: Identity = { emails: new Set(), masked: [], values: new Set(), asksUsername: marks.some((m) => !!m?.user) };
+  const read = await Promise.all(frames.map((f) => f.evaluate(readIdentity).catch(() => ({ text: '', values: [] as string[], partial: true }))));
+  const id: Identity = { emails: new Set(), masked: [], unclear: new Set(), values: new Set(), asksUsername: marks.some((m) => !!m?.user), partial: read.some((r) => r.partial) };
   for (const r of read) {
     for (const v of r.values) id.values.add(v.toLowerCase());
-    const text = `${r.text} ${r.values.join(' ')}`.toLowerCase();
-    for (const e of text.match(ADDRESS) ?? []) id.emails.add(e);
-    // Word by word: a hidden address is one word, and this keeps the work linear on a long page.
-    for (const word of text.split(/[\s,;:()<>"']+/)) {
-      const m = word.length < 200 ? HIDDEN.exec(word) : null;
-      if (m) id.masked.push({ head: m[1]!, tail: m[2]!, domain: m[3]!, shown: word });
+    // Word by word, each word read whole: linear on a long page, and "x#ann@example.com" is not "ann@example.com".
+    for (const raw of `${r.text} ${r.values.join(' ')}`.toLowerCase().split(/\s+/)) {
+      if (!raw.includes('@')) continue;
+      const word = raw.replace(/^[(<\["'«:,;=]+/, '').replace(/[)>\]"'».,;:!?]+$/, '');
+      if (word.length > 200) { id.unclear.add(`${word.slice(0, 40)}...`); continue; }
+      const hidden = HIDDEN.exec(word);
+      if (ADDRESS.test(word)) id.emails.add(word);
+      else if (hidden) id.masked.push({ head: hidden[1]!, tail: hidden[2]!, domain: hidden[3]!, shown: word });
+      else if (word.length > 2) id.unclear.add(word);
     }
   }
-  // "a••@example.com" also reads as the address "@example.com" would not: drop what is only the tail of a hidden one.
-  for (const m of id.masked) id.emails.delete(`${m.tail}@${m.domain}`);
   return id;
 }
 
@@ -193,8 +225,9 @@ function namedOnPage(username: string, id: Identity): boolean {
   return id.masked.some((m) => m.domain === domain && local.length > m.head.length + m.tail.length && local.startsWith(m.head) && local.endsWith(m.tail));
 }
 
-/** What the step shows as its account, for messages: bounded, at most three. */
-const shownOn = (id: Identity) => [...new Set([...id.emails, ...id.masked.map((m) => m.shown)])].slice(0, 3).map((e) => (e.length > 80 ? `${e.slice(0, 77)}...` : e));
+/** Every account the step shows, for the checks and the messages. */
+const accountsOn = (id: Identity) => [...new Set([...id.emails, ...id.masked.map((m) => m.shown), ...id.unclear])];
+const cut = (list: string[]) => list.slice(0, 3).map((e) => (e.length > 80 ? `${e.slice(0, 77)}...` : e)).join(', ');
 
 /** The account to use from one CLI source: the one asked for, or the only one whose website matches the page. */
 async function findAccount(page: Page, source: CliSource, wanted?: string, expected?: string, others: string[] = []): Promise<Account | null> {
@@ -226,18 +259,19 @@ async function findAccount(page: Page, source: CliSource, wanted?: string, expec
   } else {
     // A step that already names the account (password page after the e-mail page, account chooser) decides
     // which saved login to use: a password for another account is a failed attempt on the user's account.
-    const id = await identityOnPage(page);
-    const named = found.filter((a) => namedOnPage(a.username, id));
-    if (named.length) found = named;
-    else if (!id.asksUsername) {
-      // The account is already chosen and none of the saved logins is named: say what the page shows, fill nothing.
-      const shown = shownOn(id);
-      if (found.length > 1) {
-        throw new Error(`Several saved logins match and the page does not say which account it is${shown.length ? ` (it shows ${shown.join(', ')})` : ''}: pass item with one of these ids: ${found.map(label).join('; ')}`);
-      }
-      if (shown.length) {
-        throw new Error(`Refused: the page asks for the password of ${shown.join(' or ')}, the saved login ${label(found[0]!)} is another account. Nothing was filled. Pass item to use it anyway.`);
-      }
+    const id = await identityOnPage(page, new Set(found.flatMap(sitesOf).filter((x) => pageSites.has(x))));
+    if (!id.asksUsername) {
+      // The account is already chosen (password page after the e-mail page): only the saved login of the account
+      // the step shows may be used. In any doubt nothing is filled and the agent has to name the login.
+      const shown = accountsOn(id);
+      const named = found.filter((a) => namedOnPage(a.username, id));
+      const choose = `pass item with one of these ids: ${found.map(label).join('; ')}`;
+      if (id.partial) throw new Error(`Refused: this page is too large to tell which account it asks the password of. Nothing was filled; ${choose}`);
+      if (shown.length > 1) throw new Error(`Refused: the page shows several accounts (${cut(shown)}), it is not clear which one it asks the password of. Nothing was filled; ${choose}`);
+      if (named.length > 1) throw new Error(`Several saved logins match the account the page shows (${cut(shown)}): ${choose}`);
+      if (named.length === 1) found = named;
+      else if (shown.length) throw new Error(`Refused: the page asks for the password of ${cut(shown)}, ${found.length > 1 ? 'none of the saved logins is for that account' : `the saved login ${label(found[0]!)} is another account`}. Nothing was filled. Pass item to use one anyway: ${found.map(label).join('; ')}`);
+      else if (found.length > 1) throw new Error(`Several saved logins match and the page does not say which account it is: ${choose}`);
     }
     const exact = found.filter((a) => a.hosts.some((h) => pageHosts.has(h)));
     if (exact.length === 1) found = exact;

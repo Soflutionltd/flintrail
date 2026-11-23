@@ -187,7 +187,7 @@ describe('a sign-in step that already names the account', () => {
       // An account neither login is for: nothing is sent, the agent is told to choose.
       const tab = tabOf(await mcp.call('fl_open', { url: step('carol@example.com') }));
       const before = site.attempts.length;
-      await assert.rejects(mcp.call('fl_login', { tab }), /Several saved logins match and the page does not say which account it is \(it shows carol@example\.com\)/);
+      await assert.rejects(mcp.call('fl_login', { tab }), /Refused: the page asks for the password of carol@example\.com, none of the saved logins is for that account\. Nothing was filled/);
       assert.equal(site.attempts.length, before);
       // Named explicitly, a login is used as asked.
       assert.match(await mcp.call('fl_login', { tab, item: 'bob@example.com' }), /bob@example\.com.*filled password/);
@@ -222,6 +222,29 @@ describe('a sign-in step that already names the account', () => {
       assert.deepEqual((await attempt('label=' + encodeURIComponent('carol@example.com'))).sent, 0);
       // A support address in the footer is not an account: the step that names nobody still signs in.
       assert.deepEqual((await attempt('support=1')).sent, 1);
+      // An account kept in a hidden part of the page is not the one the step is about.
+      assert.deepEqual((await attempt(`${as('carol@example.com')}&hidden=${encodeURIComponent('ann@example.com')}`)).sent, 0);
+      // Odd characters stuck to an address do not make it another address.
+      for (const odd of ['•ann@example.com', '••ann@example.com', 'x#ann@example.com', "o'ann@example.com"]) {
+        assert.deepEqual((await attempt(as(odd))).sent, 0, odd);
+      }
+      // Two accounts on the step: not clear whose password is asked.
+      const both = await attempt(`${as('ann@example.com')}&note=${encodeURIComponent('Not you? Switch to carol@example.com')}`);
+      assert.match(both.out, /Refused: the page shows several accounts/);
+      assert.equal(both.sent, 0);
+      // A frame of another website naming the saved account says nothing about this sign-in.
+      const framed = `${site.url.replace('127.0.0.1', 'localhost')}/login-step?${as('ann@example.com')}`;
+      assert.deepEqual((await attempt(`${as('carol@example.com')}&frame=${encodeURIComponent(framed)}`)).sent, 0);
+      // A page too large to read whole: refused rather than guessed, and quickly.
+      const t0 = Date.now();
+      const huge = await attempt(`${as('carol@example.com')}&pad=45000`);
+      assert.match(huge.out, /Refused: this page is too large to tell which account/);
+      assert.equal(huge.sent, 0);
+      // A very long text without any address is read fast and changes nothing.
+      assert.deepEqual((await attempt(`${as('ann@example.com')}&long=10000`)).sent, 1);
+      assert.ok(Date.now() - t0 < 15000, `took ${Date.now() - t0} ms`);
+      // An address split by markup still reads as one.
+      assert.deepEqual((await attempt('note=' + encodeURIComponent('<b>ann</b>@example.com'))).sent, 1);
       // A very long address read on the page is cut in the message.
       const long = await attempt(as(`${'x'.repeat(400)}@example.com`));
       assert.equal(long.sent, 0);
