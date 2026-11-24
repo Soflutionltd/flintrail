@@ -14,15 +14,19 @@ export function remember(s: string, ttl: number) {
  * buttons, a script the agent ran): masked in everything returned to the agent, whether or not Flintrail
  * filled them. Only the user can turn this off, in Flintrail's settings (FLINTRAIL_MASK_SECRETS=off), never a tool.
  */
-const KNOWN_PREFIXES = /\b(?:github_pat_|gh[pousr]_|glpat-|xox[abpors]-|sk_(?:live|test)_|rk_(?:live|test)_|whsec_|cfut_|cfat_|cfk_|AIza|ya29\.|AKIA|ASIA|sk-(?:proj-|ant-)?|npm_|pypi-|dop_v1_|shpat_|SG\.)[A-Za-z0-9_\-.]{12,}/g;
+const KNOWN_PREFIXES = /(?<![A-Za-z0-9])(?:github_pat_|gh[pousr]_|glpat-|xox[abpors]-|sk_(?:live|test)_|rk_(?:live|test)_|whsec_|cfut_|cfat_|AIza|ya29\.|npm_|pypi-|dop_v1_|shpat_|SG\.)[A-Za-z0-9_\-.]{12,}/g;
+const LONG_PREFIXES = /(?<![A-Za-z0-9])(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9]))/g;
 const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
-// A long run of letters and digits shortly after a word that announces a secret ("Secret Access Key", "jeton").
-const NEAR_WORD = /((?:secret|private|access|api|auth|bearer|session|client|credential|password|passwd|token|key|cl[ée]|jeton|mot de passe)[^\n]{0,48}?)([A-Za-z0-9+/_=-]{32,})/gi;
+// A long run of letters AND digits shortly after a word that announces a secret ("Secret Access Key", "jeton").
+// Not a path or a URL ("/"), not plain words: a token has both letters and digits.
+const NEAR_WORD = /((?:secret|private|access|api|auth|bearer|session|client|credential|password|passwd|token|key|cl[ée]|jeton|mot de passe)[^\n]{0,48}?)([A-Za-z0-9+_=-]{32,})/gi;
+const MASK = '••• (secret masked)';
 
+/** A guard against secrets shown by accident, not a wall against a hostile agent (a value can be split or encoded). */
 export function maskSecrets(text: string): string {
   if (process.env.FLINTRAIL_MASK_SECRETS === 'off') return text;
-  return text.replace(KNOWN_PREFIXES, '••• (secret masked)').replace(JWT, '••• (secret masked)')
-    .replace(NEAR_WORD, (_, before: string) => `${before}••• (secret masked)`);
+  return text.replace(KNOWN_PREFIXES, MASK).replace(LONG_PREFIXES, MASK).replace(JWT, MASK)
+    .replace(NEAR_WORD, (all: string, before: string, token: string) => (/[A-Za-z]/.test(token) && /\d/.test(token) ? `${before}${MASK}` : all));
 }
 
 export function redact(text: string): string {
