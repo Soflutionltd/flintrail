@@ -15,6 +15,8 @@ const fakeOp = new URL('./fake-op.mjs', import.meta.url).pathname;
 chmodSync(fakeOp, 0o755);
 const fakeStore = new URL('./fake-store.mjs', import.meta.url).pathname;
 chmodSync(fakeStore, 0o755);
+// A fake vault value, built at run time (no credential-looking string in the repository).
+const vaultValue = 'vault-' + 'Q7'.repeat(12);
 const storeOut = join(mkdtempSync(join(tmpdir(), 'flintrail-store-')), 'stored.jsonl');
 const stored = () => { try { return readFileSync(storeOut, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const token = 'test-token-' + Math.random().toString(36).slice(2);
@@ -44,7 +46,7 @@ before(async () => {
     FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(relayPort), FLINTRAIL_TOKEN: token,
     FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir, FLINTRAIL_EXTENSION_WAIT: '1500',
     FLINTRAIL_PASSWORDS: `1password:${fakeOp}`,
-    FLINTRAIL_MCPHUB: fakeStore, FAKE_STORE_OUT: storeOut, FAKE_VAULT_NAMES: 'EXISTING_TOKEN,OTHER',
+    FLINTRAIL_MCPHUB: fakeStore, FAKE_STORE_OUT: storeOut, FAKE_VAULT_NAMES: 'EXISTING_TOKEN,OTHER', FAKE_VAULT_VALUE: vaultValue,
   }));
   // A normal Chromium with the Flintrail extension installed.
   ctx = await chromium.launchPersistentContext(userDataDir, {
@@ -300,7 +302,7 @@ test('fl_capture_secret puts a token a page shows once straight into the vault, 
   assert.match(sealed, /Blocked: this page holds a password, code or secret Flintrail filled or captured/);
   assert.ok(!sealed.includes(token));
   await mcp.call('fl_release', { tab: own });
-  // A tab of that site the agent takes over afterwards is sealed too; once it loads another page, the value is masked.
+  // A tab of that site the agent takes over afterwards is sealed too, and so is its next page for a few minutes; the value is masked anyway.
   const again = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: '/token-created', browser: 'chromium', text: 0 }))[1];
   assert.match(await mcp.call('fl_extract', { tab: again, js: 'return 1' }), /Blocked: this page holds a password, code or secret/);
   await mcp.call('fl_act', { tab: again, actions: [{ do: 'goto', url: `${site.url}/token-created?t=${token}` }] });
@@ -334,6 +336,54 @@ test('fl_capture_secret puts a token a page shows once straight into the vault, 
   // A refusal reads the same as a miss: it does not tell the agent such a secret was there.
   await assert.rejects(replace.pending, /Nothing captured \(or not confirmed by the user\): no single such secret/);
   assert.equal(stored().length, count);
+  await page.close();
+});
+
+test('fl_paste_secret types a vault secret into a field after the user\'s click, never into the agent\'s view', async () => {
+  const page = await ctx.newPage();
+  await page.goto(`${site.url}/paste-form`);
+  const snap = await mcp.call('fl_adopt', { url: '/paste-form', browser: 'chromium', text: 0 });
+  const tab = /Tab (t\d+)/.exec(snap)[1];
+  const key = refOf(snap, /password "API key"$/);
+  const ask = async (args, answer) => {
+    const asked = ctx.waitForEvent('page', (p) => p.url().includes('/confirm.html'));
+    const pending = mcp.call('fl_paste_secret', { tab, ...args });
+    pending.catch(() => { /* checked below */ });
+    const win = await asked;
+    await win.waitForSelector(`${answer}:not([disabled])`);
+    const shown = { title: await win.textContent('h1'), details: await win.textContent('dl') };
+    await win.click(answer);
+    return { pending, ...shown };
+  };
+  // Refused by the user: nothing is read from the vault, nothing typed.
+  const no = await ask({ ref: key, from: 'mcphub:EXISTING_TOKEN' }, '#deny');
+  assert.match(no.title, /paste a secret from your vault/);
+  assert.match(no.details, /127\.0\.0\.1.*McpHub vault as EXISTING_TOKEN.*into the password field the page calls "API key"/s);
+  await assert.rejects(no.pending, /Refused by the Flintrail extension in chromium: the user declined/);
+  assert.equal(await page.evaluate(() => document.querySelector('[name=key]').value), '');
+  // Allowed: typed and submitted, and the agent only learns the length.
+  const yes = await ask({ ref: key, from: 'mcphub:EXISTING_TOKEN', submit: true }, '#allow');
+  const out = await yes.pending;
+  assert.match(out, /Pasted the secret from McpHub vault as EXISTING_TOKEN into "API key" on 127\.0\.0\.1 \(\d+ characters\), confirmed by the user/);
+  assert.ok(!out.includes(vaultValue));
+  assert.equal(await page.evaluate(() => window.savedKey), vaultValue);
+  // The page is closed to scripts and screenshots, and the value is masked anyway.
+  assert.match(await mcp.call('fl_extract', { tab, js: 'return window.savedKey' }), /Blocked: this page holds a password, code or secret/);
+  // Not a field the user can see and edit, a missing name, a tab where the agent ran a script: refused before asking.
+  await page.goto(`${site.url}/paste-form`);
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, selector: 'button', from: 'mcphub:EXISTING_TOKEN' }), /only goes into a text, password or text area field/);
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'Email', from: 'mcphub:EXISTING_TOKEN' }), /only goes into a text, password or text area field/);
+  // A form sent to another site, or by GET with Enter pressed: the value would leave the page or land in the address.
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'Other site', from: 'mcphub:EXISTING_TOKEN' }), /form is sent to another site/);
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'Search', from: 'mcphub:EXISTING_TOKEN', submit: true }), /form is sent to another site, or by GET with submit/);
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: 'clipboard' }), /from: "mcphub:NAME"/);
+  // The site stays sealed a few minutes after the paste: the next page may show the secret again.
+  assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /Blocked: this page holds a password, code or secret/);
+  // Elsewhere, once the agent ran a script in the tab, no paste.
+  await mcp.call('fl_act', { tab, actions: [{ do: 'goto', url: site.url.replace('127.0.0.1', 'localhost') + '/paste-form' }], snapshot: false });
+  assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /-> 1/);
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: 'mcphub:EXISTING_TOKEN' }), /JavaScript was run in this tab/);
+  await mcp.call('fl_release', { tab });
   await page.close();
 });
 

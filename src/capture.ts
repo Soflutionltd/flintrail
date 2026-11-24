@@ -49,7 +49,7 @@ export function parseDestination(to: string): Destination {
   throw new Error('to: "mcphub:NAME", "mcphub:tenant/NAME" or "1password:Vault/Item title". (No clipboard: an agent could paste it where it reads it.)');
 }
 
-const describe = (d: Destination) => d.kind === 'mcphub' ? `McpHub vault${d.tenant ? ` of ${d.tenant}` : ''} as ${d.name}` : `1Password vault "${d.vault}" as "${d.title}"`;
+export const describe = (d: Destination) => d.kind === 'mcphub' ? `McpHub vault${d.tenant ? ` of ${d.tenant}` : ''} as ${d.name}` : `1Password vault "${d.vault}" as "${d.title}"`;
 
 /** Runs a program with the secret on its standard input only: never in its arguments or environment (ps). */
 function feed(bin: string, args: string[], input: string): Promise<void> {
@@ -63,7 +63,7 @@ function feed(bin: string, args: string[], input: string): Promise<void> {
   });
 }
 
-const mcphub = () => process.env.FLINTRAIL_MCPHUB || 'McpHub';
+export const mcphub = () => process.env.FLINTRAIL_MCPHUB || 'McpHub';
 
 /** Whether this McpHub vault already holds that name: replacing it needs the user's click. */
 function mcphubHas(d: Extract<Destination, { kind: 'mcphub' }>): Promise<boolean> {
@@ -75,7 +75,7 @@ function mcphubHas(d: Extract<Destination, { kind: 'mcphub' }>): Promise<boolean
   });
 }
 
-function onePasswordBin(): string {
+export function onePasswordBin(): string {
   const entry = config.passwordSources.find((s) => s === '1password' || s.startsWith('1password:'));
   return entry && entry.includes(':') ? entry.slice(entry.indexOf(':') + 1) : 'op';
 }

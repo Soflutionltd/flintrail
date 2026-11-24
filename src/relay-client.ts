@@ -175,7 +175,8 @@ export class RelayClient {
     switch (m.type) {
       case 'browsers': return this.setBrowsers(m.browsers || []);
       case 'tabWarning':
-        this.warnings = [...this.warnings, { url: String(m.url || ''), id: String(m.id || ''), at: Date.now() }].slice(-20);
+        // Said once per page, even if both the extension and the relay pass it on.
+        if (!this.warnings.some((w) => w.url === String(m.url || '') && w.id === String(m.id || ''))) this.warnings = [...this.warnings, { url: String(m.url || ''), id: String(m.id || ''), at: Date.now() }].slice(-20);
         return;
       case 'tabLost':
         this.lost = [...this.lost, { url: String(m.url || ''), reason: String(m.reason || ''), at: Date.now() }].slice(-20);

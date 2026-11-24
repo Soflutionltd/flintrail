@@ -42,6 +42,12 @@ export interface Action {
   method?: string;
   body?: string;
   headers?: Record<string, string>;
+  /** wait: what the element or text must become (default visible). */
+  state?: 'visible' | 'hidden' | 'attached' | 'detached';
+  /** wait: until the page made no request for half a second. */
+  network?: boolean;
+  /** Element actions: the target closest to this text (a table row, a card), or "dialog" for the open dialog. */
+  within?: string;
   /** login steps: password source, login ID in that source, and whether to press Enter after filling. */
   source?: string;
   item?: string;
@@ -79,6 +85,9 @@ interface PageState {
   /** fl_login is filling this tab, or filled a password or code in its current document. */
   loginRunning?: boolean;
   secretFilled?: boolean;
+  /** Requests of the page still waiting for an answer, and when the last one started or ended (wait network). */
+  inflight?: number;
+  netAt?: number;
 }
 const states = new WeakMap<Page, PageState>();
 /** The agent's JavaScript could read a filled secret in a form no masking recognizes (base64, sent to another site). */
@@ -107,7 +116,7 @@ export function markSecretFilled(page: Page) {
 // Sites a secret was just captured from: a page of theirs the agent drives, now or later, is closed to scripts and
 // screenshots until it loads another page, since the secret may still be on screen.
 const sealedHosts = new Map<string, number>();
-const SEAL_MS = 30 * 60_000;
+const SEAL_MS = 5 * 60_000;
 const hostOfPage = (page: Page) => { try { return new URL(page.url()).hostname; } catch { return ''; } };
 function sealIfCaptured(page: Page) {
   const at = sealedHosts.get(hostOfPage(page));
@@ -164,9 +173,14 @@ function register(page: Page, where: Driven): string {
     goneTabs.set(id, page.url());
     tabs.delete(id);
   });
-  // A new document: the secrets filled in the previous one are gone (the agent's scripts may not be, see agentJs).
-  page.on('domcontentloaded', () => { stateOf(page).secretFilled = false; });
+  // A new document: the secrets filled in the previous one are gone (the agent's scripts may not be, see agentJs),
+  // unless a secret was just captured from or pasted into this site: the next page may show it again.
+  page.on('domcontentloaded', () => { stateOf(page).secretFilled = false; sealIfCaptured(page); });
   page.on('request', (r) => recorder.onRequest(r));
+  const net = (d: number) => { const s = stateOf(page); s.inflight = Math.max(0, (s.inflight || 0) + d); s.netAt = Date.now(); };
+  page.on('request', () => net(1));
+  page.on('requestfinished', () => net(-1));
+  page.on('requestfailed', () => net(-1));
   page.on('response', (r) => recorder.onResponse(r));
   page.on('console', (m) => {
     const t = m.type();
@@ -430,7 +444,11 @@ export async function hideForeignFrames(page: Page): Promise<{ restore: () => Pr
   return { restore: async () => { for (const u of undo) await u(); } };
 }
 
-export async function snapshot(page: Page, opts: { max?: number; text?: number; diff?: boolean } = {}): Promise<string> {
+// Defaults kept short: the agent raises max or text, or narrows with within, when it needs more.
+const SNAP_MAX = 100;
+const SNAP_TEXT = 400;
+
+export async function snapshot(page: Page, opts: { max?: number; text?: number; diff?: boolean; within?: string } = {}): Promise<string> {
   const away = domainProblem(page.url());
   if (away) return `Blocked: nothing was read from this tab. ${away} Close it with fl_close.`;
   // An embedded frame of a site outside the user's list is not read either.
@@ -439,9 +457,12 @@ export async function snapshot(page: Page, opts: { max?: number; text?: number; 
     .filter(({ frame, index }) => !frame.isDetached() && (index === 0 || readableFrame(frame))).slice(0, 6);
   // Frames are read in parallel: one round trip instead of one per frame.
   const reads = await Promise.all(frames.map(({ frame, index }) => frame.evaluate(snapshotScript, {
-    max: index === 0 ? opts.max ?? 150 : 40,
-    text: index === 0 ? opts.text ?? 600 : 0,
+    max: index === 0 ? opts.max ?? SNAP_MAX : 40,
+    text: index === 0 ? opts.text ?? SNAP_TEXT : 0,
     prefix: index === 0 ? '' : `f${index}:`,
+    within: opts.within,
+    // A secret Flintrail put in this page: no field shows its value, even one the site re-rendered.
+    hideValues: !!stateOf(page).secretFilled,
   }).catch(() => null)));
   // The page may have moved while it was being read: what a tab or frame now outside the list returned is dropped.
   const moved = domainProblem(page.url());
@@ -461,21 +482,21 @@ export async function snapshot(page: Page, opts: { max?: number; text?: number; 
     return [...notes, `URL: ${page.url()} (page not readable yet)`].join('\n');
   }
   const seen: Seen = {
-    url: head.url, title: head.title, max: opts.max ?? 150, text: opts.text ?? 600, more: head.more,
+    url: head.url, title: head.title, max: opts.max ?? SNAP_MAX, text: opts.text ?? SNAP_TEXT, more: head.more, scope: head.scope || '',
     heads: head.heads, lines: [...head.lines, ...extra], body: head.body,
   };
   const before = lastSeen.get(page);
   lastSeen.set(page, seen);
   const delta = opts.diff && before ? changesSince(before, seen) : null;
   if (delta) return [...notes, ...delta].join('\n');
-  const out = [...notes, `URL: ${head.url}`, `Title: ${head.title}`, ...head.heads, '', ...seen.lines];
-  if (head.more) out.push('(list truncated, raise max if needed)');
+  const out = [...notes, `URL: ${head.url}`, `Title: ${head.title}`, ...(head.scope ? [head.scope] : []), ...head.heads, '', ...seen.lines];
+  if (head.more) out.push(`(list truncated at ${seen.max} elements: raise max, or narrow with within: "some text" or "dialog")`);
   if (head.body) out.push('', 'Text: ' + head.body);
   return out.join('\n');
 }
 
 /** What the agent last received about a tab: the next snapshot can be told as a difference from it. */
-interface Seen { url: string; title: string; max: number; text: number; more: boolean; heads: string[]; lines: string[]; body: string }
+interface Seen { url: string; title: string; max: number; text: number; more: boolean; scope: string; heads: string[]; lines: string[]; body: string }
 const lastSeen = new WeakMap<Page, Seen>();
 
 const refOfLine = (line: string) => /^\[([^\]]+)\]/.exec(line)?.[1];
@@ -486,7 +507,7 @@ const refOfLine = (line: string) => /^\[([^\]]+)\]/.exec(line)?.[1];
  * Refs are stable on a page (an element keeps its ref for as long as it lives), so unchanged lines can be left out.
  */
 function changesSince(before: Seen, now: Seen): string[] | null {
-  if (before.url !== now.url || before.max !== now.max || before.text !== now.text || before.more || now.more) return null;
+  if (before.url !== now.url || before.max !== now.max || before.text !== now.text || before.scope !== now.scope || before.more || now.more) return null;
   // Embedded frames added, removed or sent to another address: the frame headers carry that, so tell the whole page.
   const frames = (seen: Seen) => seen.lines.filter((l) => !refOfLine(l)).join('\n');
   if (frames(before) !== frames(now)) return null;
@@ -749,11 +770,29 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
       await page.setViewportSize({ width: a.width, height: a.height });
       return undefined;
     }
-    case 'wait':
-      if (a.text) await page.getByText(fillVars(a.text, vars)!).first().waitFor({ timeout: a.ms || 15000 });
-      else if (a.url) await page.waitForURL(new RegExp(fillVars(a.url, vars)!), { timeout: a.ms || 15000 });
+    case 'wait': {
+      const timeout = a.ms || 15000;
+      const state = a.state || 'visible';
+      // An element (ref, selector, role, label, placeholder) or a text, until it shows up or goes away.
+      const ref = (a as Action).ref;
+      const live = ref || a.selector || a.role || a.label || a.placeholder ? liveLocator(page, { ...a, ref, text: undefined } as Action) : null;
+      if (live) await live.loc.first().waitFor({ state, timeout });
+      else if (a.text) await page.getByText(fillVars(a.text, vars)!).first().waitFor({ state, timeout });
+      else if (a.url) await page.waitForURL(new RegExp(fillVars(a.url, vars)!), { timeout });
+      else if (a.network) {
+        // Half a second with no request waiting, counted from now: a click just before has had time to start its own.
+        const end = Date.now() + timeout;
+        await sleep(100);
+        for (;;) {
+          const s = stateOf(page);
+          if (!s.inflight && Date.now() - (s.netAt || 0) >= 500) break;
+          if (Date.now() > end) throw new Error(`the page still had ${s.inflight || 0} request(s) waiting after ${timeout} ms`);
+          await sleep(100);
+        }
+      }
       else await sleep(a.ms || 1000);
       return undefined;
+    }
     case 'eval': {
       assertNoSecret(page, 'Running JavaScript');
       stateOf(page).agentJs = true;
@@ -798,11 +837,49 @@ function seenRefs(page: Page): Map<string, TargetDescriptor> {
   return m;
 }
 
+/** The open modal dialog, the one on top. */
+const DIALOGS = 'dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true]';
+
+/**
+ * Among the elements a target matches, the one closest to a text: each climbs its ancestors until one shows the
+ * text, the fewest steps wins ("Delete" in the row that says "my-token", not in the row below). "dialog": the
+ * match inside the dialog opened last.
+ */
+async function closestTo(matches: Locator, within: string): Promise<Locator> {
+  // Only what the user can see: a hidden dialog's button is never the closest one.
+  const all = matches.filter({ visible: true });
+  const count = Math.min(await all.count(), 60);
+  if (!count) throw new Error('No element matches that target.');
+  const wanted = within.trim().toLowerCase();
+  const distances: number[] = [];
+  for (let i = 0; i < count; i++) {
+    distances.push(await all.nth(i).evaluate((el, { wanted, dialogs }) => {
+      if (wanted === 'dialog') {
+        const open = [...document.querySelectorAll(dialogs)].filter((d) => (d as HTMLElement).offsetParent !== null || getComputedStyle(d).position === 'fixed');
+        const modal = (d: Element) => d.getAttribute('aria-modal') === 'true' || (() => { try { return d.matches(':modal'); } catch { return false; } })();
+        const top = open.filter(modal).at(-1) || open.at(-1);
+        return top && top.contains(el) ? 0 : -1;
+      }
+      let steps = 0;
+      for (let node: Element | null = el; node; node = node.parentElement, steps++) {
+        if (((node as HTMLElement).innerText || '').toLowerCase().includes(wanted)) return steps;
+      }
+      return -1;
+    }, { wanted, dialogs: DIALOGS }, { timeout: 3000 }).catch(() => -1));
+  }
+  const found = distances.filter((d) => d >= 0);
+  if (!found.length) throw new Error(wanted === 'dialog' ? 'No match inside an open dialog.' : `No match near the text "${within}".`);
+  const best = Math.min(...found);
+  const ties = distances.flatMap((d, i) => (d === best ? [i] : []));
+  if (ties.length > 1 && wanted !== 'dialog') throw new Error(`${ties.length} matches are as close to "${within}": give a longer text, or a ref from the snapshot.`);
+  return all.nth(ties[0]!);
+}
+
 const needsElement = (a: Action) =>
   !PAGE_ACTIONS.has(a.do) && !(a.do === 'press' && !a.ref && !a.selector && !a.role && !a.text && !a.label && !a.placeholder);
 
 /** Batched live actions: one round trip for a whole sequence, then one fresh snapshot. */
-export async function act(page: Page, actions: Action[], opts: { snapshot?: boolean; max?: number; text?: number; diff?: boolean } = {}) {
+export async function act(page: Page, actions: Action[], opts: { snapshot?: boolean; max?: number; text?: number; diff?: boolean; within?: string } = {}) {
   const notes: string[] = [];
   for (let i = 0; i < actions.length; i++) {
     const a = actions[i]!;
@@ -813,12 +890,14 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
       if (!needsElement(a)) {
         const v = await performPage(page, a);
         recorder.addStep(page, { ...a, ref: undefined } as Step);
+        if (recorder.active && a.do === 'wait' && a.ref) notes.push(`#${i} note: a wait on a ref is replayed as a plain pause; wait on a selector, role or text to keep it in the flow.`);
         if (v !== undefined) notes.push(`#${i} ${a.do} -> ${JSON.stringify(v).slice(0, 4000)}`);
         continue;
       }
       const live = liveLocator(page, a);
       if (!live) throw new Error('No target given (ref, selector, role, text, label or placeholder).');
-      let loc = live.loc.first();
+      if (a.within && a.ref) throw new Error('within narrows a role, text, label, placeholder or selector target; a ref is already exact.');
+      let loc = a.within ? await closestTo(live.loc, a.within) : live.loc.first();
       const seen = seenRefs(page);
       if (a.ref && (await live.loc.count()) === 0) {
         // The site re-rendered the element (common after typing): find it again from its fingerprint.
@@ -847,5 +926,5 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
   if (away) return [...notes, `Blocked: the tab went to another site, nothing was read from it. ${away} Close it with fl_close.`].join('\n');
   if (opts.snapshot === false) return [...notes, ...pageNotes(page), `URL: ${page.url()}`].join('\n');
   await domQuiet(page);
-  return (notes.length ? notes.join('\n') + '\n\n' : '') + (await snapshot(page, { max: opts.max, text: opts.text, diff: opts.diff !== false }));
+  return (notes.length ? notes.join('\n') + '\n\n' : '') + (await snapshot(page, { max: opts.max, text: opts.text, within: opts.within, diff: opts.diff !== false }));
 }

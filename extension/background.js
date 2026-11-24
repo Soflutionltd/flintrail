@@ -225,6 +225,9 @@ async function assertWebTab(tabId) {
   if (isProtected(tab.url) || isProtected(tab.pendingUrl)) throw new Error('Flintrail never drives browser or extension pages.');
 }
 
+// Tabs whose page holds another extension's frame (a password manager), as the page's own script reported.
+const foreignTabs = new Map();
+
 async function attach(tabId) {
   await assertWebTab(tabId);
   if (!attached.has(tabId)) {
@@ -232,6 +235,7 @@ async function attach(tabId) {
     attached.add(tabId);
     await saveAttached();
     refreshBadge();
+    if (foreignTabs.has(tabId)) send(foreignTabs.get(tabId));
   }
   lastUsed.set(tabId, Date.now());
   return targetInfoFor(tabId);
@@ -345,6 +349,8 @@ async function handle(method, p) {
       return captureSecret(p);
     case 'fillPolicy':
       return fillPolicy(p);
+    case 'pastePolicy':
+      return pastePolicy(p);
     case 'fillAudit':
       return fillAudit(p);
     case 'listTabs': {
@@ -403,10 +409,13 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, change) => {
+  // A new page: what the previous one held is gone (its script reports again if needed).
+  if (change.status === 'loading') foreignTabs.delete(tabId);
   if (change.url && isProtected(change.url) && attached.has(tabId)) await detach(tabId, 'browser or extension page');
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  foreignTabs.delete(tabId);
   await restored;
   if (attached.delete(tabId)) { await saveAttached(); send({ type: 'tabClosed', tabId }); }
   const { recording } = await store.get('recording');
@@ -479,6 +488,19 @@ async function fillPolicy(p) {
   if (!settings.confirm) return { totp: settings.totp };
   const ok = await askUser({ domain, item: String(p.item || ''), source: String(p.source || ''), fields: (p.fields || []).map(String), totp: settings.totp });
   return ok ? { totp: settings.totp, confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
+}
+
+// A secret from the user's vault, typed into a page: the same settings as a password (on, domains), and the
+// user's click every time, whatever the settings say.
+async function pastePolicy(p) {
+  if (!(await storageProtected)) return { refused: 'this browser cannot protect the extension settings from web pages, so pasting secrets stays off' };
+  const settings = await fillSettings();
+  const domain = String(p.domain || '').toLowerCase();
+  const host = String(p.host || domain).toLowerCase().replace(/^www\./, '');
+  if (!settings.enabled) return { refused: 'password filling is turned off' };
+  if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
+  const ok = await askUser({ title: 'Flintrail wants to paste a secret from your vault', domain: host, item: String(p.item || 'secret'), source: 'vault', fields: (p.fields || []).map(String), totp: true });
+  return ok ? { confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
 }
 
 // A small window of this extension asks the user. Only a click there answers: no page and no agent can reach it.
@@ -602,8 +624,11 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     if (sender.id !== chrome.runtime.id || (sender.tab && !fromConfirmWindow(sender) && !['step', 'isRecording', 'foreignExtension'].includes(msg.type))) return reply({});
     switch (msg.type) {
       case 'foreignExtension': {
-        // Only the tabs an agent drives matter: the agent that drives it is told before the browser cuts in.
-        if (sender.tab && attached.has(sender.tab.id)) send({ type: 'foreignExtension', tabId: sender.tab.id, url: sender.tab.url || '', id: String(msg.id || '').slice(0, 40) });
+        // Kept for the page's lifetime: an agent taking the tab later is told at once, before the browser cuts in.
+        if (!sender.tab) return reply({});
+        const report = { type: 'foreignExtension', tabId: sender.tab.id, url: sender.tab.url || '', id: String(msg.id || '').slice(0, 40) };
+        foreignTabs.set(sender.tab.id, report);
+        if (attached.has(sender.tab.id)) send(report);
         return reply({});
       }
       case 'step': {

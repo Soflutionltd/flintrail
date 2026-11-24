@@ -28,6 +28,8 @@
     // At most once a second, and never again once said: a busy page is not scanned on every change.
     const watcher = new MutationObserver(() => { if (!pending) pending = setTimeout(look, 1000); });
     watcher.observe(document, { childList: true, subtree: true });
+    // Already there when this script started (a page restored with the manager's menu open).
+    pending = setTimeout(look, 1000);
   }
 
   const refresh = () => chrome.runtime.sendMessage({ type: 'isRecording' })

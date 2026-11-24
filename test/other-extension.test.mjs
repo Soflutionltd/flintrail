@@ -72,3 +72,16 @@ test('the agent is warned as soon as another extension puts its widget in a page
   assert.match(warned, /"Site access" to "On click"/);
   await mcp.call('fl_close', { tab });
 });
+
+test('a page that already holds a password manager widget is said so the moment the agent takes it', async () => {
+  // The user's own tab, not driven: the widget is there before any agent.
+  const page = await ctx.newPage();
+  await page.goto(site.url + '/search?before=1');
+  await page.evaluate(() => document.body.append(document.createElement('com-1password-button')));
+  await new Promise((r) => setTimeout(r, 1800));
+  const snap = await mcp.call('fl_adopt', { url: '/search?before=1', browser: 'chromium', text: 0 });
+  assert.match(snap, /Warning: another extension \(1Password\) put its own frame in this page/);
+  const tab = /Tab (t\d+)/.exec(snap)[1];
+  await mcp.call('fl_release', { tab });
+  await page.close();
+});

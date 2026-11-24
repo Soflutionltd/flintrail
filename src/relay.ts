@@ -292,8 +292,11 @@ class ExtensionBridge {
         const tab = this.tabsById.get(m.tabId);
         // An extension id or "1password", nothing else: the page cannot slip its own words into the warning.
         const id = /^([a-p]{32}|1password)$/.test(String(m.id)) ? String(m.id) : 'unknown';
+        const warning = { url: String(m.url || tab?.targetInfo.url || ''), id };
+        this.foreign.set(Number(m.tabId), warning);
+        if (this.foreign.size > 200) this.foreign.delete(this.foreign.keys().next().value!);
         if (tab) log(`${this.key}: tab ${m.tabId}: another extension (${id}) put its frame in the page`);
-        tab?.owner?.client.send({ type: 'tabWarning', url: String(m.url || tab.targetInfo.url || ''), id });
+        tab?.owner?.client.send({ type: 'tabWarning', ...warning });
         return;
       }
       case 'attached': return this.keepOnly(Array.isArray(m.tabIds) ? m.tabIds.map(Number) : []);
@@ -338,13 +341,21 @@ class ExtensionBridge {
       method: 'Target.attachedToTarget',
       params: { sessionId: tab.sessionId, targetInfo: { ...tab.targetInfo, attached: true }, waitingForDebugger: false },
     });
+    // Another extension was already in that page before the agent took it: said from the start.
+    // Only if the tab still shows that page: another page since then holds nothing of the kind.
+    const foreign = this.foreign.get(tab.tabId);
+    if (foreign && foreign.url === String(tab.targetInfo.url || '')) tab.owner?.client.send({ type: 'tabWarning', ...foreign });
   }
+
+  /** Tabs where another extension put its frame (a password manager), even before an agent drives them. */
+  private foreign = new Map<number, { url: string; id: string }>();
 
   private dropTab(tabId: number) {
     const tab = this.tabsById.get(tabId);
     if (!tab) return;
     this.tabsById.delete(tabId);
     this.tabsBySession.delete(tab.sessionId);
+    this.foreign.delete(tabId);
     for (const [sid, t] of this.childSessions) if (t === tabId) this.childSessions.delete(sid);
     this.toView(tab.owner, { method: 'Target.detachedFromTarget', params: { sessionId: tab.sessionId, targetId: tab.targetInfo.targetId } });
   }
@@ -676,6 +687,13 @@ export class ExtensionRelay {
           if (/Unknown method captureSecret/.test((e as Error).message)) throw new Error(`${bridge.key}: its Flintrail extension is too old to capture a secret, reload it to update it.`);
           throw e;
         }
+      }
+      case 'pastePolicy': {
+        // Always the user's click: an extension that cannot ask (too old) refuses.
+        const bridge = this.bridgeFor(p.key);
+        if (bridge.legacy) return { refused: 'this extension is too old to ask you, reload it to update it' };
+        const { key: _key, ...rest } = p;
+        return bridge.request('pastePolicy', rest, 125_000);
       }
       case 'fillPolicy':
       case 'fillAudit': {

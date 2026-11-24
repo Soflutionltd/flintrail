@@ -4,6 +4,7 @@ import { act, adoptTab, assertNoSecret, releaseTab, closeTab, consoleLog, domQui
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { captureSecret } from './capture.js';
+import { pasteSecret } from './paste.js';
 import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
@@ -48,6 +49,9 @@ const actionSchema = z.object({
   files: z.array(z.string()).optional().describe('upload: absolute file paths. With var, a single file becomes {{var}}.'),
   js: z.string().optional().describe('Function body for eval, must return a value.'),
   method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(),
+  within: z.string().optional().describe('With role / text / label / placeholder / selector: the match closest to this text, e.g. {do:"click", role:"button", name:"Delete", within:"my-token"} clicks Delete in the row of my-token. "dialog": the match inside the open dialog.'),
+  state: z.enum(['visible', 'hidden', 'attached', 'detached']).optional().describe('wait with ref / selector / role / label / placeholder / text: until it is visible (default) or hidden (a spinner gone).'),
+  network: z.boolean().optional().describe('wait: until the page made no request for half a second.'),
 });
 
 const desktopActionSchema = z.object({
@@ -70,8 +74,9 @@ const desktopActionSchema = z.object({
 const browserOpt = z.string().optional().describe('Which browser: "agent" (dedicated browser, default) or one of the user\'s browsers through the Flintrail extension: a name from fl_extension ("brave-soflution"), a browser profile name ("Soflution") or a brand ("brave", "chrome", "edge").');
 
 const snapOpts = {
-  text: z.number().optional().describe('Characters of page text to include (default 600, 0 for none).'),
-  max: z.number().optional().describe('Max interactive elements listed (default 150).'),
+  text: z.number().optional().describe('Characters of page text to include (default 400, 0 for none).'),
+  max: z.number().optional().describe('Max interactive elements listed (default 100).'),
+  within: z.string().optional().describe('List only the part of the page around this text (a row, a card, a section), or "dialog" for the open dialog. An open modal dialog is listed by itself unless within is "page".'),
 };
 
 export function buildServer(): McpServer {
@@ -86,23 +91,23 @@ export function buildServer(): McpServer {
       newTab: z.boolean().optional().describe('User browser only: always open a new tab, even when one already shows this address.'),
       ...snapOpts,
     },
-  }, guard(async ({ url, browser, window, newWindow, newTab, text: t, max }) => {
+  }, guard(async ({ url, browser, window, newWindow, newTab, text: t, max, within }) => {
     const id = await openTab(url, browser, { window, newWindow }, !newTab);
-    return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max }));
+    return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max, within }));
   }));
 
   s.registerTool('fl_adopt', {
     description: 'Take control of a tab the user already has open in the browser (first match on a URL substring), e.g. a site they just signed in to by hand. Returns its snapshot.',
     inputSchema: { url: z.string().min(3).describe('Substring of the tab URL (at least 3 characters), e.g. "github.com/settings"'), browser: browserOpt, ...snapOpts },
-  }, guard(async ({ url, browser, text: t, max }) => {
+  }, guard(async ({ url, browser, text: t, max, within }) => {
     const id = await adoptTab(url, browser);
-    return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max }));
+    return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max, within }));
   }));
 
   s.registerTool('fl_act', {
     description: 'Run SEVERAL actions in one call (fill a whole form, click, submit, wait, extract) and get one fresh snapshot back. Always batch as many actions as possible: one call beats ten. When the tab stays on the same page, the snapshot only lists what changed since the last one you received (+ new, ~ changed, - gone): every other element is still there with the same ref. Pass diff=false, or call fl_snapshot, for the whole page.',
     inputSchema: { tab: z.string(), actions: z.array(actionSchema).min(1), snapshot: z.boolean().optional(), diff: z.boolean().optional().describe('false: always the whole page (default: only the changes when the page is the same).'), ...snapOpts },
-  }, guard(async ({ tab, actions, snapshot: snap, diff, text: t, max }) => act(getTab(tab), actions as Action[], { snapshot: snap, diff, text: t, max })));
+  }, guard(async ({ tab, actions, snapshot: snap, diff, text: t, max, within }) => act(getTab(tab), actions as Action[], { snapshot: snap, diff, text: t, max, within })));
 
   if (config.passwordSources.length) s.registerTool('fl_login', {
     description: 'Sign in on the open sign-in form with the user\'s saved password: from the browser\'s own password manager, or from a password manager CLI the user configured (1Password, Bitwarden, custom command). Flintrail fills username, password and one-time code itself; the secrets never reach you. A CLI login is only filled over HTTPS, when the page domain matches its website, never in a payment or bank field, and never from a payment card or bank item. In the user\'s own browsers, the Flintrail extension settings (set by the user only) may turn filling off, limit it to some domains, or ask the user to confirm each fill: a refusal is final, do not try another way. On a multi-step sign-in (e-mail page, then password page), call it on each step. While recording, the flow stores the source and login ID, never a secret.',
@@ -115,18 +120,18 @@ export function buildServer(): McpServer {
       field: z.string().optional().describe('Ref (eN) of the one password or one-time code field to fill, e.g. a "Confirm access" password prompt. Any other kind of field is refused.'),
       ...snapOpts,
     },
-  }, guard(async ({ tab, item, account, source, submit, field, text: t, max }) => {
+  }, guard(async ({ tab, item, account, source, submit, field, text: t, max, within }) => {
     const page = getTab(tab);
     const r = await signIn(page, { item, source, submit, account, field });
     recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(account ? { account } : {}), ...(submit === false ? { submit } : {}) } as Step);
     await domQuiet(page);
-    return `${r.text}\n\n${await snapshot(page, { text: t, max })}`;
+    return `${r.text}\n\n${await snapshot(page, { text: t, max, within })}`;
   }));
 
   s.registerTool('fl_snapshot', {
     description: 'Re-read a tab: interactive elements with refs, headings and the start of the text. Always the whole page, unless diff=true (only what changed since the last snapshot you received).',
     inputSchema: { tab: z.string(), diff: z.boolean().optional(), ...snapOpts },
-  }, guard(async ({ tab, diff, text: t, max }) => snapshot(getTab(tab), { text: t, max, diff: !!diff })));
+  }, guard(async ({ tab, diff, text: t, max, within }) => snapshot(getTab(tab), { text: t, max, within, diff: !!diff })));
 
   s.registerTool('fl_extract', {
     description: 'Run JavaScript in the page and return the result. Fastest way to pull tables, lists or links.',
@@ -185,6 +190,23 @@ export function buildServer(): McpServer {
       to: z.string().describe('"mcphub:NAME", "mcphub:tenant/NAME" or "1password:Vault/Item title".'),
     },
   }, guard(async ({ browser, url, kind, prefix, to }) => captureSecret({ browser, match: url, kind, prefix, to })));
+
+  s.registerTool('fl_paste_secret', {
+    description: 'Type a secret from the user\'s vault (a token stored with fl_capture_secret, an API key) into one field of a tab, without the value ever reaching you. The user clicks to allow each paste in the Flintrail extension, which shows the site and the secret\'s name: a refusal is final, do not try another way. Only in the user\'s own browsers, over HTTPS, in a visible text or password field of the page itself, and not in a tab where you ran JavaScript. Afterwards the page refuses scripts and screenshots until it loads another page.',
+    inputSchema: {
+      tab: z.string(),
+      ref: z.string().optional().describe('The field, from the snapshot (eN).'),
+      selector: z.string().optional(), label: z.string().optional(),
+      from: z.string().describe('"mcphub:NAME", "mcphub:tenant/NAME" or "1password:Vault/Item title".'),
+      submit: z.boolean().optional().describe('Press Enter in the field afterwards.'),
+      ...snapOpts,
+    },
+  }, guard(async ({ tab, ref, selector, label, from, submit, text: t, max, within }) => {
+    const page = getTab(tab);
+    const said = await pasteSecret(page, { ref, selector, label, from, submit });
+    await domQuiet(page);
+    return `${said}\n\n${await snapshot(page, { text: t, max, within })}`;
+  }));
 
   s.registerTool('fl_release', {
     description: 'Stop driving a tab of the user\'s browser without closing it: the user keeps it, and it can be taken over again later (fl_open or fl_adopt). Use it when done with a tab the user had open; fl_close closes it.',

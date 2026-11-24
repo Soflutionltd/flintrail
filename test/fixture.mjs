@@ -75,6 +75,27 @@ export function startFixture(port = 0) {
         setTimeout(() => { throw new Error('uncaught kaboom'); }, 0);
       </script>`);
     // A page showing a freshly created token once, as GitHub or Cloudflare do (the value comes from the test).
+    if (url.pathname === '/rows') return html('Tokens', `<h1>API tokens</h1>
+      <table><tr><td>alpha-token</td><td>Created today</td><td><button>Delete</button></td></tr>
+        <tr><td>beta-token</td><td>Created yesterday</td><td><button>Delete</button></td></tr></table>
+      <button id="removeAll">Remove all</button><p id="out"></p>
+      <div id="modal" role="dialog" aria-modal="true" aria-label="Remove all tokens?" hidden><p>This cannot be undone.</p><button id="no">Cancel</button><button>Delete</button></div>
+      <div id="busy" hidden>Working…</div>
+      <script>
+        for (const b of document.querySelectorAll('td button')) b.onclick = () => { out.textContent = 'deleted ' + b.closest('tr').cells[0].textContent; };
+        removeAll.onclick = () => { modal.hidden = false; };
+        no.onclick = () => { modal.hidden = true; };
+        modal.querySelector('button:last-child').onclick = () => {
+          modal.hidden = true; busy.hidden = false;
+          setTimeout(() => { busy.hidden = true; out.textContent = 'all deleted'; }, 700);
+        };
+      </script>`);
+    if (url.pathname === '/paste-form') return html('Deploy settings', `<h1>Deploy settings</h1>
+      <form id="f" method="post"><label>API key <input type="password" name="key"></label><label>Note <input name="note"></label><label>Email <input type="email" name="mail"></label><button>Save</button></form>
+      <form action="/search"><label>Search <input name="q"></label></form>
+      <form method="post" action="https://elsewhere.example/collect"><label>Other site <input name="o"></label></form>
+      <p id="out"></p>
+      <script>f.onsubmit = (e) => { e.preventDefault(); out.textContent = 'saved ' + f.key.value.length + ' characters'; window.savedKey = f.key.value; };</script>`);
     if (url.pathname === '/token-created') {
       const shown = (url.searchParams.getAll('t')).map((t) => `<p>Make sure to copy it now.</p><code>${t}</code><button aria-label="Copy">Copy</button>`).join('')
         // Values the page does not show: a hidden field, a password field, a hidden element's attribute.

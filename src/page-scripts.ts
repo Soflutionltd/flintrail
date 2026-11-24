@@ -5,6 +5,10 @@ export interface SnapshotOptions {
   max: number;
   text: number;
   prefix: string;
+  /** Only the part of the page around this text, "dialog" for the open dialog, "page" for the whole page. */
+  within?: string;
+  /** No field value at all: a secret was filled in this page. */
+  hideValues?: boolean;
 }
 
 export interface SnapshotResult {
@@ -14,6 +18,8 @@ export interface SnapshotResult {
   lines: string[];
   body: string;
   more: boolean;
+  /** What the listing was limited to, said to the agent (an open dialog, the part around a text). */
+  scope?: string;
 }
 
 export function snapshotScript(opts: SnapshotOptions): SnapshotResult {
@@ -49,12 +55,43 @@ export function snapshotScript(opts: SnapshotOptions): SnapshotResult {
     });
   };
   walk(document);
+  // The part of the page to list. An open modal dialog by itself (the page behind it cannot be used anyway),
+  // unless the agent asks for the whole page; or the part around a text the agent names.
+  const DIALOGS = 'dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true]';
+  const isModal = (d: Element) => d.getAttribute('aria-modal') === 'true' || (() => { try { return d.matches(':modal'); } catch { return false; } })();
+  const wanted = clean(opts.within).toLowerCase();
+  let roots: Element[] | null = null;
+  let scope = '';
+  if (wanted !== 'page') {
+    const open = [...document.querySelectorAll(DIALOGS)].filter(visible);
+    const top = wanted === 'dialog' ? open.at(-1) : !wanted ? open.filter(isModal).at(-1) : undefined;
+    if (top) {
+      roots = [top];
+      const title = clean(top.getAttribute('aria-label') || top.querySelector('h1,h2,h3,[role=heading]')?.textContent).slice(0, 60);
+      scope = `Dialog open${title ? ` "${title}"` : ''}: only its elements are listed${wanted === 'dialog' ? '' : ' (within: "page" lists the whole page)'}.`;
+    } else if (wanted === 'dialog') {
+      scope = 'No dialog is open: the whole page is listed.';
+    } else if (wanted) {
+      // Each place the text shows, widened to the smallest block that also holds something to click or fill.
+      const found: Element[] = [];
+      const texts = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+      for (let t = texts.nextNode(); t && found.length < 20; t = texts.nextNode()) {
+        if (!(t.textContent || '').toLowerCase().includes(wanted)) continue;
+        let block = t.parentElement;
+        while (block && block !== document.body && !block.querySelector(sel)) block = block.parentElement;
+        if (block && !found.some((f) => f.contains(block!))) found.push(block);
+      }
+      roots = found;
+      scope = found.length ? `Only the part of the page around "${opts.within}" is listed (${found.length} place${found.length > 1 ? 's' : ''}).` : `"${opts.within}" is not on the page: nothing listed.`;
+    }
+  }
+  const inScope = (el: Element) => !roots || roots.some((r) => r.contains(el));
   const w = window as unknown as { __flN?: number };
   let n = w.__flN || 0;
   const lines: string[] = [];
   for (const el of all) {
     if (lines.length >= opts.max) break;
-    if (!visible(el)) continue;
+    if (!inScope(el) || !visible(el)) continue;
     if (!el.dataset.fl) el.dataset.fl = 'e' + ++n;
     const tag = el.tagName.toLowerCase();
     const input = el as HTMLInputElement;
@@ -63,7 +100,7 @@ export function snapshotScript(opts: SnapshotOptions): SnapshotResult {
     if (tag === 'input' || tag === 'textarea') {
       if (input.type === 'checkbox' || input.type === 'radio') line += input.checked ? ' (checked)' : ' (unchecked)';
       // A field Flintrail filled with a password or code never shows its value, even turned into plain text.
-      else if (input.type !== 'password' && input.value && !el.hasAttribute('data-fl-secret')) line += ` = "${clean(input.value).slice(0, 40)}"`;
+      else if (!opts.hideValues && input.type !== 'password' && input.value && !el.hasAttribute('data-fl-secret')) line += ` = "${clean(input.value).slice(0, 40)}"`;
     }
     const select = el as HTMLSelectElement;
     if (tag === 'select' && select.selectedOptions[0]) line += ` = "${clean(select.selectedOptions[0].text).slice(0, 40)}"`;
@@ -75,8 +112,9 @@ export function snapshotScript(opts: SnapshotOptions): SnapshotResult {
     .filter(visible)
     .slice(0, 8)
     .map((h) => '# ' + clean(h.innerText).slice(0, 80));
-  const body = opts.text > 0 ? clean(document.body ? document.body.innerText : '').slice(0, opts.text) : '';
-  return { title: document.title, url: location.href, heads, lines, body, more: all.length > opts.max };
+  const shownText = roots ? roots.map((r) => (r as HTMLElement).innerText || '').join(' / ') : document.body ? document.body.innerText : '';
+  const body = opts.text > 0 ? clean(shownText).slice(0, opts.text) : '';
+  return { title: document.title, url: location.href, heads, lines, body, more: lines.length >= opts.max && all.length > opts.max, ...(scope ? { scope } : {}) };
 }
 
 export interface TargetDescriptor {
