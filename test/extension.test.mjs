@@ -46,7 +46,7 @@ before(async () => {
     FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(relayPort), FLINTRAIL_TOKEN: token,
     FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir, FLINTRAIL_EXTENSION_WAIT: '1500',
     FLINTRAIL_PASSWORDS: `1password:${fakeOp}`,
-    FLINTRAIL_MCPHUB: fakeStore, FAKE_STORE_OUT: storeOut, FAKE_VAULT_NAMES: 'EXISTING_TOKEN,OTHER', FAKE_VAULT_VALUE: vaultValue,
+    FLINTRAIL_MCPHUB: fakeStore, FAKE_STORE_OUT: storeOut, FAKE_VAULT_NAMES: 'EXISTING_TOKEN,OTHER,OLD_FORMAT', FAKE_VAULT_OLD_FORMAT: 'OLD_FORMAT', FAKE_VAULT_VALUE: vaultValue,
   }));
   // A normal Chromium with the Flintrail extension installed.
   ctx = await chromium.launchPersistentContext(userDataDir, {
@@ -388,6 +388,20 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
   await sw.evaluate(() => chrome.storage.local.set({ fillSettings: {} }));
   // The site stays sealed a few minutes after the paste: the next page may show the secret again.
   assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /Blocked: this page holds a password, code or secret/);
+  // An older McpHub printed "NAME = value": that line is never typed into the field.
+  const old = await ctx.newPage();
+  await old.goto(`${site.url.replace('127.0.0.1', 'localhost')}/paste-form`);
+  const oldTab = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: 'localhost', browser: 'chromium', text: 0 }))[1];
+  const asked2 = ctx.waitForEvent('page', { predicate: (p) => p.url().includes('confirm.html') });
+  const pending2 = mcp.call('fl_paste_secret', { tab: oldTab, label: 'API key', from: 'mcphub:OLD_FORMAT' });
+  pending2.catch(() => {});
+  const win2 = await asked2;
+  await win2.waitForSelector('#allow:not([disabled])');
+  await win2.click('#allow');
+  await assert.rejects(pending2, /McpHub printed the name with the value \(an older McpHub\): update it, then try again\. Nothing was pasted/);
+  assert.equal(await old.evaluate(() => document.querySelector('[name=key]').value), '');
+  await mcp.call('fl_release', { tab: oldTab });
+  await old.close();
   // Elsewhere, once the agent ran a script in the tab, no paste.
   await mcp.call('fl_act', { tab, actions: [{ do: 'goto', url: site.url.replace('127.0.0.1', 'localhost') + '/paste-form' }], snapshot: false });
   assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /-> 1/);

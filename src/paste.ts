@@ -29,8 +29,10 @@ function read(bin: string, args: string[]): Promise<string> {
 /** The secret's value, read from the vault only after the user allowed it. */
 async function reveal(d: Destination, host: string): Promise<string> {
   if (d.kind === 'mcphub') {
-    const out = await read(mcphub(), ['vault', 'get', ...(d.tenant ? ['--tenant', d.tenant] : []), d.name, '--reveal']);
-    return out.replace(/\r?\n$/, '');
+    const out = (await read(mcphub(), ['vault', 'get', ...(d.tenant ? ['--tenant', d.tenant] : []), d.name, '--reveal'])).replace(/\r?\n$/, '');
+    // Older McpHub printed "NAME = value": that whole line would be typed into the field.
+    if (out.startsWith(`${d.name} = `) || out.startsWith(`${d.name}=`)) throw new Error('McpHub printed the name with the value (an older McpHub): update it, then try again. Nothing was pasted.');
+    return out;
   }
   interface Field { type?: string; purpose?: string; value?: string }
   interface Item { category?: string; fields?: Field[]; urls?: { href?: string }[] }

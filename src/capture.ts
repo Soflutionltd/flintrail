@@ -6,8 +6,9 @@
 // the sites the user allows), the value must have that kind's exact form, a vault entry is never replaced without
 // the user's click, and every failure reads the same, so trying again and again teaches nothing about the page.
 import { execFile, spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { accessSync, appendFileSync, constants, mkdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { config } from './config.js';
 import { domainProblem } from './domains.js';
 import { sealSite } from './engine.js';
@@ -63,7 +64,23 @@ function feed(bin: string, args: string[], input: string): Promise<void> {
   });
 }
 
-export const mcphub = () => process.env.FLINTRAIL_MCPHUB || 'McpHub';
+/**
+ * McpHub's program: FLINTRAIL_MCPHUB, or found where it gets installed. An app opened from the Dock (Claude Desktop)
+ * starts Flintrail with a short PATH that leaves out ~/.local/bin, so the name alone is not enough.
+ */
+export function mcphub(): string {
+  const set = process.env.FLINTRAIL_MCPHUB;
+  if (set) return set;
+  const dirs = [...(process.env.PATH || '').split(delimiter), join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const bin = join(dir, 'McpHub');
+    try {
+      if (statSync(bin).isFile()) { accessSync(bin, constants.X_OK); return bin; }
+    } catch { /* not there */ }
+  }
+  throw new Error('McpHub not found (looked in PATH, ~/.local/bin, /opt/homebrew/bin and /usr/local/bin). Set FLINTRAIL_MCPHUB to its full path in the Flintrail configuration.');
+}
 
 /** Whether this McpHub vault already holds that name: replacing it needs the user's click. */
 function mcphubHas(d: Extract<Destination, { kind: 'mcphub' }>): Promise<boolean> {
