@@ -85,11 +85,11 @@ test('the popup shows the browser\'s name, ready to change, and a name typed who
   await rename('', 'chromium');
 });
 
-test('agent tabs open only in the agent window, never in the user\'s window', async () => {
+test('agent tabs open in the window the user picked for the agent, else in the window used last, never a new one', async () => {
   // The user works in one window and picks another one for the agent.
   const userWindow = await sw.evaluate(async () => (await chrome.windows.getAll())[0].id);
   const agentWindowId = await sw.evaluate(async () => (await chrome.windows.create({ focused: false, url: 'about:blank' })).id);
-  await sw.evaluate((id) => chrome.storage.session.set({ agentWindow: id }), agentWindowId);
+  await sw.evaluate((id) => chrome.storage.session.set({ pickedAgentWindow: id }), agentWindowId);
   const snap = await mcp.call('fl_open', { url: site.url, text: 0 });
   const tab = /Tab (t\d+)/.exec(snap)[1];
   const windowOf = () => sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '/*' })).map((t) => t.windowId), site.url);
@@ -97,12 +97,14 @@ test('agent tabs open only in the agent window, never in the user\'s window', as
   assert.notEqual(agentWindowId, userWindow);
   await mcp.call('fl_close', { tab });
 
-  // The agent window was closed: the agent opens a window of its own instead of using the user's.
+  // The agent window was closed: the tab goes to a window the user already has, no new window.
   await sw.evaluate((id) => chrome.windows.remove(id), agentWindowId);
+  const windows = () => sw.evaluate(async () => (await chrome.windows.getAll({ windowTypes: ['normal'] })).length);
+  const before = await windows();
   const again = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url, text: 0 }))[1];
   const [w] = await windowOf();
-  assert.notEqual(w, userWindow);
   assert.notEqual(w, agentWindowId);
+  assert.equal(await windows(), before);
   await mcp.call('fl_close', { tab: again });
 });
 
@@ -217,6 +219,44 @@ test('fl_open takes over the tab already showing the address, and fl_release let
   assert.equal(await count(), before + 1);
   await mcp.call('fl_close', { tab: fresh });
   await own.close();
+});
+
+test('fl_open on another page of a site the user has open brings that tab there, in its own window', async () => {
+  const own = await ctx.newPage();
+  await own.goto(site.url + '/details');
+  const count = () => sw.evaluate(async () => (await chrome.tabs.query({})).length);
+  const before = await count();
+  const snap = await mcp.call('fl_open', { url: site.url + '/search?q=asked', browser: 'chromium', text: 0 });
+  assert.match(snap, /URL: .*\/search\?q=asked/);
+  assert.equal(await count(), before, 'no new tab, no new window');
+  assert.match(own.url(), /\/search\?q=asked/, 'the user\'s own tab went to the page asked for');
+  await mcp.call('fl_release', { tab: /Tab (t\d+)/.exec(snap)[1] });
+  await own.close();
+});
+
+test('fl_open never takes a tab of another site whose address merely mentions the one asked for', async () => {
+  // localhost is another site than 127.0.0.1, even on the same server.
+  const decoy = await ctx.newPage();
+  await decoy.goto(site.url.replace('127.0.0.1', 'localhost') + '/details?next=' + encodeURIComponent(site.url) + '&raw=' + site.url + '/search');
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', text: 0 }))[1];
+  assert.match(decoy.url(), /^http:\/\/localhost/, 'the other site\'s tab was left alone');
+  await mcp.call('fl_close', { tab });
+  await decoy.close();
+});
+
+test('a new tab goes to the window that already holds the site, never to a new window', async () => {
+  // The user has the site open in a second window, in a tab another agent already drives (so it is not taken).
+  const other = await sw.evaluate(async (u) => (await chrome.windows.create({ focused: false, url: u + '/details' })).id, site.url);
+  await waitFor(async () => (await sw.evaluate(async (w) => (await chrome.tabs.query({ windowId: w }))[0]?.url, other))?.includes('/details'));
+  const busy = await sw.evaluate(async (w) => { const [t] = await chrome.tabs.query({ windowId: w }); await attach(t.id); return t.id; }, other);
+  const windows = () => sw.evaluate(async () => (await chrome.windows.getAll({ windowTypes: ['normal'] })).length);
+  const before = await windows();
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', text: 0 }))[1];
+  assert.equal(await windows(), before);
+  const where = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '/search' })).map((t) => t.windowId), site.url);
+  assert.deepEqual(where, [other]);
+  await mcp.call('fl_close', { tab });
+  await sw.evaluate(async ({ w, t }) => { await detach(t); await chrome.windows.remove(w); }, { w: other, t: busy });
 });
 
 test('browser and extension pages, the settings included, are never driven', async () => {

@@ -34,3 +34,16 @@ export function macMatches(token: string, message: string, mac: string): boolean
 export function slug(text: string): string {
   return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
 }
+
+/**
+ * How a tab's address must match what an agent asked for: "contains" (fl_adopt, any part of the address),
+ * "prefix" (fl_open, that page or one under it) or "origin" (fl_open, the same site exactly). The last two
+ * never take a tab of another site whose address merely mentions the one asked for.
+ */
+export type MatchMode = 'contains' | 'prefix' | 'origin';
+
+export function urlMatches(url: string, match: string, mode: MatchMode = 'contains'): boolean {
+  if (mode === 'contains') return url.includes(match);
+  if (mode === 'prefix') return url.startsWith(match) && /^($|[/?#])/.test(url.slice(match.length));
+  try { return new URL(url).origin === match; } catch { return false; }
+}

@@ -7,6 +7,7 @@ import { getRelayClient } from './relay-client.js';
 import { config } from './config.js';
 import { assertAllowed, domainProblem } from './domains.js';
 import { redact } from './secrets.js';
+import { urlMatches, type MatchMode } from './relay-protocol.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
 import type { DesktopStep } from './desktop.js';
@@ -186,6 +187,8 @@ function pageNotes(page: Page): string[] {
 export interface Placement {
   window?: number;
   newWindow?: boolean;
+  /** The address about to be opened: the new tab goes next to the user's tabs of that site. */
+  near?: string;
 }
 
 /** Tabs being opened, per browser context. */
@@ -226,6 +229,7 @@ async function openPage(where: Driven, placement: Placement = {}): Promise<Page>
         url: 'about:blank', background: true, ...(browserContextId ? { browserContextId } : {}),
         ...(placement.window !== undefined ? { flintrailWindowId: placement.window } : {}),
         ...(placement.newWindow ? { flintrailNewWindow: true } : {}),
+        ...(placement.near ? { flintrailNear: placement.near } : {}),
       };
       await cdp.send('Target.createTarget', params);
       const page = await waitPage;
@@ -249,10 +253,20 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
   // opening one more tab: the user does not end up with the same site open ten times.
   if (url && reuse && where.viaExtension && placement.window === undefined && !placement.newWindow) {
     assertAllowed(url);
-    const existing = await takeOver(where, url.replace(/[?#].*$/, '').replace(/\/+$/, '')).catch(() => null);
-    if (existing) return register(existing, where);
+    // The same page (or one under it) as it is; else a tab of the same site, brought to the page asked for.
+    const same = await takeOver(where, url.replace(/[?#].*$/, '').replace(/\/+$/, ''), 'prefix').catch(() => null);
+    if (same) return register(same, where);
+    let origin = '';
+    try { origin = new URL(url).origin; } catch { /* not a web address: a new tab below */ }
+    const site = /^https?:/.test(origin) ? await takeOver(where, origin, 'origin').catch(() => null) : null;
+    if (site) {
+      const id = register(site, where);
+      await gotoFast(site, url);
+      recorder.onOpen(url);
+      return id;
+    }
   }
-  const page = await newPage(where, placement);
+  const page = await newPage(where, url && where.viaExtension ? { ...placement, near: url } : placement);
   const id = register(page, where);
   if (url) {
     await gotoFast(page, url);
@@ -270,14 +284,14 @@ export async function adoptTab(match: string, browserName?: string): Promise<str
 }
 
 /** A tab open in this browser whose address contains match, now driven by this conversation; null when there is none. */
-async function takeOver(where: Driven, match: string): Promise<Page | null> {
+async function takeOver(where: Driven, match: string, mode: MatchMode = 'contains'): Promise<Page | null> {
   const owned = new Set(tabs.values());
-  const free = () => where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
+  const free = () => where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && urlMatches(p.url(), match, mode)).at(-1);
   let page = free();
   // In a user browser, a tab the user shared from the extension belongs to no conversation until one
   // claims it: the relay then hands it to this process only.
   if (!page && where.viaExtension) {
-    const claimed = await getRelayClient()?.request('claim', { key: where.name, match });
+    const claimed = await getRelayClient()?.request('claim', { key: where.name, match, mode });
     for (let i = 0; claimed && !page && i < 50; i++) {
       await new Promise((r) => setTimeout(r, 100));
       page = free();
@@ -297,12 +311,9 @@ export async function releaseTab(id: string) {
   if (!where.viaExtension || !where.browser) throw new Error(`Tab ${id} is in the dedicated browser: close it with fl_close.`);
   const cdp = await where.browser.newBrowserCDPSession();
   try {
-    const { targetInfos } = await cdp.send('Target.getTargets') as { targetInfos: { targetId: string; url: string }[] };
-    const mine = targetInfos.filter((t) => t.url === page.url());
-    if (mine.length !== 1) throw new Error(`Tab ${id}: cannot tell it apart from another tab of this conversation on the same address. Close it with fl_close instead.`);
-    // A command of the relay only, outside the CDP protocol types.
+    // A command of the relay only, outside the CDP protocol types: it finds the tab by its address now.
     const send = cdp.send.bind(cdp) as (method: string, params: Record<string, unknown>) => Promise<unknown>;
-    await send('Flintrail.releaseTarget', { targetId: mine[0]!.targetId });
+    await send('Flintrail.releaseTarget', { url: page.url() });
   } finally {
     await cdp.detach().catch(() => {});
   }

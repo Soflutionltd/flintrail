@@ -13,8 +13,8 @@ async function render() {
   // The name agents use for this browser, shown ready to change: the one the user gave, else the one Flintrail gave.
   if (!labelLoaded && (s.label || s.name)) { $('label').value = s.label || s.name; labelLoaded = true; }
   $('nameInfo').textContent = connected && s.name
-    ? `Agents pick this browser as "${s.name}". Change it above if you like.`
-    : 'Each browser gets a name of its own; change it above if you like.';
+    ? `Agents pick this browser profile as "${s.name}", whatever the window. Change it above if you like.`
+    : 'Each browser profile gets a name of its own, the same in all its windows; change it above if you like.';
   $('connect').classList.toggle('hidden', connected);
   $('disconnect').classList.toggle('hidden', !connected);
   $('share').disabled = !connected || !tab;
@@ -26,13 +26,13 @@ async function render() {
   if (tab) {
     const { windowId } = await send({ type: 'getAgentWindow' });
     const isAgent = windowId === tab.windowId;
-    $('agentWindow').disabled = isAgent;
-    $('agentWindow').textContent = isAgent ? 'This is the agent window' : 'Use this window for the agent';
+    $('agentWindow').dataset.picked = isAgent ? '1' : '';
+    $('agentWindow').textContent = isAgent ? 'Stop keeping the agent to this window' : 'Keep the agent to this window';
     $('windowInfo').textContent = isAgent
       ? 'The agent opens its tabs here only.'
       : windowId === null
-        ? 'No window picked: the agent opens its own window when it needs one.'
-        : 'The agent works in another window, never in this one.';
+        ? 'The agent works with the tabs you already have open, and opens new ones in the window you used last.'
+        : 'The agent opens its new tabs in another window of this profile.';
   }
   const rec = s.recording;
   $('recStart').classList.toggle('hidden', !!rec);
@@ -57,7 +57,8 @@ $('saveLabel').onclick = async () => {
 };
 $('disconnect').onclick = async () => { await send({ type: 'disconnect' }); render(); };
 $('agentWindow').onclick = async () => {
-  const r = await send({ type: 'setAgentWindow', windowId: tab.windowId });
+  // A second click lets the agent go back to the window used last.
+  const r = await send({ type: 'setAgentWindow', windowId: $('agentWindow').dataset.picked ? null : tab.windowId });
   $('msg').textContent = r.text;
   render();
 };

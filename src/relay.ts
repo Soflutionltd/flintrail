@@ -23,7 +23,7 @@ import { installNativeHost } from './pairing.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { profileOfInstance, profileReadProblems } from './profiles.js';
-import { macFor, macMatches, RELAY_PROTOCOL, slug, type BrowserInfo } from './relay-protocol.js';
+import { macFor, macMatches, RELAY_PROTOCOL, slug, urlMatches, type BrowserInfo, type MatchMode } from './relay-protocol.js';
 import { VERSION } from './version.js';
 
 interface Tab {
@@ -358,9 +358,9 @@ class ExtensionBridge {
   }
 
   /** Gives a tab the user shared (URL containing match) to this client. */
-  async claim(client: ClientConn, match: string): Promise<{ url: string } | null> {
+  async claim(client: ClientConn, match: string, mode: MatchMode = 'contains'): Promise<{ url: string } | null> {
     const view = this.viewOf(client);
-    const shared = [...this.tabsById.values()].filter((t) => !t.owner && String(t.targetInfo.url || '').includes(match)).at(-1);
+    const shared = [...this.tabsById.values()].filter((t) => !t.owner && urlMatches(String(t.targetInfo.url || ''), match, mode)).at(-1);
     if (shared) {
       shared.owner = view;
       if (view.autoAttach) this.announce(shared);
@@ -370,7 +370,7 @@ class ExtensionBridge {
     if (this.legacy) return null;
     let found: { tabId?: number | null; targetInfo?: Tab['targetInfo']; refused?: string };
     try {
-      found = await this.request('adoptTab', { match }, 10000);
+      found = await this.request('adoptTab', { match, mode }, 10000);
     } catch (e) {
       if (/Unknown method adoptTab/.test((e as Error).message)) return null;
       throw e;
@@ -488,7 +488,8 @@ class ExtensionBridge {
         if (Object.keys(placement).length && this.legacy) {
           throw new Error(`${this.key}: extension ${this.info.version} cannot pick a window, reload it in this browser to update it.`);
         }
-        const r = await this.request('createTab', { url: params.url || 'about:blank', ...placement });
+        const near = typeof params.flintrailNear === 'string' ? { near: params.flintrailNear } : {};
+        const r = await this.request('createTab', { url: params.url || 'about:blank', ...placement, ...near });
         if (!this.views.has(view)) {
           // The client left while the tab was opening: nobody will drive it.
           if (!this.legacy) this.request('release', { tabIds: [r.tabId] }, 5000).catch(() => {});
@@ -498,9 +499,13 @@ class ExtensionBridge {
         return { targetId: tab.targetInfo.targetId };
       }
       case 'Flintrail.releaseTarget': {
-        // fl_release: this conversation stops driving the tab, the user keeps it open.
-        const tab = own().find((t) => t.targetInfo.targetId === params.targetId);
-        if (!tab) throw new Error('no such tab of this conversation');
+        // fl_release: this conversation stops driving the tab, the user keeps it open. The tab may have moved
+        // since it was taken: the extension says which of this conversation's tabs is at that address now.
+        const mine = own();
+        const found = this.legacy ? null : await this.request('tabAt', { tabIds: mine.map((t) => t.tabId), url: String(params.url || '') }, 5000) as { tabIds?: number[] };
+        const at = mine.filter((t) => found?.tabIds?.includes(t.tabId));
+        if (at.length !== 1) throw new Error(at.length ? 'two tabs of this conversation are on that address: close one with fl_close' : 'no such tab of this conversation');
+        const tab = at[0]!;
         this.dropTab(tab.tabId);
         if (!this.legacy) await this.request('release', { tabIds: [tab.tabId] }, 5000);
         return {};
@@ -647,7 +652,7 @@ export class ExtensionRelay {
         return { key: bridge.key, cdpUrl: `ws://127.0.0.1:${this.port}${bridge.openView(client).path}` };
       }
       case 'claim':
-        return this.bridgeFor(p.key).claim(client, String(p.match || ''));
+        return this.bridgeFor(p.key).claim(client, String(p.match || ''), p.mode === 'prefix' || p.mode === 'origin' ? p.mode : 'contains');
       case 'tabs': {
         const bridge = this.bridgeFor(p.key);
         if (bridge.legacy) throw new Error(`${bridge.key}: extension ${bridge.info.version} cannot list its tabs, reload it to update.`);

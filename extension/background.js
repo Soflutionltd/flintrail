@@ -246,23 +246,27 @@ async function detach(tabId, reason = 'released') {
   refreshBadge();
 }
 
-// ---------- agent window ----------
-// The agent opens its tabs only in the window the user picked in the popup, never in the window the
-// user works in. Window ids change when the browser restarts, so the choice lives in session storage
-// and is forgotten on restart rather than pointing at the wrong window.
+// ---------- where agent tabs open ----------
+// In the window the user worked in last, next to their own tabs: no extra window. Only when the user picked
+// a window for the agent in the popup do its tabs go there. Window ids change when the browser restarts, so
+// that choice lives in session storage and is forgotten on restart rather than pointing at the wrong window.
+// (1.5.3 and older opened a window of their own: that window is no longer used unless the user picks it.)
+chrome.storage.session.remove('agentWindow').catch(() => {});
+
 async function agentWindow() {
-  const { agentWindow: id } = await chrome.storage.session.get('agentWindow');
+  const { pickedAgentWindow: id } = await chrome.storage.session.get('pickedAgentWindow');
   if (typeof id === 'number') {
-    try { await chrome.windows.get(id); return { windowId: id }; } catch { /* closed since */ }
+    try { await chrome.windows.get(id); return { windowId: id }; } catch { await chrome.storage.session.remove('pickedAgentWindow'); }
   }
-  // No window picked, or it was closed: open one for the agent, in front, so the user sees what the agent
-  // opens (a page asking them to confirm a password, say). Later tabs do not take the focus again.
+  const last = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+  if (last?.id !== undefined) return { windowId: last.id };
+  // No window open at all: open one, in front.
   const win = await chrome.windows.create({ focused: true, url: 'about:blank' });
-  await chrome.storage.session.set({ agentWindow: win.id });
   return { windowId: win.id, blankTabId: win.tabs?.[0]?.id };
 }
 
-// Where a new agent tab goes: a window the agent named (from listTabs), a new window, or the agent window.
+// Where a new agent tab goes: a window the agent named (from listTabs), a new window, the window the user
+// picked for the agent, or the window the user worked in last.
 async function placeTab(p) {
   if (p.newWindow) {
     const win = await chrome.windows.create({ focused: false, url: 'about:blank' });
@@ -271,6 +275,15 @@ async function placeTab(p) {
   if (typeof p.windowId === 'number') {
     await chrome.windows.get(p.windowId).catch(() => { throw new Error(`Window ${p.windowId} is closed (list windows with fl_extension tabs:true).`); });
     return { windowId: p.windowId };
+  }
+  // Unless the user kept the agent to one window: next to the user's tabs of the same site, if any.
+  const { pickedAgentWindow } = await chrome.storage.session.get('pickedAgentWindow');
+  if (typeof pickedAgentWindow !== 'number' && p.near) {
+    let host = '';
+    try { host = new URL(p.near).hostname; } catch { /* no site to go next to */ }
+    const sameSite = host ? (await chrome.tabs.query({})).filter((t) => { try { return new URL(t.url).hostname === host; } catch { return false; } }) : [];
+    const tab = sameSite.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+    if (tab) return { windowId: tab.windowId };
   }
   return agentWindow();
 }
@@ -322,6 +335,12 @@ async function handle(method, p) {
       return {};
     case 'adoptTab':
       return adoptOpenTab(p);
+    case 'tabAt': {
+      // Which of these tabs shows this address now (fl_release).
+      const ids = new Set((p.tabIds || []).map(Number));
+      const tabs = await chrome.tabs.query({});
+      return { tabIds: tabs.filter((t) => ids.has(t.id) && t.url === p.url).map((t) => t.id) };
+    }
     case 'fillPolicy':
       return fillPolicy(p);
     case 'fillAudit':
@@ -412,8 +431,15 @@ async function adoptOpenTab(p) {
   const match = String(p.match || '').trim();
   // An empty or tiny address would match any tab, the last one the user looked at included.
   if (match.length < 3) return { refused: 'give at least 3 characters of the tab address' };
+  // fl_adopt: any part of the address. fl_open: that page or one under it, or the same site exactly, never a
+  // tab of another site whose address merely mentions it.
+  const matches = (url) => {
+    if (p.mode === 'prefix') return url.startsWith(match) && /^($|[/?#])/.test(url.slice(match.length));
+    if (p.mode === 'origin') { try { return new URL(url).origin === match; } catch { return false; } }
+    return url.includes(match);
+  };
   const candidates = (await chrome.tabs.query({}))
-    .filter((t) => t.url && t.url.includes(match) && webUrl(t.url) && t.url !== 'about:blank' && !attached.has(t.id));
+    .filter((t) => t.url && matches(t.url) && webUrl(t.url) && t.url !== 'about:blank' && !attached.has(t.id));
   const hostOf = (t) => { try { return new URL(t.url).hostname.toLowerCase(); } catch { return ''; } };
   const open = candidates.filter((t) => !hostAllowed(hostOf(t), settings.neverAdopt));
   if (!open.length) {
@@ -582,10 +608,14 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case 'isShared':
         return reply({ shared: attached.has(msg.tabId) });
       case 'setAgentWindow':
-        await chrome.storage.session.set({ agentWindow: msg.windowId });
+        if (typeof msg.windowId !== 'number') {
+          await chrome.storage.session.remove('pickedAgentWindow');
+          return reply({ text: 'The agent opens its tabs in the window you used last.' });
+        }
+        await chrome.storage.session.set({ pickedAgentWindow: msg.windowId });
         return reply({ text: 'The agent will open its tabs in this window only.' });
       case 'getAgentWindow': {
-        const { agentWindow: id } = await chrome.storage.session.get('agentWindow');
+        const { pickedAgentWindow: id } = await chrome.storage.session.get('pickedAgentWindow');
         return reply({ windowId: typeof id === 'number' ? id : null });
       }
       case 'fillRequest': {
