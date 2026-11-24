@@ -20,7 +20,9 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { config } from './config.js';
 import { installNativeHost } from './pairing.js';
-import { profileOfInstance } from './profiles.js';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { profileOfInstance, profileReadProblems } from './profiles.js';
 import { macFor, macMatches, RELAY_PROTOCOL, slug, type BrowserInfo } from './relay-protocol.js';
 import { VERSION } from './version.js';
 
@@ -64,6 +66,38 @@ let browserSessions = 0;
 const isBrowserSession = (sessionId: string | undefined) => !sessionId || sessionId === BROWSER_SESSION || sessionId.startsWith(BROWSER_SESSION + '-');
 
 /** "Google Chrome" -> chrome, "Microsoft Edge" -> edge, "Brave" -> brave. */
+/**
+ * The name each browser got the first time it connected, kept in ~/.flintrail/browsers.json: a browser keeps
+ * its name whatever the order browsers connect in, and keeps its profile name when the profiles cannot be read.
+ */
+class BrowserNames {
+  private file = join(config.home, 'browsers.json');
+  private names: Record<string, { key: string; profile?: string }> = {};
+
+  constructor() {
+    try { if (existsSync(this.file)) this.names = JSON.parse(readFileSync(this.file, 'utf8')); } catch { this.names = {}; }
+  }
+
+  get(instance: string) { return this.names[instance]; }
+
+  /** Names other browsers already hold, connected or not. */
+  takenBy(key: string, instance: string) {
+    return Object.entries(this.names).some(([id, n]) => id !== instance && n.key === key);
+  }
+
+  set(instance: string, key: string, profile: string) {
+    const was = this.names[instance];
+    if (was && was.key === key && (was.profile || '') === profile) return;
+    this.names[instance] = { key, ...(profile ? { profile } : {}) };
+    try {
+      mkdirSync(config.home, { recursive: true });
+      writeFileSync(this.file, JSON.stringify(this.names, null, 2) + '\n');
+    } catch (e) {
+      log(`could not save browser names: ${(e as Error).message}`);
+    }
+  }
+}
+
 function browserKey(brand: string | undefined): string {
   const b = (brand || 'chromium').toLowerCase();
   if (b.includes('edge')) return 'edge';
@@ -490,6 +524,7 @@ export class ExtensionRelay {
   private bridges = new Map<string, ExtensionBridge>();
   private clients = new Set<ClientConn>();
   private idleTimer: NodeJS.Timeout | null = null;
+  private names = new BrowserNames();
 
   constructor(private readonly token: string, readonly port: number, readonly version: string,
     private readonly idleMs: number, private readonly onIdle: () => void) {}
@@ -684,7 +719,14 @@ export class ExtensionRelay {
     const instance = String(hello.instance || randomBytes(8).toString('hex'));
     const label = String(hello.label || '').trim().slice(0, 60);
     const same = [...this.bridges.values()].find((b) => b.instance === instance);
-    const profile = profileOfInstance(instance)?.name || '';
+    const known = this.names.get(instance);
+    const found = profileOfInstance(instance)?.name || '';
+    if (!found && !label) {
+      const problems = profileReadProblems();
+      if (problems.length) log(`browser profiles not readable here: ${problems.join(', ')}. Names come from ~/.flintrail/browsers.json or the extension popup.`);
+    }
+    // The profile found now, else the one found on an earlier connection.
+    const profile = found || known?.profile || '';
     // Same browser, same name: it keeps its tabs. A new label or a profile found since is a new name.
     if (same && (same.info.label || '') === label && (same.info.profile || '') === profile) {
       log(`${same.key}: extension reconnected (${hello.version || '?'})`);
@@ -693,12 +735,17 @@ export class ExtensionRelay {
     }
     if (same) { this.bridges.delete(same.key); same.retire(); }
     // A name the user gave in the extension wins ("brave-ideekdo"), then the browser profile's own name
-    // ("brave-soflution"), then the brand, made unique.
+    // ("brave-soflution"), then the name this browser got before, then the brand, numbered: brave, brave-2...
     const base = browserKey(hello.browser);
     const named = label || profile;
-    let key = named ? `${base}-${slug(named) || 'browser'}` : base;
-    if (this.bridges.has(key)) key = `${key}-${instance.replace(/[^a-z0-9]/gi, '').slice(0, 4).toLowerCase()}`;
-    for (let n = 2; this.bridges.has(key); n++) key = `${base}-${n}`;
+    const taken = (k: string) => [...this.bridges.values()].some((b) => b.key === k && b.instance !== instance) || this.names.takenBy(k, instance);
+    let key = named ? `${base}-${slug(named) || 'browser'}` : known && known.key.startsWith(base) ? known.key : base;
+    if (taken(key)) {
+      const stem = key;
+      key = `${stem}-2`;
+      for (let n = 3; taken(key); n++) key = `${stem}-${n}`;
+    }
+    this.names.set(instance, key, profile);
     const bridge = new ExtensionBridge(key, instance, { ...hello, label, profile, token: undefined }, ws, legacy, this);
     this.bridges.set(key, bridge);
     log(`${key}: extension connected (${hello.browser || 'browser'} ${hello.version || '?'}${profile ? `, profile "${profile}"` : ''})`);

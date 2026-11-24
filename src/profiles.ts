@@ -74,12 +74,25 @@ export function knownBrowsers(): KnownBrowser[] {
   return [];
 }
 
+/** Browsers whose profile list this process may not read (a sandbox, macOS privacy settings), with why. */
+const unreadable = new Map<string, string>();
+export function profileReadProblems(): string[] {
+  return [...unreadable].map(([dir, code]) => `${dir} (${code})`);
+}
+
 /** Every profile of every installed browser, with the name the user gave it. */
 export function localProfiles(): LocalProfile[] {
   const out: LocalProfile[] = [];
   for (const b of knownBrowsers()) {
     let state: any;
-    try { state = JSON.parse(readFileSync(join(b.dataDir, 'Local State'), 'utf8')); } catch { continue; }
+    try {
+      state = JSON.parse(readFileSync(join(b.dataDir, 'Local State'), 'utf8'));
+      unreadable.delete(b.dataDir);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES') unreadable.set(b.dataDir, code);
+      continue;
+    }
     const cache = state?.profile?.info_cache;
     if (!cache || typeof cache !== 'object') continue;
     for (const [dir, info] of Object.entries(cache as Record<string, { name?: string }>)) {
