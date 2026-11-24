@@ -66,7 +66,7 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
   // A 1Password vault the user excluded in the settings is not read, even with their click.
   if (source.kind === '1password' && !vaultAllowed(source.vault, await vaultRules(where))) throw new Error(`Refused: the vault "${source.vault}" is not one Flintrail may use (extension settings).`);
   // A script the agent ran in this page could catch the value as it is typed.
-  if (agentRanJs(page)) throw new Error('Refused: JavaScript was run in this tab (fl_extract or eval). Load the page again (goto) before pasting a secret.');
+  if (agentRanJs(page)) throw new Error('Refused: you ran JavaScript in this tab (eval, extract or request), which could catch the secret. Open the page in a new tab (fl_open) and paste there before running any script.');
   const url = page.url();
   const host = hostOf(url);
   if (!/^https:/.test(url) && !/^(localhost|127\.0\.0\.1)$/.test(host)) throw new Error(`Refused: ${host || 'this page'} is not served over HTTPS.`);

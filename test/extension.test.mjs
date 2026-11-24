@@ -391,7 +391,7 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
   // Elsewhere, once the agent ran a script in the tab, no paste.
   await mcp.call('fl_act', { tab, actions: [{ do: 'goto', url: site.url.replace('127.0.0.1', 'localhost') + '/paste-form' }], snapshot: false });
   assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /-> 1/);
-  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: 'mcphub:EXISTING_TOKEN' }), /JavaScript was run in this tab/);
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: 'mcphub:EXISTING_TOKEN' }), /Refused: you ran JavaScript in this tab/);
   await mcp.call('fl_release', { tab });
   await page.close();
 });
