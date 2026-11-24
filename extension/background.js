@@ -341,6 +341,8 @@ async function handle(method, p) {
       const tabs = await chrome.tabs.query({});
       return { tabIds: tabs.filter((t) => ids.has(t.id) && t.url === p.url).map((t) => t.id) };
     }
+    case 'captureSecret':
+      return captureSecret(p);
     case 'fillPolicy':
       return fillPolicy(p);
     case 'fillAudit':
@@ -454,7 +456,7 @@ async function adoptOpenTab(p) {
 // ---------- password filling ----------
 // The user's settings for the passwords and codes Flintrail fills from their password manager. Only the
 // options page writes them; Flintrail asks before every fill, and no Flintrail tool can change them.
-const FILL_DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true };
+const FILL_DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true };
 const CONFIRM_MS = 2 * 60 * 1000;
 const HISTORY_MAX = 200;
 const pendingFills = new Map();
@@ -496,6 +498,38 @@ async function askUser(request) {
     chrome.windows.onRemoved.addListener(onClosed);
     pendingFills.set(id, { request, done });
   });
+}
+
+// A secret a site shows once (a new API token) is read by this extension's script in the page and handed to
+// Flintrail, which stores it in a vault: the agent never sees it. It works where another extension's frame made
+// the browser stop debugging the tab.
+async function captureSecret(p) {
+  if (!(await storageProtected)) return { refused: 'this browser cannot protect the extension settings from web pages, so capturing secrets stays off' };
+  const settings = await fillSettings();
+  if (!settings.capture) return { refused: 'capturing secrets shown on a page is turned off in the Flintrail extension settings' };
+  const match = String(p.match || '').trim();
+  if (match.length < 3) return { refused: 'give at least 3 characters of the tab address' };
+  const sites = (p.sites || []).map(String);
+  const adopt = await adoptSettings();
+  // Only the site and path of each tab are compared (never its query string, which can hold codes), only on
+  // HTTPS, only on the sites that issue that kind of secret, never on a site the user excluded.
+  const tabs = (await chrome.tabs.query({})).map((t) => {
+    try { const u = new URL(t.url || ''); return { t, u }; } catch { return null; }
+  }).filter((x) => x && (x.u.protocol === 'https:' || /^(localhost|127\.0\.0\.1)$/.test(x.u.hostname))
+    && (x.u.hostname + x.u.pathname).includes(match.replace(/^https?:\/\//, ''))
+    && (!sites.length || hostAllowed(x.u.hostname, sites)) && !hostAllowed(x.u.hostname, adopt.neverAdopt));
+  const tab = tabs.sort((a, b) => (b.t.lastAccessed || 0) - (a.t.lastAccessed || 0))[0];
+  if (!tab) return {};
+  const host = tab.u.hostname;
+  const found = await chrome.tabs.sendMessage(tab.t.id, { type: 'findSecret', source: String(p.source || '') }, { frameId: 0 }).catch(() => null);
+  const values = [...new Set(found?.values || [])];
+  if (values.length !== 1) return { host };
+  if (p.confirm || settings.confirm) {
+    const ok = await askUser({ title: 'Flintrail wants to capture a secret shown on a page', domain: host, item: String(p.what || 'secret'), source: 'capture', fields: [`into ${String(p.to || 'a vault')}`], totp: true });
+    // Read the same as a miss: a refusal must not tell the agent that such a secret was on the page.
+    if (!ok) return {};
+  }
+  return { host, value: values[0] };
 }
 
 async function fillAudit(p) {
@@ -565,8 +599,13 @@ function recordStep(step) {
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   (async () => {
     // Scripts in web pages may only report recorded steps; everything else comes from the extension's own pages.
-    if (sender.id !== chrome.runtime.id || (sender.tab && !fromConfirmWindow(sender) && !['step', 'isRecording'].includes(msg.type))) return reply({});
+    if (sender.id !== chrome.runtime.id || (sender.tab && !fromConfirmWindow(sender) && !['step', 'isRecording', 'foreignExtension'].includes(msg.type))) return reply({});
     switch (msg.type) {
+      case 'foreignExtension': {
+        // Only the tabs an agent drives matter: the agent that drives it is told before the browser cuts in.
+        if (sender.tab && attached.has(sender.tab.id)) send({ type: 'foreignExtension', tabId: sender.tab.id, url: sender.tab.url || '', id: String(msg.id || '').slice(0, 40) });
+        return reply({});
+      }
       case 'step': {
         const { recording } = await store.get('recording');
         if (recording && sender.tab?.id === recording.tabId) await recordStep(msg.step);

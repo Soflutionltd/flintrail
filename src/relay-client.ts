@@ -35,6 +35,16 @@ export class RelayClient {
   browsers: BrowserInfo[] = [];
   relayVersion = '';
   lastError = '';
+  private warnings: { url: string; id: string; at: number }[] = [];
+
+  /** Another extension just put its frame in the page at this address (once: the warning is consumed). */
+  takeWarning(url: string): string | undefined {
+    const i = this.warnings.findIndex((w) => w.url === url && Date.now() - w.at < 10 * 60_000);
+    if (i < 0) return undefined;
+    const [w] = this.warnings.splice(i, 1);
+    return w!.id;
+  }
+
   /** Tabs of this conversation the browser took back lately, and why. */
   private lost: { url: string; reason: string; at: number }[] = [];
 
@@ -164,6 +174,9 @@ export class RelayClient {
     }
     switch (m.type) {
       case 'browsers': return this.setBrowsers(m.browsers || []);
+      case 'tabWarning':
+        this.warnings = [...this.warnings, { url: String(m.url || ''), id: String(m.id || ''), at: Date.now() }].slice(-20);
+        return;
       case 'tabLost':
         this.lost = [...this.lost, { url: String(m.url || ''), reason: String(m.reason || ''), at: Date.now() }].slice(-20);
         return;

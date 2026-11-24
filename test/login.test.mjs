@@ -40,7 +40,7 @@ describe('1Password CLI source', () => {
 
     // Scripts and screenshots are refused on the page that holds the filled secrets: base64 or a picture would slip past masking.
     const read = await mcp.call('fl_extract', { tab, js: 'return btoa(f.password.value + f.otp.value)' });
-    assert.match(read, /Blocked: this page holds a password or code Flintrail filled/);
+    assert.match(read, /Blocked: this page holds a password, code or secret Flintrail filled/);
     assert.ok(!read.includes(Buffer.from('S3cret').toString('base64').slice(0, 6)));
     await assert.rejects(mcp.call('fl_screenshot', { tab }), /Blocked: this page holds a password/);
     // The code box shows no value in snapshots, even if the page turned it into plain text.

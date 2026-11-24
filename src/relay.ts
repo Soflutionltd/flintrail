@@ -288,6 +288,14 @@ class ExtensionBridge {
         return this.dropTab(m.tabId);
       }
       case 'tabClosed': return this.dropTab(m.tabId);
+      case 'foreignExtension': {
+        const tab = this.tabsById.get(m.tabId);
+        // An extension id or "1password", nothing else: the page cannot slip its own words into the warning.
+        const id = /^([a-p]{32}|1password)$/.test(String(m.id)) ? String(m.id) : 'unknown';
+        if (tab) log(`${this.key}: tab ${m.tabId}: another extension (${id}) put its frame in the page`);
+        tab?.owner?.client.send({ type: 'tabWarning', url: String(m.url || tab.targetInfo.url || ''), id });
+        return;
+      }
       case 'attached': return this.keepOnly(Array.isArray(m.tabIds) ? m.tabIds.map(Number) : []);
       case 'shared': { this.addTab(m.tabId, m.targetInfo, null); return; }
       case 'recorded': {
@@ -657,6 +665,17 @@ export class ExtensionRelay {
         const bridge = this.bridgeFor(p.key);
         if (bridge.legacy) throw new Error(`${bridge.key}: extension ${bridge.info.version} cannot list its tabs, reload it to update.`);
         return bridge.request('listTabs', {}, 5000);
+      }
+      case 'captureSecret': {
+        const bridge = this.bridgeFor(p.key);
+        if (bridge.legacy) throw new Error(`${bridge.key}: extension ${bridge.info.version} cannot capture a secret, reload it to update it.`);
+        const { key: _key, ...rest } = p;
+        try {
+          return await bridge.request('captureSecret', rest, 125_000);
+        } catch (e) {
+          if (/Unknown method captureSecret/.test((e as Error).message)) throw new Error(`${bridge.key}: its Flintrail extension is too old to capture a secret, reload it to update it.`);
+          throw e;
+        }
       }
       case 'fillPolicy':
       case 'fillAudit': {

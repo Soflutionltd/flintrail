@@ -7,10 +7,55 @@
   const filled = new WeakMap();
   const TEXT_TYPES = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'number', 'date', 'datetime-local', 'month', 'week', 'time', 'color', 'range']);
 
+  // Another extension putting its own frame or widget in this page (a password manager's menu): the browser
+  // then stops any extension from driving the tab. Said once per page, so an agent driving it is warned first.
+  if (window === window.top) {
+    const own = chrome.runtime.id;
+    let told = false;
+    let pending = 0;
+    const look = () => {
+      pending = 0;
+      if (told) return;
+      const foreign = [...document.querySelectorAll('iframe[src^="chrome-extension://"], embed[src^="chrome-extension://"]')]
+        .map((f) => f.getAttribute('src').split('/')[2]).find((id) => /^[a-p]{32}$/.test(id || '') && id !== own)
+        // 1Password puts its widgets at the top of the document, not deep in the page: only those are looked at.
+        || ([...(document.body?.children || []), ...document.documentElement.children].some((el) => /^com-1password-/i.test(el.tagName)) ? '1password' : '');
+      if (!foreign) return;
+      told = true;
+      watcher.disconnect();
+      chrome.runtime.sendMessage({ type: 'foreignExtension', id: foreign }).catch(() => {});
+    };
+    // At most once a second, and never again once said: a busy page is not scanned on every change.
+    const watcher = new MutationObserver(() => { if (!pending) pending = setTimeout(look, 1000); });
+    watcher.observe(document, { childList: true, subtree: true });
+  }
+
   const refresh = () => chrome.runtime.sendMessage({ type: 'isRecording' })
     .then((r) => { recording = !!r?.recording; }).catch(() => { recording = false; });
   refresh();
-  chrome.runtime.onMessage.addListener((m) => { if (m?.type === 'recordingChanged') refresh(); });
+  chrome.runtime.onMessage.addListener((m, sender, reply) => {
+    if (sender.id !== chrome.runtime.id) return false;
+    if (m?.type === 'recordingChanged') refresh();
+    // fl_capture_secret: the values of the asked form shown in this frame (text, fields, button labels).
+    // Only a frame that has some answers, so the frame that shows the secret is the one heard.
+    if (m?.type === 'findSecret' && m.source) {
+      let re;
+      try { re = new RegExp(m.source, 'g'); } catch { return false; }
+      const texts = [document.body?.innerText || ''];
+      // Never a password field or a hidden one: only what the page shows.
+      const shown = (el) => (el.checkVisibility ? el.checkVisibility() : !!el.getClientRects().length);
+      const plain = ':not(input[type=password]):not(input[type=hidden])';
+      for (const el of document.querySelectorAll(`input${plain}, textarea`)) if (shown(el)) texts.push(el.value || '');
+      for (const el of document.querySelectorAll(`[aria-label]${plain},[title]${plain},[data-clipboard-text]${plain},[value]${plain}`)) {
+        if (!shown(el)) continue;
+        texts.push(el.getAttribute('aria-label') || '', el.getAttribute('title') || '', el.getAttribute('data-clipboard-text') || '', el.getAttribute('value') || '');
+      }
+      const values = [...new Set(texts.flatMap((t) => t.match(re) || []))];
+      if (!values.length) return false;
+      reply({ values });
+    }
+    return false;
+  });
 
   const describe = (el) => {
     const t = self.flintrailDescribe(el);

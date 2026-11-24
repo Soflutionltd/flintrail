@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -13,6 +13,10 @@ import { connect, refOf, testEnv } from './helpers.mjs';
 const extPath = new URL('../extension', import.meta.url).pathname;
 const fakeOp = new URL('./fake-op.mjs', import.meta.url).pathname;
 chmodSync(fakeOp, 0o755);
+const fakeStore = new URL('./fake-store.mjs', import.meta.url).pathname;
+chmodSync(fakeStore, 0o755);
+const storeOut = join(mkdtempSync(join(tmpdir(), 'flintrail-store-')), 'stored.jsonl');
+const stored = () => { try { return readFileSync(storeOut, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const token = 'test-token-' + Math.random().toString(36).slice(2);
 let site, mcp, ctx, sw;
 
@@ -40,6 +44,7 @@ before(async () => {
     FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(relayPort), FLINTRAIL_TOKEN: token,
     FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir, FLINTRAIL_EXTENSION_WAIT: '1500',
     FLINTRAIL_PASSWORDS: `1password:${fakeOp}`,
+    FLINTRAIL_MCPHUB: fakeStore, FAKE_STORE_OUT: storeOut, FAKE_VAULT_NAMES: 'EXISTING_TOKEN,OTHER',
   }));
   // A normal Chromium with the Flintrail extension installed.
   ctx = await chromium.launchPersistentContext(userDataDir, {
@@ -257,6 +262,79 @@ test('a new tab goes to the window that already holds the site, never to a new w
   assert.deepEqual(where, [other]);
   await mcp.call('fl_close', { tab });
   await sw.evaluate(async ({ w, t }) => { await detach(t); await chrome.windows.remove(w); }, { w: other, t: busy });
+});
+
+test('fl_capture_secret puts a token a page shows once straight into the vault, never in a reply', async () => {
+  // Fake values, built at run time (no credential-looking string in the repository).
+  const token = 'github_pat_' + '11AAAA0000' + 'b'.repeat(72);
+  const other = 'github_pat_' + '22CCCC1111' + 'd'.repeat(72);
+  const page = await ctx.newPage();
+  await page.goto(`${site.url}/token-created?t=${token}`);
+  // A tab the agent already drives on that site: sealed once the secret is captured.
+  const own = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: '/token-created', browser: 'chromium', text: 0 }))[1];
+  // The test site is not github.com: a known kind is only taken on the site that issues it, and every miss reads the same.
+  await assert.rejects(mcp.call('fl_capture_secret', { browser: 'chromium', url: '/token-created', kind: 'github', to: 'mcphub:X' }), /Nothing captured \(or not confirmed by the user\): no single github secret on an open github\.com page matching that address/);
+  // Any other kind: a literal prefix, and the user's click.
+  const confirm = async (call, answer = '#allow') => {
+    const asked = ctx.waitForEvent('page', (p) => p.url().includes('/confirm.html'));
+    const pending = mcp.call('fl_capture_secret', call);
+    pending.catch(() => { /* checked by the caller */ });
+    const win = await asked;
+    await win.waitForSelector(`${answer}:not([disabled])`);
+    const title = await win.textContent('h1');
+    const details = await win.textContent('dl');
+    await win.click(answer);
+    return { pending, title, details };
+  };
+  const first = await confirm({ browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:ideekdo/GITHUB_TOKEN' });
+  assert.match(first.title, /capture a secret/);
+  assert.ok(!first.details.includes('replacing'));
+  const out = await first.pending;
+  assert.match(out, /Captured a secret from 127\.0\.0\.1 \(93 characters, starts with github_pat_\) into McpHub vault of ideekdo as GITHUB_TOKEN/);
+  assert.ok(!out.includes(token));
+  const [entry] = stored();
+  assert.deepEqual(entry.args, ['vault', 'set', '--tenant', 'ideekdo', 'GITHUB_TOKEN']);
+  assert.equal(entry.input, token, 'the value went on standard input only');
+  // The tab already driven on that site refuses scripts until it changes page.
+  const sealed = await mcp.call('fl_extract', { tab: own, js: 'return document.querySelector("code").textContent' });
+  assert.match(sealed, /Blocked: this page holds a password, code or secret Flintrail filled or captured/);
+  assert.ok(!sealed.includes(token));
+  await mcp.call('fl_release', { tab: own });
+  // A tab of that site the agent takes over afterwards is sealed too; once it loads another page, the value is masked.
+  const again = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: '/token-created', browser: 'chromium', text: 0 }))[1];
+  assert.match(await mcp.call('fl_extract', { tab: again, js: 'return 1' }), /Blocked: this page holds a password, code or secret/);
+  await mcp.call('fl_act', { tab: again, actions: [{ do: 'goto', url: `${site.url}/token-created?t=${token}` }] });
+  assert.ok(!(await mcp.call('fl_extract', { tab: again, js: 'return document.querySelector("code").textContent' })).includes(token));
+  assert.ok(!(await mcp.call('fl_snapshot', { tab: again })).includes(token));
+  await mcp.call('fl_release', { tab: again });
+
+  // Two different tokens on the page: nothing is captured rather than the wrong one, with the same message as any miss.
+  await page.goto(`${site.url}/token-created?t=${token}&t=${other}`);
+  await assert.rejects(mcp.call('fl_capture_secret', { browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:X' }), /Nothing captured \(or not confirmed by the user\): no single such secret on an open page matching that address/);
+  // A value the page does not show (hidden field, password field, hidden element) is never taken.
+  await page.goto(`${site.url}/token-created?h=${other}`);
+  await assert.rejects(mcp.call('fl_capture_secret', { browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:X' }), /Nothing captured/);
+  await page.goto(`${site.url}/token-created?t=${token}&t=${other}`);
+  // The query string of a tab is never matched (it can hold codes).
+  await assert.rejects(mcp.call('fl_capture_secret', { browser: 'chromium', url: 'token-created?t=', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:X' }), /Nothing captured/);
+  // A free pattern is not accepted, only known kinds or a literal prefix.
+  await assert.rejects(mcp.call('fl_capture_secret', { browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: '.*', to: 'mcphub:X' }), /prefix: the literal start of the secret/);
+  await assert.rejects(mcp.call('fl_capture_secret', { browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat', to: 'mcphub:X' }), /ending in "_" or "-"/);
+  // No clipboard: an agent could paste it where it reads it.
+  await assert.rejects(mcp.call('fl_capture_secret', { browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'clipboard' }), /No clipboard/);
+  // Turned off by the user.
+  await page.goto(`${site.url}/token-created?t=${token}`);
+  await sw.evaluate(() => chrome.storage.local.set({ fillSettings: { capture: false } }));
+  await assert.rejects(mcp.call('fl_capture_secret', { browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:X' }), /capturing secrets shown on a page is turned off/);
+  await sw.evaluate(() => chrome.storage.local.set({ fillSettings: {} }));
+  // Replacing a name the vault already holds is said to the user, and a refusal stores nothing.
+  const count = stored().length;
+  const replace = await confirm({ browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:EXISTING_TOKEN' }, '#deny');
+  assert.match(replace.details, /replacing McpHub vault as EXISTING_TOKEN/);
+  // A refusal reads the same as a miss: it does not tell the agent such a secret was there.
+  await assert.rejects(replace.pending, /Nothing captured \(or not confirmed by the user\): no single such secret/);
+  assert.equal(stored().length, count);
+  await page.close();
 });
 
 test('browser and extension pages, the settings included, are never driven', async () => {

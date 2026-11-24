@@ -86,7 +86,7 @@ export function assertNoSecret(page: Page, what: string) {
   const s = stateOf(page);
   if (s.loginRunning) throw new Error(`Blocked: fl_login is filling this tab. ${what} is refused meanwhile.`);
   if (s.secretFilled) {
-    throw new Error(`Blocked: this page holds a password or code Flintrail filled. ${what} is refused until the tab loads another page (after signing in, or with a goto).`);
+    throw new Error(`Blocked: this page holds a password, code or secret Flintrail filled or captured. ${what} is refused until the tab loads another page (after signing in, or with a goto).`);
   }
 }
 
@@ -102,6 +102,22 @@ export function loginRunning(page: Page, on: boolean) {
 
 export function markSecretFilled(page: Page) {
   stateOf(page).secretFilled = true;
+}
+
+// Sites a secret was just captured from: a page of theirs the agent drives, now or later, is closed to scripts and
+// screenshots until it loads another page, since the secret may still be on screen.
+const sealedHosts = new Map<string, number>();
+const SEAL_MS = 30 * 60_000;
+const hostOfPage = (page: Page) => { try { return new URL(page.url()).hostname; } catch { return ''; } };
+function sealIfCaptured(page: Page) {
+  const at = sealedHosts.get(hostOfPage(page));
+  if (at && Date.now() - at < SEAL_MS) markSecretFilled(page);
+}
+
+/** A secret was captured from this site: its driven pages are closed to scripts and screenshots until they change page. */
+export function sealSite(host: string) {
+  sealedHosts.set(host, Date.now());
+  for (const page of tabs.values()) if (!page.isClosed()) sealIfCaptured(page);
 }
 
 /** The browser a tab lives in, and whether it is driven through the extension. */
@@ -143,6 +159,7 @@ function register(page: Page, where: Driven): string {
   const id = 't' + nextTab++;
   tabs.set(id, page);
   Object.assign(stateOf(page), { browser: where.name, viaExtension: where.viaExtension });
+  sealIfCaptured(page);
   page.on('close', () => {
     goneTabs.set(id, page.url());
     tabs.delete(id);
@@ -179,6 +196,10 @@ function pageNotes(page: Page): string[] {
   if (s.unseenErrors) {
     notes.push(`${s.unseenErrors} new console error${s.unseenErrors > 1 ? 's' : ''}, see fl_console`);
     s.unseenErrors = 0;
+  }
+  const other = s.viaExtension ? getRelayClient()?.takeWarning(page.url()) : undefined;
+  if (other) {
+    notes.push(`Warning: another extension (${other === '1password' || other === 'aeblfdkhhhdcdjpifhhbdiojplfjncoa' ? '1Password' : 'not Flintrail'}) put its own frame in this page. The browser may now stop Flintrail from driving this tab: ask the user to set that extension's "Site access" to "On click" (brave://extensions or chrome://extensions, Details). A secret this page shows can still be stored with fl_capture_secret.`);
   }
   return notes;
 }

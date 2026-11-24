@@ -1,6 +1,6 @@
 // Settings page: the only place where the password filling settings change.
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true };
+const DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true };
 
 // Bare domains only: "https://www.GitHub.com/login" becomes "github.com".
 function cleanDomain(line) {
@@ -30,14 +30,14 @@ async function saveTabs() {
 async function load() {
   const { fillSettings } = await chrome.storage.local.get('fillSettings');
   const s = { ...DEFAULTS, ...(fillSettings || {}) };
-  for (const k of ['enabled', 'confirm', 'totp', 'allDomains']) $(k).checked = s[k];
+  for (const k of ['enabled', 'confirm', 'totp', 'capture', 'allDomains']) $(k).checked = s[k];
   $('domains').value = s.domains.join('\n');
   $('domains').disabled = s.allDomains;
 }
 
 async function save() {
   const domains = [...new Set($('domains').value.split('\n').map(cleanDomain).filter(Boolean))];
-  const fillSettings = { enabled: $('enabled').checked, confirm: $('confirm').checked, totp: $('totp').checked, allDomains: $('allDomains').checked, domains };
+  const fillSettings = { enabled: $('enabled').checked, confirm: $('confirm').checked, totp: $('totp').checked, capture: $('capture').checked, allDomains: $('allDomains').checked, domains };
   await chrome.storage.local.set({ fillSettings });
   $('domains').disabled = fillSettings.allDomains;
   $('saved').textContent = 'Saved.';
@@ -66,7 +66,7 @@ async function renderHistory() {
 let gestureAt = 0;
 for (const type of ['pointerdown', 'keydown']) document.addEventListener(type, (e) => { if (e.isTrusted) gestureAt = Date.now(); }, true);
 const guarded = (fn) => () => (Date.now() - gestureAt < 2000 ? fn() : Promise.all([load(), loadTabs()]));
-for (const id of ['enabled', 'confirm', 'totp', 'allDomains']) $(id).addEventListener('change', guarded(save));
+for (const id of ['enabled', 'confirm', 'totp', 'capture', 'allDomains']) $(id).addEventListener('change', guarded(save));
 $('domains').addEventListener('change', guarded(save));
 $('adoptOpenTabs').addEventListener('change', guarded(saveTabs));
 $('neverAdopt').addEventListener('change', guarded(saveTabs));

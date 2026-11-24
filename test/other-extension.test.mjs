@@ -60,3 +60,15 @@ test('a frame of another extension: the agent is told why the tab is no longer d
   assert.match(await mcp.call('fl_snapshot', { tab: plain, text: 0 }), /URL:/);
   await mcp.call('fl_close', { tab: plain });
 });
+
+test('the agent is warned as soon as another extension puts its widget in a page it drives', async () => {
+  const snap = await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', text: 0 });
+  const tab = /Tab (t\d+)/.exec(snap)[1];
+  assert.doesNotMatch(snap, /another extension/);
+  // What 1Password adds next to a field it can fill.
+  const page = ctx.pages().find((p) => p.url().includes('/search'));
+  await page.evaluate(() => document.body.append(document.createElement('com-1password-button')));
+  const warned = await waitFor(async () => { const s = await mcp.call('fl_snapshot', { tab, text: 0 }); return /Warning: another extension \(1Password\)/.test(s) ? s : null; });
+  assert.match(warned, /"Site access" to "On click"/);
+  await mcp.call('fl_close', { tab });
+});

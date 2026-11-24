@@ -74,6 +74,13 @@ export function startFixture(port = 0) {
         console.warn('careful');
         setTimeout(() => { throw new Error('uncaught kaboom'); }, 0);
       </script>`);
+    // A page showing a freshly created token once, as GitHub or Cloudflare do (the value comes from the test).
+    if (url.pathname === '/token-created') {
+      const shown = (url.searchParams.getAll('t')).map((t) => `<p>Make sure to copy it now.</p><code>${t}</code><button aria-label="Copy">Copy</button>`).join('')
+        // Values the page does not show: a hidden field, a password field, a hidden element's attribute.
+        + (url.searchParams.getAll('h')).map((h) => `<input type="hidden" value="${h}"><input type="password" value="${h}"><span hidden title="${h}">x</span>`).join('');
+      return html('Token created', `<h1>Token created</h1>${shown}`);
+    }
     if (url.pathname === '/login') return html('Sign in', `<h1>Sign in</h1>
       <form id="f">
         <label>Email <input name="email" type="email" autocomplete="username"></label>

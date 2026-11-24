@@ -155,6 +155,7 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_extension` | Browsers Flintrail can drive: the dedicated one and every connected user browser, by name. |
 | `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand, found by part of its address. In your own browsers, the extension settings can turn this off or exclude sites. |
 | `fl_login` | Sign in with your saved password (browser password manager, 1Password, Bitwarden or your own command). Flintrail fills it, the agent never sees it. See [Sign in](#sign-in). |
+| `fl_capture_secret` | Store a secret a site shows once (a new GitHub, Cloudflare, Stripe, npm, OpenAI, Anthropic or Resend token) from your open tab straight into a vault (`mcphub:NAME` or `1password:Vault/Title`). The agent only gets its kind, length and public prefix. A known kind is only taken on the site that issues it; any other kind, a 1Password vault, or replacing a saved name asks you first. |
 | `fl_tabs` / `fl_close` | Manage tabs. |
 | `fl_desktop` | Snapshot a native desktop app (Finder, Mail, Preview, Notes, any app) with `[dN]` refs, through the OS accessibility tree. Without `app`, lists running apps. See [Desktop apps](#desktop-apps). |
 | `fl_desktop_act` | Run many actions on a desktop app in one call: `click`, `dblclick`, `rightclick`, `fill`, `type`, `clear`, `press`, `select`, `check`, `uncheck`, `toggle`, `expand`, `collapse`, `focus`, `scroll`, `get`, `wait`, `launch`, `quit`. Recorded like browser actions. |
@@ -245,6 +246,7 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 
 - No password is ever written to a flow. Password fields are skipped during recording; keep the session logged in instead.
 - `fl_login` never returns a password or a one-time code to the agent and masks them in every tool result. CLI logins are only filled on their own website. Password manager programs are chosen in the configuration, never by the agent, and run without a shell.
+- `fl_capture_secret` reads only what the page shows (never a password or hidden field, never the address's query string), on the main frame, and every miss or refusal reads the same. The value goes to the vault program on its standard input, is masked in every later result, and the pages of that site refuse scripts and screenshots until they load another page. It is only as private as the vault: an agent that can run `McpHub vault get --reveal` in a shell can read it back, so for a secret the agent must never see, choose `1password:` (the 1Password CLI asks for your approval) or keep the agent away from a shell. Turn capture off in the extension settings.
 - Flows are plain JSON in `~/.flintrail/flows`, easy to review and version.
 - The HTTP transport requires a bearer token (constant-time comparison) and binds to `127.0.0.1` by default.
 - `eval` and `request` run inside the page with the page's own privileges, nothing more.
@@ -308,7 +310,7 @@ Flintrail est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chr
 
 L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, elle se jumelle toute seule avec Flintrail, et l'agent pilote le navigateur qu'on lui nomme (Brave, Chrome, Edge…), plusieurs à la fois. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Flintrail la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
 
-Pour se connecter, l'agent utilise `fl_login` avec vos mots de passe habituels : ceux enregistrés dans le navigateur (sans réglage), ou 1Password, Bitwarden ou tout autre gestionnaire par sa ligne de commande. Flintrail remplit le formulaire lui-même, l'agent ne voit jamais ni le mot de passe ni le code.
+Pour se connecter, l'agent utilise `fl_login` avec vos mots de passe habituels : ceux enregistrés dans le navigateur (sans réglage), ou 1Password, Bitwarden ou tout autre gestionnaire par sa ligne de commande. Flintrail remplit le formulaire lui-même, l'agent ne voit jamais ni le mot de passe ni le code. De même, `fl_capture_secret` range un jeton qu'un site n'affiche qu'une fois (GitHub, Cloudflare…) directement dans un coffre, sans que l'agent le voie.
 
 Flintrail pilote aussi les applications du bureau (Finder, Mail, Aperçu, Notes, n'importe quelle app) avec `fl_desktop` et `fl_desktop_act`, par l'arbre d'accessibilité du système et non par captures d'écran, sans bouger la souris ni passer la fenêtre au premier plan. Un même parcours enregistré peut enchaîner des étapes web et des étapes desktop, et se rejouer sans IA.
 

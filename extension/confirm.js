@@ -4,6 +4,7 @@ const $ = (x) => document.getElementById(x);
 
 chrome.runtime.sendMessage({ type: 'fillRequest', id }).then(({ request }) => {
   if (!request) { window.close(); return; }
+  if (request.title) document.querySelector('h1').textContent = request.title;
   $('domain').textContent = request.domain;
   $('item').textContent = `${request.item} (${request.source})`;
   $('fields').textContent = request.fields.filter((f) => request.totp || f !== 'one-time code').join(', ');

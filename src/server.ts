@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { act, adoptTab, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
+import { captureSecret } from './capture.js';
 import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
@@ -173,6 +174,17 @@ export function buildServer(): McpServer {
 
   s.registerTool('fl_close', { description: 'Close a Flintrail tab.', inputSchema: { tab: z.string() } },
     guard(async ({ tab }) => { await closeTab(tab); return `Tab ${tab} closed.`; }));
+
+  s.registerTool('fl_capture_secret', {
+    description: 'Store a secret a site shows once (a new GitHub or Cloudflare token, an API key) straight from the user\'s open tab into a vault: the value never reaches you, you only get its kind, length, public prefix and destination. The tab must be on the site that issues that kind. Works even when another extension stopped the tab from being driven. The user confirms a "prefix" kind, a 1Password vault, or replacing a name the McpHub vault already holds. Afterwards the pages of that site refuse scripts and screenshots until they change page. To use the secret later, give its vault name to the tool or service that needs it.',
+    inputSchema: {
+      browser: z.string().describe('The user\'s browser holding the tab (a name from fl_extension).'),
+      url: z.string().min(3).describe('Part of the address of the tab showing the secret, e.g. "github.com/settings/personal-access-tokens".'),
+      kind: z.enum(['github', 'cloudflare', 'stripe', 'npm', 'openai', 'anthropic', 'resend', 'prefix']).describe('The kind of secret; "prefix" with prefix for any other (the user confirms).'),
+      prefix: z.string().optional().describe('With kind "prefix": the literal start of the secret, ending in "_" or "-", e.g. "pk_live_".'),
+      to: z.string().describe('"mcphub:NAME", "mcphub:tenant/NAME" or "1password:Vault/Item title".'),
+    },
+  }, guard(async ({ browser, url, kind, prefix, to }) => captureSecret({ browser, match: url, kind, prefix, to })));
 
   s.registerTool('fl_release', {
     description: 'Stop driving a tab of the user\'s browser without closing it: the user keeps it, and it can be taken over again later (fl_open or fl_adopt). Use it when done with a tab the user had open; fl_close closes it.',
