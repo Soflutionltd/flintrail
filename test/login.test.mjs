@@ -67,6 +67,14 @@ describe('1Password CLI source', () => {
     assert.match(await mcp.call('fl_close', { tab: other }), /Trace saved/);
   });
 
+  test('a sign-in form marked to send by GET is filled but never sent: the password would be in the address', async () => {
+    const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?get=1` }));
+    const out = await mcp.call('fl_login', { tab, submit: true });
+    assert.match(out, /NOT submitted: this form sends what it holds in the page address \(GET\)/);
+    assert.doesNotMatch(await mcp.call('fl_tabs', {}), /password=|S3cret/);
+    await mcp.call('fl_close', { tab });
+  });
+
   test('a trace and a video running when a password is filled are deleted, never saved', async () => {
     const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
     await mcp.call('fl_trace', { tab, action: 'start', name: 'with-login' });

@@ -496,6 +496,15 @@ async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean
       ? `No saved login "${opts.item}" in ${tried}.`
       : `No saved login for ${sites} (tried ${tried}), or no sign-in field visible yet. Open the sign-in form first; for the browser source, sign in by hand once and let the browser save the password; or add a password manager to FLINTRAIL_PASSWORDS (1password, bitwarden, command).`);
   }
+  // A form marked to send by GET would put the password in the address, where the history, the server logs and the
+  // site's own scripts keep it: it is filled, not sent. (A form with no method is usually sent by the site's script.)
+  const byGet = await done.last.evaluate((el) => {
+    const form = (el as HTMLInputElement).form;
+    return !!form && (form.getAttribute('method') || '').trim().toLowerCase() === 'get';
+  }, undefined, { timeout: TIMEOUT }).catch(() => false);
+  if (byGet) {
+    return { text: `${done.text}, NOT submitted: this form sends what it holds in the page address (GET), the password included. Ask the user before sending it.`, source, item };
+  }
   const submit = opts.submit !== false;
   if (submit) await withNavigation(page, () => done!.last.press('Enter', { timeout: TIMEOUT }));
   const extra = done.codeWanted && source === 'browser' ? ' The page also asks for a one-time code: ask the user for it.'

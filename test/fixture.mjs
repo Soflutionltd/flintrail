@@ -131,7 +131,7 @@ export function startFixture(port = 0) {
       return html('Token created', `<h1>Token created</h1>${shown}`);
     }
     if (url.pathname === '/login') return html('Sign in', `<h1>Sign in</h1>
-      <form id="f">
+      <form id="f"${url.searchParams.get('get') === '1' ? ' method="get"' : ''}>
         <label>Email <input name="email" type="email" autocomplete="username"></label>
         <label>Password <input name="password" type="password" autocomplete="current-password"></label>
         ${url.searchParams.get('otp') === '0' ? '' : '<label>Code <input name="otp" autocomplete="one-time-code" inputmode="numeric"></label>'}
