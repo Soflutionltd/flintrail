@@ -145,6 +145,11 @@ test('password filling follows the extension settings, and only the user answers
   await empty();
   await settings({ enabled: false });
   await assert.rejects(mcp.call('fl_login', { tab }), /Refused by the Flintrail extension settings in chromium: password filling is turned off/);
+  // Vaults the user left out in the extension settings are never searched.
+  await settings({ vaultsDeny: ['test'] });
+  await assert.rejects(mcp.call('fl_login', { tab }), /never test; left out by those settings: "Fixture shop"/);
+  await settings({ vaultsAllow: ['Clients'] });
+  await assert.rejects(mcp.call('fl_login', { tab }), /only Clients/);
   // A subdomain in the list never allows its parent domain.
   await settings({ allDomains: false, domains: ['sub.127.0.0.1', 'github.com'] });
   await assert.rejects(mcp.call('fl_login', { tab }), /127\.0\.0\.1 is not one of the allowed domains/);

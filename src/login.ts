@@ -7,7 +7,7 @@ import type { Frame, Locator, Page } from 'playwright-core';
 import { config } from './config.js';
 import { randomBytes } from 'node:crypto';
 import { agentRanJs, elementByRef, loginRunning, markSecretFilled, pageBrowser, withNavigation } from './engine.js';
-import { askFill, recordFill } from './fill-policy.js';
+import { askFill, recordFill, vaultAllowed, vaultRules, type VaultRules } from './fill-policy.js';
 import { hostOf, parseSources, type Account, type CliSource, type SourceSpec } from './passwords.js';
 import { remember } from './secrets.js';
 
@@ -273,13 +273,22 @@ const accountsOn = (id: Identity) => [...new Set([...id.emails, ...id.masked.map
 const cut = (list: string[]) => list.slice(0, 3).map((e) => (e.length > 80 ? `${e.slice(0, 77)}...` : e)).join(', ');
 
 /** The account to use from one CLI source: the one asked for, or the only one whose website matches the page. */
-async function findAccount(page: Page, source: CliSource, wanted?: string, expected?: string, others: string[] = []): Promise<Account | null> {
+/** What a search went through, for the message when nothing is found: vaults searched, logins the user's rules left out. */
+interface Searched { vaults: Set<string>; excluded: string[] }
+
+async function findAccount(page: Page, source: CliSource, wanted?: string, expected?: string, others: string[] = [], rules: VaultRules = { allow: [], deny: [] }, searched?: Searched): Promise<Account | null> {
   const pageHosts = new Set(liveFrames(page).map((f) => hostOf(f.url())));
   const pageSites = new Set([...pageHosts].map(siteOf));
   const w = wanted?.toLowerCase();
-  const matchOf = (all: Account[]) => w
-    ? all.filter((a) => a.ref === wanted || a.title.toLowerCase() === w || a.username.toLowerCase() === w)
-    : all.filter((a) => sitesOf(a).some((s) => pageSites.has(s)));
+  const matchOf = (all: Account[]) => {
+    for (const a of all) if (a.vault) searched?.vaults.add(a.vault);
+    const hits = w
+      ? all.filter((a) => a.ref === wanted || a.title.toLowerCase() === w || a.username.toLowerCase() === w)
+      : all.filter((a) => sitesOf(a).some((s) => pageSites.has(s)));
+    // A vault the user left out is never used, even for the only matching login.
+    for (const a of hits) if (!vaultAllowed(a.vault, rules)) searched?.excluded.push(`${label(a)} in vault ${a.vault}`);
+    return hits.filter((a) => vaultAllowed(a.vault, rules));
+  };
   let found = matchOf(await source.accounts(page.url(), false));
   if (!found.length) found = matchOf(await source.accounts(page.url(), true));
   if (!found.length) return null;
@@ -357,7 +366,7 @@ async function useAccount(page: Page, account: Account, token: string, ref?: str
     targets = frames.map((frame, i) => ({ frame, m: marks[i]! })).filter((t) => t.m);
   }
   const wanted = [...new Set(targets.flatMap(({ m }) => [m.user && 'username', m.pass && 'password', m.otp && 'one-time code'].filter(Boolean) as string[]))];
-  const request = { ...pageBrowser(page), domain: tabSite, host: hostOf(page.url()), item: account.title, ref: account.ref, source: account.source, fields: wanted };
+  const request = { ...pageBrowser(page), domain: tabSite, host: hostOf(page.url()), item: account.title, ref: account.ref, source: account.source, fields: wanted, ...(account.vault ? { vault: account.vault } : {}) };
   // Nothing is revealed before the user's settings (and the user, when they asked to confirm each fill) said yes.
   const decision = await askFill(request);
   const creds = await account.reveal();
@@ -439,6 +448,17 @@ export async function signIn(page: Page, opts: { item?: string; source?: string;
   }
 }
 
+/** Where a 1Password search looked, and why a login may be out of its reach. */
+function vaultNote(all: SourceSpec[], searched: Searched, rules: VaultRules): string {
+  if (!all.some((s) => s.kind === '1password')) return '';
+  const parts = [`1Password vaults searched: ${[...searched.vaults].sort().join(', ') || 'none (is 1Password unlocked?)'}`];
+  if (rules.allow.length || rules.deny.length) parts.push(`the user's vault settings: ${rules.allow.length ? `only ${rules.allow.join(', ')}` : 'every vault'}${rules.deny.length ? `, never ${rules.deny.join(', ')}` : ''}`);
+  if (searched.excluded.length) parts.push(`left out by those settings: ${searched.excluded.slice(0, 3).join('; ')}`);
+  // A service account only opens the shared vaults it was given when created: never Private, never a later vault.
+  if (process.env.OP_SERVICE_ACCOUNT_TOKEN) parts.push('a 1Password service account only opens the shared vaults it was given (never Private, not a vault created after it); the 1Password app integration opens every vault');
+  return `; ${parts.join('; ')}`;
+}
+
 async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean; field?: string }, all: SourceSpec[], expected?: string): Promise<{ text: string; source: string; item?: string }> {
   const others: string[] = [];
   // A fresh token for this call's field tags: a page cannot prepare an input to receive the secret.
@@ -446,13 +466,15 @@ async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean
   let done: { text: string; last: Locator; codeWanted: boolean } | null = null;
   let source = '';
   let item: string | undefined;
+  const rules = all.some((s) => s.kind === '1password') ? await vaultRules(pageBrowser(page)) : { allow: [], deny: [] };
+  const searched: Searched = { vaults: new Set(), excluded: [] };
   for (const s of all) {
     if (s.kind === 'browser') {
       if (opts.item) continue;
       done = await useBrowserFill(page, token, expected, others);
       source = 'browser';
     } else {
-      const account = await findAccount(page, s, opts.item, expected, others);
+      const account = await findAccount(page, s, opts.item, expected, others, rules, searched);
       if (!account) continue;
       done = await useAccount(page, account, token, opts.field, expected);
       source = account.source;
@@ -461,7 +483,7 @@ async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean
     if (done) break;
   }
   if (!done) {
-    const tried = all.map((s) => s.kind).join(', ');
+    const tried = all.map((s) => s.kind).join(', ') + vaultNote(all, searched, rules);
     const sites = [...new Set(liveFrames(page).map((f) => siteOf(hostOf(f.url()))))].join(', ');
     if (expected) {
       throw new Error(`Refused: no saved login for ${expected.slice(0, 80)} on ${sites} (tried ${tried}).${others.length ? ` Found for this site, for other accounts: ${[...new Set(others)].slice(0, 5).join('; ')}.` : ''} Nothing was filled: ask the user, do not sign in with another account.`);

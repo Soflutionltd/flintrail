@@ -59,4 +59,7 @@ export const config = {
   passwordSources: (env.FLINTRAIL_PASSWORDS ?? 'browser').trim().toLowerCase() === 'off'
     ? []
     : (env.FLINTRAIL_PASSWORDS || 'browser').split(',').map((c) => c.trim()).filter(Boolean),
+  /** Password manager vaults (1Password) searched in the dedicated browser: only these, and never those. Empty: every vault. */
+  vaultsAllow: (env.FLINTRAIL_VAULTS || '').split(',').map((c) => c.trim()).filter(Boolean),
+  vaultsDeny: (env.FLINTRAIL_EXCLUDE_VAULTS || '').split(',').map((c) => c.trim()).filter(Boolean),
 };

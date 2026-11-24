@@ -695,6 +695,11 @@ export class ExtensionRelay {
         const { key: _key, ...rest } = p;
         return bridge.request('pastePolicy', rest, 125_000);
       }
+      case 'fillRules': {
+        const bridge = this.bridgeFor(p.key);
+        if (bridge.legacy) return {};
+        return bridge.request('fillRules', {}, 5000);
+      }
       case 'fillPolicy':
       case 'fillAudit': {
         // Asked of the extension only: it holds the user's settings, and only the user can answer a confirmation.

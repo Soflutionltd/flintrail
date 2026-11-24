@@ -51,6 +51,14 @@
   </section>
 
   <section>
+    <h2>Password manager vaults</h2>
+    <p class="note">Empty: every vault your password manager opens (1Password). Otherwise only these vaults, one per line, as named in the manager.</p>
+    <textarea id="vaultsAllow" aria-label="Only these vaults" placeholder="Work&#10;Clients"></textarea>
+    <p class="note">Never these vaults, one per line.</p>
+    <textarea id="vaultsDeny" aria-label="Never these vaults" placeholder="Private"></textarea>
+  </section>
+
+  <section>
     <h2>Your open tabs</h2>
     <label class="switch"><input type="checkbox" id="adoptOpenTabs"><span>Agents may take over a tab I have open<small>An agent asks for a tab by its address (fl_adopt) and drives it, without you sharing it first. Off: share the tab from the Flintrail popup.</small></span></label>
     <p class="note">Never these sites, one per line (example.com also covers its subdomains). Add your banks here.</p>

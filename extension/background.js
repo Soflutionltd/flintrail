@@ -349,6 +349,12 @@ async function handle(method, p) {
       return captureSecret(p);
     case 'fillPolicy':
       return fillPolicy(p);
+    case 'fillRules': {
+      // Vault names only (the user's lists), never anything from the vaults themselves.
+      if (!(await storageProtected)) return { vaultsAllow: [], vaultsDeny: [] };
+      const settings = await fillSettings();
+      return { vaultsAllow: settings.vaultsAllow, vaultsDeny: settings.vaultsDeny };
+    }
     case 'pastePolicy':
       return pastePolicy(p);
     case 'fillAudit':
@@ -465,7 +471,7 @@ async function adoptOpenTab(p) {
 // ---------- password filling ----------
 // The user's settings for the passwords and codes Flintrail fills from their password manager. Only the
 // options page writes them; Flintrail asks before every fill, and no Flintrail tool can change them.
-const FILL_DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true };
+const FILL_DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true, vaultsAllow: [], vaultsDeny: [] };
 const CONFIRM_MS = 2 * 60 * 1000;
 const HISTORY_MAX = 200;
 const pendingFills = new Map();
@@ -485,6 +491,10 @@ async function fillPolicy(p) {
   const host = String(p.host || domain).toLowerCase().replace(/^www\./, '');
   if (!settings.enabled) return { refused: 'password filling is turned off' };
   if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
+  const vault = String(p.vault || '').trim().toLowerCase();
+  if (vault && (settings.vaultsDeny.some((v) => v.toLowerCase() === vault) || settings.vaultsAllow.length && !settings.vaultsAllow.some((v) => v.toLowerCase() === vault))) {
+    return { refused: `the vault "${p.vault}" is not one Flintrail may use` };
+  }
   if (!settings.confirm) return { totp: settings.totp };
   const ok = await askUser({ domain, item: String(p.item || ''), source: String(p.source || ''), fields: (p.fields || []).map(String), totp: settings.totp });
   return ok ? { totp: settings.totp, confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };

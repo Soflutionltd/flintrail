@@ -198,7 +198,7 @@ Sources are tried in the order of `FLINTRAIL_PASSWORDS` (default `browser`):
 | Source | Setup | Notes |
 |---|---|---|
 | `browser` | None. Save the password in Chrome, Edge or Brave as usual. | The browser fills the form itself; Flintrail confirms with a real click and submits. Works in extension mode and in attach mode, on the profile that holds your passwords. With several saved accounts for a site, the browser picks one: use a CLI source to choose. |
-| `1password[:path]` | [1Password CLI](https://developer.1password.com/docs/cli/) signed in, or `OP_SERVICE_ACCOUNT_TOKEN` in Flintrail's environment for unattended use. | One-time codes stored in 1Password are filled too. A service account never asks for Touch ID; scope it to a vault that holds only what the agent needs. |
+| `1password[:path]` | [1Password CLI](https://developer.1password.com/docs/cli/) through the 1Password app, or a service account. See [1Password vaults](#1password-which-vaults-and-how-flintrail-opens-them). | Every vault it can open, unless you list some. One-time codes stored in 1Password are filled too. |
 | `bitwarden[:path]` | [Bitwarden CLI](https://bitwarden.com/help/cli/) unlocked, `BW_SESSION` in Flintrail's environment. | One-time codes through `bw get totp`. |
 | `command:path` | Any program: Flintrail runs it with the page URL as only argument. | It prints `[{ "url", "username", "password", "totp"?, "title"? }]`. Use it for KeePassXC, Dashlane, `pass` or a company vault. |
 
@@ -207,6 +207,19 @@ Logins from a CLI source are only filled in frames whose domain matches the logi
 ```json
 "env": { "FLINTRAIL_PASSWORDS": "browser,1password" }
 ```
+
+### 1Password: which vaults, and how Flintrail opens them
+
+Flintrail has no vault name built in: it searches every vault the 1Password CLI can open, by the website of the page (and by account when the agent passes `account`). Two ways to open them, your choice:
+
+| | A. The 1Password app (recommended on your own Mac) | B. A service account (unattended machines) |
+|---|---|---|
+| Setup | In the 1Password app: Settings > Developer > *Integrate with 1Password CLI*. Then `FLINTRAIL_PASSWORDS=1password`, with no `OP_SERVICE_ACCOUNT_TOKEN`. | Create a service account on [1password.com](https://developer.1password.com/docs/service-accounts/get-started/) (Developer > Service accounts), give it read access to **each shared vault** the agent may use, and set `OP_SERVICE_ACCOUNT_TOKEN` in Flintrail's environment (or point `1password:/path/to/script` at a script that sets it from your keychain). |
+| Vaults | Every vault of your account, Private included. | Only the shared vaults it was given. |
+| Asks you | Touch ID or your password, about once per session (1Password's own rule). | Never. |
+| Limits | The app must be running and unlocked. | 1Password never lets a service account open the **Private** vault, and a vault created **later** is not added to an existing service account: create a new service account to include it. |
+
+To narrow the search, list vaults: in the extension settings (*Password manager vaults*: only these, never those) for your own browsers, or `FLINTRAIL_VAULTS` and `FLINTRAIL_EXCLUDE_VAULTS` (comma-separated names) for the dedicated browser. Only you change them; an agent cannot. When nothing is found, `fl_login` says which vaults it searched and which logins your lists left out.
 
 Whose account: when a sign-in step already names the account (the password page after the e-mail page), `fl_login` uses the saved login of that account and fills nothing if none matches. When you tell the agent whose account to work on, it passes `account` (a username or e-mail) and `fl_login` then refuses a saved login for anyone else, even when it is the only one for the site, instead of signing in to your own account by mistake.
 
@@ -287,6 +300,7 @@ The list is read from the environment when Flintrail starts: the agent has no to
 | `FLINTRAIL_TOKEN` | generated | HTTP bearer token and extension token |
 | `FLINTRAIL_ALLOWED_DOMAINS` | any site | The only sites the agent may work on, comma separated: `example.com` is that host, `*.example.com` is `example.com` and its subdomains. See Allowed sites. |
 | `FLINTRAIL_PASSWORDS` | `browser` | Password sources for `fl_login`, in order: `browser`, `1password[:path]`, `bitwarden[:path]`, `command:path`. `off` removes the tool. |
+| `FLINTRAIL_VAULTS` / `FLINTRAIL_EXCLUDE_VAULTS` | | Dedicated browser: only these 1Password vaults / never these, comma separated. In your own browsers, the extension settings decide. |
 
 ## Develop
 

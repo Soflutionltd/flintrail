@@ -134,6 +134,36 @@ for (const [kind, file] of [['bitwarden', 'fake-bw.mjs'], ['command', 'fake-comm
   });
 }
 
+test('1Password vaults: every vault by default, only the ones the user lists, never the ones they exclude', async () => {
+  const run = async (extra, check) => {
+    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, ...extra }));
+    try {
+      const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+      await check(mcp, tab);
+      await mcp.call('fl_close', { tab });
+    } finally {
+      await mcp.client.close();
+    }
+  };
+  // Excluded: the only matching login is left out, and the message says where Flintrail looked and why.
+  await run({ FLINTRAIL_EXCLUDE_VAULTS: 'test' }, async (mcp, tab) => {
+    await assert.rejects(mcp.call('fl_login', { tab }), /1Password vaults searched: Test; the user's vault settings: every vault, never test; left out by those settings: "Fixture shop" .* in vault Test/);
+    assert.match(await mcp.call('fl_extract', { tab, js: 'return f.password.value === ""' }), /true/);
+  });
+  // Only other vaults allowed: the same.
+  await run({ FLINTRAIL_VAULTS: 'Clients, Work' }, async (mcp, tab) => {
+    await assert.rejects(mcp.call('fl_login', { tab }), /only Clients, Work.*left out by those settings/);
+  });
+  // Listed (any case): used.
+  await run({ FLINTRAIL_VAULTS: 'clients,TEST' }, async (mcp, tab) => {
+    assert.match(await mcp.call('fl_login', { tab }), /1password login "Fixture shop"/);
+  });
+  // A service account is told apart: it only opens the vaults it was given.
+  await run({ FLINTRAIL_EXCLUDE_VAULTS: 'Test', OP_SERVICE_ACCOUNT_TOKEN: 'not-a-real-token' }, async (mcp, tab) => {
+    await assert.rejects(mcp.call('fl_login', { tab }), /service account only opens the shared vaults it was given \(never Private/);
+  });
+});
+
 test('FLINTRAIL_PASSWORDS=off removes fl_login', async () => {
   const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: 'off' }));
   try {

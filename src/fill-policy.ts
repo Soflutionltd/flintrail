@@ -18,11 +18,39 @@ export interface FillRequest {
   source: string;
   /** What is about to be filled: username, password, one-time code. */
   fields: string[];
+  /** The vault holding the login, checked again against the user's vault rules. */
+  vault?: string;
 }
 
 export interface FillDecision {
   totp: boolean;
   approval: 'silent' | 'confirmed by the user' | 'dedicated browser';
+}
+
+export interface VaultRules { allow: string[]; deny: string[] }
+
+/**
+ * Which password manager vaults may be searched: in one of the user's browsers, the extension settings; in the
+ * dedicated browser, FLINTRAIL_VAULTS and FLINTRAIL_EXCLUDE_VAULTS. Empty lists: every vault the manager opens.
+ */
+export async function vaultRules(where: { browser: string; viaExtension: boolean }): Promise<VaultRules> {
+  if (!where.viaExtension) return { allow: config.vaultsAllow, deny: config.vaultsDeny };
+  const relay = getRelayClient();
+  if (!relay) throw new Error('Refused: the extension relay is off, so the extension settings cannot be checked.');
+  const r = await relay.request('fillRules', { key: where.browser }, 5000).catch((e: Error) => {
+    // An extension older than its vault settings has none: every vault, as before.
+    if (/Unknown method fillRules/.test(e.message)) return {};
+    throw e;
+  }) as { vaultsAllow?: string[]; vaultsDeny?: string[] };
+  return { allow: (r.vaultsAllow || []).map(String), deny: (r.vaultsDeny || []).map(String) };
+}
+
+/** Whether a vault passes the rules (names compared without case). An account with no vault is not concerned. */
+export function vaultAllowed(vault: string | undefined, r: VaultRules): boolean {
+  if (!vault) return true;
+  const v = vault.trim().toLowerCase();
+  if (r.deny.some((d) => d.trim().toLowerCase() === v)) return false;
+  return !r.allow.length || r.allow.some((a) => a.trim().toLowerCase() === v);
 }
 
 /** Longer than the extension's own wait for the user's answer (2 minutes). */
@@ -36,7 +64,7 @@ export async function askFill(r: FillRequest): Promise<FillDecision> {
   if (!relay) throw new Error('Refused: the extension relay is off, so the extension settings cannot be checked.');
   let answer: { refused?: string; totp?: boolean; confirmed?: boolean; noSettings?: boolean };
   try {
-    answer = await relay.request('fillPolicy', { key: r.browser, domain: r.domain, host: r.host, item: r.item, source: r.source, fields: r.fields }, CONFIRM_WAIT_MS);
+    answer = await relay.request('fillPolicy', { key: r.browser, domain: r.domain, host: r.host, item: r.item, source: r.source, fields: r.fields, ...(r.vault ? { vault: r.vault } : {}) }, CONFIRM_WAIT_MS);
   } catch (e) {
     // An older relay cannot ask the extension: its settings (a confirmation, say) would be skipped.
     if (/Unknown method fillPolicy/.test((e as Error).message)) {

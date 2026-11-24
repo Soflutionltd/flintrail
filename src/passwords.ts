@@ -18,6 +18,8 @@ export interface Account {
   title: string;
   username: string;
   where: string;
+  /** The password manager vault holding it (1Password), for the user's vault rules. */
+  vault?: string;
   hosts: string[];
   reveal(): Promise<Credentials>;
 }
@@ -78,6 +80,7 @@ function onePassword(bin: string): CliSource {
       title: i.title,
       username: i.additional_information || '',
       where: `1Password vault ${i.vault.name}`,
+      vault: i.vault.name,
       hosts: (i.urls || []).map((u) => hostOf(u.href)).filter(Boolean),
       async reveal() {
         const raw = await run(bin, ['item', 'get', i.id, '--vault', i.vault.id, '--reveal', '--format', 'json']);

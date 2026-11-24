@@ -1,6 +1,6 @@
 // Settings page: the only place where the password filling settings change.
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true };
+const DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true, vaultsAllow: [], vaultsDeny: [] };
 
 // Bare domains only: "https://www.GitHub.com/login" becomes "github.com".
 function cleanDomain(line) {
@@ -33,11 +33,16 @@ async function load() {
   for (const k of ['enabled', 'confirm', 'totp', 'capture', 'allDomains']) $(k).checked = s[k];
   $('domains').value = s.domains.join('\n');
   $('domains').disabled = s.allDomains;
+  $('vaultsAllow').value = s.vaultsAllow.join('\n');
+  $('vaultsDeny').value = s.vaultsDeny.join('\n');
 }
+
+// Vault names as the password manager shows them, one per line.
+const vaultList = (id) => [...new Set($(id).value.split('\n').map((v) => v.trim()).filter(Boolean))].slice(0, 100);
 
 async function save() {
   const domains = [...new Set($('domains').value.split('\n').map(cleanDomain).filter(Boolean))];
-  const fillSettings = { enabled: $('enabled').checked, confirm: $('confirm').checked, totp: $('totp').checked, capture: $('capture').checked, allDomains: $('allDomains').checked, domains };
+  const fillSettings = { enabled: $('enabled').checked, confirm: $('confirm').checked, totp: $('totp').checked, capture: $('capture').checked, allDomains: $('allDomains').checked, domains, vaultsAllow: vaultList('vaultsAllow'), vaultsDeny: vaultList('vaultsDeny') };
   await chrome.storage.local.set({ fillSettings });
   $('domains').disabled = fillSettings.allDomains;
   $('saved').textContent = 'Saved.';
@@ -68,6 +73,8 @@ for (const type of ['pointerdown', 'keydown']) document.addEventListener(type, (
 const guarded = (fn) => () => (Date.now() - gestureAt < 2000 ? fn() : Promise.all([load(), loadTabs()]));
 for (const id of ['enabled', 'confirm', 'totp', 'capture', 'allDomains']) $(id).addEventListener('change', guarded(save));
 $('domains').addEventListener('change', guarded(save));
+$('vaultsAllow').addEventListener('change', guarded(save));
+$('vaultsDeny').addEventListener('change', guarded(save));
 $('adoptOpenTabs').addEventListener('change', guarded(saveTabs));
 $('neverAdopt').addEventListener('change', guarded(saveTabs));
 $('clear').addEventListener('click', async () => { await chrome.storage.local.set({ fillHistory: [] }); renderHistory(); });
