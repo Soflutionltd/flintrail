@@ -147,12 +147,13 @@ test('1Password vaults: every vault by default, only the ones the user lists, ne
   };
   // Excluded: the only matching login is left out, and the message says where Flintrail looked and why.
   await run({ FLINTRAIL_EXCLUDE_VAULTS: 'test' }, async (mcp, tab) => {
-    await assert.rejects(mcp.call('fl_login', { tab }), /1Password vaults searched: Test; the user's vault settings: every vault, never test; left out by those settings: "Fixture shop" .* in vault Test/);
+    // The excluded vault is not even named, nor what it holds: only how many logins the settings left out.
+    await assert.rejects(mcp.call('fl_login', { tab }), (e) => /1Password vaults searched: none the settings allow; the user's vault settings: every vault, never test; 1 matching login\(s\) left out by those settings/.test(e.message) && !/Fixture shop|ann@example/.test(e.message));
     assert.match(await mcp.call('fl_extract', { tab, js: 'return f.password.value === ""' }), /true/);
   });
   // Only other vaults allowed: the same.
   await run({ FLINTRAIL_VAULTS: 'Clients, Work' }, async (mcp, tab) => {
-    await assert.rejects(mcp.call('fl_login', { tab }), /only Clients, Work.*left out by those settings/);
+    await assert.rejects(mcp.call('fl_login', { tab }), /only Clients, Work.*1 matching login\(s\) left out by those settings/);
   });
   // Listed (any case): used.
   await run({ FLINTRAIL_VAULTS: 'clients,TEST' }, async (mcp, tab) => {

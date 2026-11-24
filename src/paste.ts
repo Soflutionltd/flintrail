@@ -11,6 +11,7 @@ import { config } from './config.js';
 import { domainProblem } from './domains.js';
 import { agentRanJs, elementByRef, loginRunning, markSecretFilled, pageBrowser, sealSite, withNavigation } from './engine.js';
 import { siteOf } from './login.js';
+import { vaultAllowed, vaultRules } from './fill-policy.js';
 import { hostOf } from './passwords.js';
 import { getRelayClient } from './relay-client.js';
 import { remember } from './secrets.js';
@@ -62,6 +63,8 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
   }
   const where = pageBrowser(page);
   if (!where.viaExtension) throw new Error('Refused: fl_paste_secret asks the user in the Flintrail extension, so it only works in one of the user\'s own browsers.');
+  // A 1Password vault the user excluded in the settings is not read, even with their click.
+  if (source.kind === '1password' && !vaultAllowed(source.vault, await vaultRules(where))) throw new Error(`Refused: the vault "${source.vault}" is not one Flintrail may use (extension settings).`);
   // A script the agent ran in this page could catch the value as it is typed.
   if (agentRanJs(page)) throw new Error('Refused: JavaScript was run in this tab (fl_extract or eval). Load the page again (goto) before pasting a secret.');
   const url = page.url();
@@ -103,7 +106,7 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
   try {
     let answer: { refused?: string; confirmed?: boolean };
     try {
-      answer = await relay.request('pastePolicy', { key: where.browser, domain: siteOf(host), host: `${host} (${origin})`, item: describe(source), source: 'vault', fields: [`into the ${kind} field the page calls "${name}"`] }, 130_000);
+      answer = await relay.request('pastePolicy', { key: where.browser, domain: siteOf(host), host, origin, item: describe(source), source: 'vault', ...(source.kind === '1password' ? { vault: source.vault } : {}), fields: [`into the ${kind} field the page calls "${name}"`] }, 130_000);
     } catch (e) {
       if (/Unknown method pastePolicy/.test((e as Error).message)) throw new Error(`Refused: the Flintrail extension in ${where.browser} is too old to ask before pasting a secret. Reload it to update it.`);
       throw e;

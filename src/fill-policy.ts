@@ -48,9 +48,10 @@ export async function vaultRules(where: { browser: string; viaExtension: boolean
 /** Whether a vault passes the rules (names compared without case). An account with no vault is not concerned. */
 export function vaultAllowed(vault: string | undefined, r: VaultRules): boolean {
   if (!vault) return true;
-  const v = vault.trim().toLowerCase();
-  if (r.deny.some((d) => d.trim().toLowerCase() === v)) return false;
-  return !r.allow.length || r.allow.some((a) => a.trim().toLowerCase() === v);
+  const norm = (x: string) => x.normalize('NFC').trim().toLowerCase();
+  const v = norm(vault);
+  if (r.deny.some((d) => norm(d) === v)) return false;
+  return !r.allow.length || r.allow.some((a) => norm(a) === v);
 }
 
 /** Longer than the extension's own wait for the user's answer (2 minutes). */

@@ -274,19 +274,20 @@ const cut = (list: string[]) => list.slice(0, 3).map((e) => (e.length > 80 ? `${
 
 /** The account to use from one CLI source: the one asked for, or the only one whose website matches the page. */
 /** What a search went through, for the message when nothing is found: vaults searched, logins the user's rules left out. */
-interface Searched { vaults: Set<string>; excluded: string[] }
+interface Searched { vaults: Set<string>; excluded: Set<string> }
 
 async function findAccount(page: Page, source: CliSource, wanted?: string, expected?: string, others: string[] = [], rules: VaultRules = { allow: [], deny: [] }, searched?: Searched): Promise<Account | null> {
   const pageHosts = new Set(liveFrames(page).map((f) => hostOf(f.url())));
   const pageSites = new Set([...pageHosts].map(siteOf));
   const w = wanted?.toLowerCase();
   const matchOf = (all: Account[]) => {
-    for (const a of all) if (a.vault) searched?.vaults.add(a.vault);
+    // Only the vaults the user lets Flintrail use are named: an excluded vault says nothing of what it holds.
+    for (const a of all) if (a.vault && vaultAllowed(a.vault, rules)) searched?.vaults.add(a.vault);
     const hits = w
       ? all.filter((a) => a.ref === wanted || a.title.toLowerCase() === w || a.username.toLowerCase() === w)
       : all.filter((a) => sitesOf(a).some((s) => pageSites.has(s)));
     // A vault the user left out is never used, even for the only matching login.
-    for (const a of hits) if (!vaultAllowed(a.vault, rules)) searched?.excluded.push(`${label(a)} in vault ${a.vault}`);
+    for (const a of hits) if (!vaultAllowed(a.vault, rules)) searched?.excluded.add(`${a.source}:${a.ref}`);
     return hits.filter((a) => vaultAllowed(a.vault, rules));
   };
   let found = matchOf(await source.accounts(page.url(), false));
@@ -451,9 +452,10 @@ export async function signIn(page: Page, opts: { item?: string; source?: string;
 /** Where a 1Password search looked, and why a login may be out of its reach. */
 function vaultNote(all: SourceSpec[], searched: Searched, rules: VaultRules): string {
   if (!all.some((s) => s.kind === '1password')) return '';
-  const parts = [`1Password vaults searched: ${[...searched.vaults].sort().join(', ') || 'none (is 1Password unlocked?)'}`];
+  const none = rules.allow.length || rules.deny.length ? 'none the settings allow' : 'none (is 1Password unlocked?)';
+  const parts = [`1Password vaults searched: ${[...searched.vaults].sort().join(', ') || none}`];
   if (rules.allow.length || rules.deny.length) parts.push(`the user's vault settings: ${rules.allow.length ? `only ${rules.allow.join(', ')}` : 'every vault'}${rules.deny.length ? `, never ${rules.deny.join(', ')}` : ''}`);
-  if (searched.excluded.length) parts.push(`left out by those settings: ${searched.excluded.slice(0, 3).join('; ')}`);
+  if (searched.excluded.size) parts.push(`${searched.excluded.size} matching login(s) left out by those settings`);
   // A service account only opens the shared vaults it was given when created: never Private, never a later vault.
   if (process.env.OP_SERVICE_ACCOUNT_TOKEN) parts.push('a 1Password service account only opens the shared vaults it was given (never Private, not a vault created after it); the 1Password app integration opens every vault');
   return `; ${parts.join('; ')}`;
@@ -467,7 +469,7 @@ async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean
   let source = '';
   let item: string | undefined;
   const rules = all.some((s) => s.kind === '1password') ? await vaultRules(pageBrowser(page)) : { allow: [], deny: [] };
-  const searched: Searched = { vaults: new Set(), excluded: [] };
+  const searched: Searched = { vaults: new Set(), excluded: new Set() };
   for (const s of all) {
     if (s.kind === 'browser') {
       if (opts.item) continue;
