@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { BrowserContext } from 'playwright-core';
 import { z } from 'zod';
-import { act, adoptTab, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { captureSecret } from './capture.js';
@@ -8,6 +9,9 @@ import { pasteSecret } from './paste.js';
 import { loadSession, saveSession } from './session.js';
 import { emulate, resetEmulation } from './emulate.js';
 import { savePdf } from './pdf.js';
+import { clearMocks, mock } from './mock.js';
+import { endTraceIfIdle, stopVideo, trace, video } from './evidence.js';
+import { exportFlow } from './export.js';
 import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
@@ -186,9 +190,21 @@ export function buildServer(): McpServer {
     guard(async ({ tab }) => {
       // A tab of the user's browser keeps living if closing fails: its own look comes back first. A tab that left
       // the allowed sites is closed all the same.
-      try { await resetEmulation(getTab(tab)); } catch { /* closed below anyway */ }
+      const said: string[] = [];
+      let ctx: BrowserContext | null = null;
+      try {
+        const page = getTab(tab);
+        ctx = page.context();
+        const saved = await stopVideo(page);
+        if (saved) said.push(saved);
+        await clearMocks(page);
+        await resetEmulation(page);
+      } catch { /* closed below anyway */ }
       await closeTab(tab);
-      return `Tab ${tab} closed.`;
+      // The last tab driven in that browser: its trace is saved.
+      const traced = ctx ? await endTraceIfIdle(ctx, drivenIn(ctx)).catch((e: Error) => `Trace: ${e.message}`) : null;
+      if (traced) said.push(traced);
+      return `Tab ${tab} closed.${said.map((x) => ` ${x}`).join('')}`;
     }));
 
   s.registerTool('fl_emulate', {
@@ -217,6 +233,42 @@ export function buildServer(): McpServer {
       format: z.enum(['A4', 'Letter', 'A3', 'Legal']).optional(),
     },
   }, guard(async ({ tab, name, landscape, format }) => savePdf(getTab(tab), { name, landscape, format })));
+
+  s.registerTool('fl_mock', {
+    description: 'Change what the network answers a tab, to test how the site behaves: block a request, make it fail, delay it, or answer it yourself (status, body). Matches requests whose address contains url (or matches it, with regex). Per tab, applied in order of creation; list shows what each rule caught, clear removes them, fl_release and fl_close too. A tab with any rule counts as one you ran JavaScript in (no password filled or secret pasted there afterwards). Requests made by a service worker are not caught. What the page sends is never shown.',
+    inputSchema: {
+      tab: z.string(),
+      action: z.enum(['block', 'fail', 'delay', 'respond', 'list', 'clear']),
+      url: z.string().optional().describe('Part of the request address, e.g. "/api/orders".'),
+      regex: z.boolean().optional().describe('url is a regular expression, e.g. "\\/api\\/.*\\.json$".'),
+      method: z.string().optional().describe('Only this method (GET, POST...).'),
+      status: z.number().int().optional().describe('respond: HTTP status (default 200).'),
+      body: z.string().optional().describe('respond: the body (1 MB at most).'),
+      contentType: z.string().optional().describe('respond: default application/json when the body looks like JSON, text/plain otherwise.'),
+      headers: z.record(z.string(), z.string()).optional().describe('respond: extra headers (no Set-Cookie).'),
+      ms: z.number().int().optional().describe('delay: milliseconds, up to 60000.'),
+      times: z.number().int().min(1).optional().describe('Only the first N matching requests.'),
+    },
+  }, guard(async ({ tab, ...o }) => mock(getTab(tab), o)));
+
+  s.registerTool('fl_trace', {
+    description: 'Record a Playwright trace of what you do in a browser (every tab Flintrail drives there): each action with a picture before and after (no page copy or network log, they would hold cookies). stop, or releasing or closing the last tab, saves a .zip the user opens with `npx playwright show-trace`. Stops by itself after 30 minutes. Deleted, not saved, if Flintrail fills a password or secret meanwhile. Refused while FLINTRAIL_ALLOWED_DOMAINS is set.',
+    inputSchema: {
+      tab: z.string().describe('A tab of the browser to trace.'),
+      action: z.enum(['start', 'stop']),
+      name: z.string().optional().describe('start: name of the file.'),
+    },
+  }, guard(async ({ tab, action, name }) => trace(getTab(tab), action, name)));
+
+  s.registerTool('fl_video', {
+    description: 'Film one tab (WebM), with each action pointed out on screen unless actions is false, to show a person what was done. stop, fl_release or fl_close saves it. Deleted, not saved, if Flintrail fills a password or secret in the tab meanwhile. Refused while FLINTRAIL_ALLOWED_DOMAINS is set.',
+    inputSchema: {
+      tab: z.string(),
+      action: z.enum(['start', 'stop']),
+      name: z.string().optional().describe('start: name of the file (default: the page title).'),
+      actions: z.boolean().optional().describe('start: point out each click and fill on screen (default true).'),
+    },
+  }, guard(async ({ tab, action, name, actions }) => video(getTab(tab), action, { name, actions })));
 
   s.registerTool('fl_capture_secret', {
     description: 'Store a secret a site shows once (a new GitHub or Cloudflare token, an API key) straight from the user\'s open tab into a vault: the value never reaches you, you only get its kind, length, public prefix and destination. The tab must be on the site that issues that kind. Works even when another extension stopped the tab from being driven. The user confirms a "prefix" kind, a 1Password vault, or replacing a name the McpHub vault already holds. Afterwards the pages of that site refuse scripts and screenshots until they change page. To use the secret later, give its vault name to the tool or service that needs it.',
@@ -267,9 +319,20 @@ export function buildServer(): McpServer {
     inputSchema: { tab: z.string() },
   }, guard(async ({ tab }) => {
     // The user gets the tab back as it was: no phone screen or other language left on it.
-    try { await resetEmulation(getTab(tab)); } catch { /* released below anyway */ }
+    const said: string[] = [];
+    let ctx: BrowserContext | null = null;
+    try {
+      const page = getTab(tab);
+      ctx = page.context();
+      const saved = await stopVideo(page);
+      if (saved) said.push(saved);
+      await clearMocks(page);
+      await resetEmulation(page);
+    } catch { /* released below anyway */ }
     await releaseTab(tab);
-    return `Tab ${tab} released: still open in the browser, no longer driven.`;
+    const traced = ctx ? await endTraceIfIdle(ctx, drivenIn(ctx)).catch((e: Error) => `Trace: ${e.message}`) : null;
+    if (traced) said.push(traced);
+    return `Tab ${tab} released: still open in the browser, no longer driven.${said.map((x) => ` ${x}`).join('')}`;
   }));
 
   s.registerTool('fl_desktop', {
@@ -325,6 +388,11 @@ export function buildServer(): McpServer {
 
   s.registerTool('fl_flow', { description: 'Show a flow with all its steps and element fingerprints.', inputSchema: { name: z.string() } },
     guard(async ({ name }) => JSON.stringify(loadFlow(name), null, 1)));
+
+  s.registerTool('fl_flow_export', {
+    description: 'A recorded flow as a Playwright Test file (.spec.ts text) for the project\'s own test suite: runs with `npx playwright test` in Chromium, Firefox or WebKit. Variables come from environment variables FLOW_<NAME>, a sign-in step from LOGIN_USERNAME and LOGIN_PASSWORD. Write the text to a file in the project yourself.',
+    inputSchema: { name: z.string() },
+  }, guard(async ({ name }) => exportFlow(name)));
 
   s.registerTool('fl_flow_set_var', {
     description: 'Turn the literal value of one step into a variable {{var}}, e.g. after recording by demonstration.',

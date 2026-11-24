@@ -5,6 +5,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENT, getDriven } from './browser.js';
+import { traceRunning } from './evidence.js';
 import { config } from './config.js';
 import { domainProblem } from './domains.js';
 import { getDomain } from 'tldts';
@@ -35,6 +36,8 @@ const ofSite = (host: string, site: string) => {
 export async function saveSession(o: { site: string; name: string; replace?: boolean }): Promise<string> {
   const site = siteOk(o.site);
   const driven = await getDriven(AGENT);
+  // A trace keeps what each call returns: the cookies would be in it.
+  if (traceRunning(driven.ctx)) throw new Error('Refused while a trace records the dedicated browser: it would keep the cookies. fl_trace stop first.');
   const all = await driven.ctx.storageState() as State;
   const state: State = {
     cookies: all.cookies.filter((c) => ofSite(c.domain, site)),
@@ -69,6 +72,7 @@ export async function loadSession(o: { name: string }): Promise<string> {
   const cookies = (saved.cookies || []).filter((c) => ofSite(String(c.domain || ''), site));
   const origins = (saved.origins || []).filter((x) => { try { return ofSite(new URL(x.origin).hostname, site); } catch { return false; } });
   const driven = await getDriven(AGENT);
+  if (traceRunning(driven.ctx)) throw new Error('Refused while a trace records the dedicated browser: it would keep the cookies. fl_trace stop first.');
   if (cookies.length) await driven.ctx.addCookies(cookies);
   for (const { origin: raw, localStorage } of origins) {
     const origin = new URL(raw).origin;

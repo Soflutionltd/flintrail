@@ -223,3 +223,14 @@ test('a <base> tag cannot point a relative request at another site', async () =>
   assert.deepEqual(site.hits.slice(before), ['127.0.0.1 /sink', '127.0.0.1 /sink']);
   await mcp.call('fl_close', { tab });
 });
+
+test('with a list, traces and videos are refused and network rules never touch another site', async () => {
+  const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/stock` }));
+  await assert.rejects(mcp.call('fl_trace', { tab, action: 'start' }), /Refused: a trace would record the frames of other sites/);
+  await assert.rejects(mcp.call('fl_video', { tab, action: 'start' }), /Refused: a video would record the frames of other sites/);
+  assert.match(await mcp.call('fl_mock', { tab, action: 'fail', url: '/api/stock' }), /Requests to sites outside the allowed list are never touched/);
+  const reach = (base) => mcp.call('fl_extract', { tab, js: `return fetch(${JSON.stringify(base + '/api/stock')}, { mode: 'no-cors' }).then(() => 'reached', () => 'failed')` });
+  assert.match(await reach(site.url), /-> "failed"/);
+  assert.match(await reach(other), /-> "reached"/);
+  await mcp.call('fl_close', { tab });
+});

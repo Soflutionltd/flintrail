@@ -3,7 +3,7 @@ import { test, before, after } from 'node:test';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { startFixture } from './fixture.mjs';
-import { connect, refOf } from './helpers.mjs';
+import { connect, refOf, zipEntries } from './helpers.mjs';
 
 let site, mcp;
 before(async () => {
@@ -136,4 +136,99 @@ test('a session saved from the dedicated browser comes back after its cookies ar
   assert.match(await mcp.call('fl_act', { tab, actions: [{ do: 'upload', selector: 'input[type=file]', files: [file] }], snapshot: false }), /FAILED upload: Refused: .* is one of Flintrail's own files/);
   await assert.rejects(mcp.call('fl_session', { action: 'load', name: 'never-saved' }), /No saved session "never-saved"/);
   await mcp.call('fl_close', { tab });
+});
+
+test('network rules: an API answered, failed, delayed or blocked, counted, and gone after clear', async () => {
+  const tab = tabOf(await mcp.call('fl_open', { url: site.url + '/stock' }));
+  const load = async () => {
+    await mcp.call('fl_act', { tab, actions: [{ do: 'click', selector: '#load' }, { do: 'wait', network: true, ms: 8000 }], snapshot: false });
+    return text(tab);
+  };
+  assert.match(await load(), /-> "200 \{\\"left\\":12\}/);
+  assert.match(await mcp.call('fl_mock', { tab, action: 'respond', url: '/api/stock', status: 503, body: '{"error":"down"}', times: 1 }),
+    /Rule #\d+ \/api\/stock -> answer 503 \(16 bytes\), caught 0, 1 use\(s\) left/);
+  assert.match(await load(), /-> "503 \{\\"error\\":\\"down\\"\}/);
+  // Used once: the real API answers again.
+  assert.match(await load(), /-> "200 \{\\"left\\":12\}/);
+  await mcp.call('fl_mock', { tab, action: 'fail', url: '\\/api\\/st.ck$', regex: true, method: 'GET' });
+  assert.match(await load(), /network error/);
+  assert.match(await mcp.call('fl_mock', { tab, action: 'list' }), /GET \/\\\/api\\\/st\.ck\$\/ -> fail \(network error\), caught 1/);
+  assert.match(await mcp.call('fl_mock', { tab, action: 'clear' }), /2 network rule\(s\) removed/);
+  await mcp.call('fl_mock', { tab, action: 'delay', url: '/api/stock', ms: 1200 });
+  const slow = /in (\d+) ms/.exec(await load());
+  assert.ok(slow && Number(slow[1]) >= 1100, `delayed: ${slow?.[1]}`);
+  await mcp.call('fl_mock', { tab, action: 'clear' });
+  await mcp.call('fl_mock', { tab, action: 'block', url: '/api/stock' });
+  assert.match(await load(), /network error/);
+  await assert.rejects(mcp.call('fl_mock', { tab, action: 'respond', url: '/x', headers: { 'Set-Cookie': 'a=b' } }), /Set-Cookie is refused/);
+  await assert.rejects(mcp.call('fl_mock', { tab, action: 'respond', url: '/x', headers: { 'Clear-Site-Data': '"cookies"' } }), /Clear-Site-Data is refused/);
+  await assert.rejects(mcp.call('fl_mock', { tab, action: 'block', url: 'a'.repeat(201), regex: true }), /200 characters at most/);
+  await assert.rejects(mcp.call('fl_mock', { tab, action: 'delay', url: '/x' }), /delay needs ms/);
+  await assert.rejects(mcp.call('fl_mock', { tab, action: 'block' }), /url is needed/);
+  // Closing the tab takes its rules with it: a new tab gets the real API.
+  await mcp.call('fl_close', { tab });
+  const fresh = tabOf(await mcp.call('fl_open', { url: site.url + '/stock' }));
+  await mcp.call('fl_act', { tab: fresh, actions: [{ do: 'click', selector: '#load' }, { do: 'wait', network: true, ms: 8000 }], snapshot: false });
+  assert.match(await text(fresh), /-> "200/);
+  await mcp.call('fl_close', { tab: fresh });
+});
+
+test('any network rule counts as the agent\'s own script: no sign-in is filled in that tab afterwards', async () => {
+  // A blocked script changes what a sign-in form does just as a fake answer does.
+  for (const rule of [{ action: 'respond', url: '/api/stock', body: '<script>1</script>', contentType: 'text/html' }, { action: 'block', url: '.js' }]) {
+    const tab = tabOf(await mcp.call('fl_open', { url: site.url + '/stock' }));
+    await mcp.call('fl_mock', { tab, ...rule });
+    await assert.rejects(mcp.call('fl_login', { tab }), /Refused: you ran JavaScript in this tab/);
+    await mcp.call('fl_close', { tab });
+  }
+});
+
+test('a trace of the dedicated browser and a video of a tab are saved where the user finds them', async () => {
+  const tab = tabOf(await mcp.call('fl_open', { url: site.url + '/rows' }));
+  assert.match(await mcp.call('fl_trace', { tab, action: 'start', name: 'tokens' }), /Trace started for every tab Flintrail drives in this browser: every action with a picture before and after \(no page copy or network log/);
+  // The cookies fl_session reads would be in the trace.
+  await assert.rejects(mcp.call('fl_session', { action: 'save', name: 'during-trace', site: '127.0.0.1' }), /Refused while a trace records the dedicated browser/);
+  await assert.rejects(mcp.call('fl_trace', { tab, action: 'start' }), /A trace is already running/);
+  assert.match(await mcp.call('fl_video', { tab, action: 'start', name: 'tokens' }), /Filming tab: \d+x\d+, each action pointed out on screen/);
+  await mcp.call('fl_act', { tab, actions: [{ do: 'click', role: 'button', name: 'Delete', within: 'beta-token' }, { do: 'wait', ms: 600 }], snapshot: false });
+  const traced = await mcp.call('fl_trace', { tab, action: 'stop' });
+  const zip = /Trace saved: (.*\.zip) \(/.exec(traced)[1];
+  assert.match(traced, /npx playwright show-trace/);
+  // Actions and pictures, never a copy of the page or its network.
+  const files = zipEntries(zip);
+  assert.ok(files.get('trace.trace').includes('"type":"before"'));
+  assert.ok(!files.get('trace.trace').includes('frame-snapshot'));
+  assert.equal(files.get('trace.network').length, 0);
+  const filmed = await mcp.call('fl_video', { tab, action: 'stop' });
+  const webm = /Video saved: (.*\.webm) \(/.exec(filmed)[1];
+  assert.ok(statSync(webm).size > 1000);
+  // WebM starts with the EBML magic number.
+  assert.equal(readFileSync(webm).subarray(0, 4).toString('hex'), '1a45dfa3');
+  await assert.rejects(mcp.call('fl_video', { tab, action: 'stop' }), /No video is being recorded/);
+  // A video still running when the tab closes is saved then, and so is a trace when its last tab closes.
+  await mcp.call('fl_video', { tab, action: 'start' });
+  await mcp.call('fl_trace', { tab, action: 'start', name: 'until-close' });
+  assert.match(await mcp.call('fl_close', { tab }), /Tab t\d+ closed\. Video saved: .*\.webm.* Trace saved: .*until-close.*\.zip/);
+});
+
+test('a recorded flow exported as a Playwright Test file, variables from the environment', async () => {
+  await mcp.call('fl_record_start', { name: 'export-me', description: 'Delete a token' });
+  const tab = tabOf(await mcp.call('fl_open', { url: site.url + '/rows' }));
+  await mcp.call('fl_act', { tab, actions: [
+    { do: 'click', role: 'button', name: 'Delete', within: 'beta-token' },
+    { do: 'goto', url: site.url + '/search' },
+  ], snapshot: false });
+  const typed = await mcp.call('fl_act', { tab, actions: [{ do: 'fill', selector: 'input[name=q]', value: 'parking', var: 'query' }, { do: 'press', key: 'Enter' }], snapshot: false });
+  assert.doesNotMatch(typed, /FAILED/);
+  await mcp.call('fl_record_stop', {});
+  await mcp.call('fl_close', { tab });
+  const spec = await mcp.call('fl_flow_export', { name: 'export-me' });
+  assert.match(spec, /^\/\/ Flow "export-me" recorded with Flintrail/);
+  assert.match(spec, /import \{ test \} from '@playwright\/test';/);
+  assert.match(spec, /FLOW_QUERY \(\{\{query\}\}\)/);
+  assert.match(spec, /await page\.goto\("http:\/\/127\.0\.0\.1:\d+\/rows"\);/);
+  assert.match(spec, /\.fill\(v\("\{\{query\}\}"\)\);/);
+  assert.match(spec, /function v\(s: string\): string/);
+  assert.ok(!spec.includes('parking'), 'the recorded value of a variable stays out of the file');
+  await assert.rejects(mcp.call('fl_flow_export', { name: 'no-such-flow' }), /does not exist/);
 });

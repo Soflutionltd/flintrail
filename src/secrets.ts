@@ -43,3 +43,14 @@ export function redact(text: string): string {
   }
   return out;
 }
+
+/** Whether a text holds a password, code or secret Flintrail filled, pasted or captured, in any form redact knows. */
+export function holdsRemembered(text: string): boolean {
+  const now = Date.now();
+  for (const [s, until] of secrets) {
+    if (until < now) continue;
+    const forms = [s, encodeURIComponent(s), new URLSearchParams({ v: s }).toString().slice(2), JSON.stringify(s).slice(1, -1)];
+    if (forms.some((f) => text.includes(f))) return true;
+  }
+  return false;
+}

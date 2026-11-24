@@ -1,7 +1,7 @@
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -23,7 +23,9 @@ after(() => site.server.close());
 
 describe('1Password CLI source', () => {
   let mcp, env;
-  before(async () => { env = testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }); mcp = await connect(env); });
+  // A temporary folder of its own: the test sees every working copy Playwright leaves there.
+  const work = mkdtempSync(join(tmpdir(), 'flintrail-work-'));
+  before(async () => { env = testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, TMPDIR: work }); mcp = await connect(env); });
   after(() => mcp.client.close());
 
   test('signs in and never returns the password or the code', async () => {
@@ -52,6 +54,39 @@ describe('1Password CLI source', () => {
     const audit = readFileSync(join(env.FLINTRAIL_HOME, 'fill-audit.log'), 'utf8');
     assert.match(audit, /"domain":"127\.0\.0\.1","item":"Fixture shop","ref":"fixture1","source":"1password","filled":\["username","password","one-time code"\],"approval":"dedicated browser"/);
     assert.ok(!leaks(audit), 'the audit log holds no value');
+    await mcp.call('fl_close', { tab });
+  });
+
+  test('a trace is refused while another tab of the browser holds a filled password', async () => {
+    const filled = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+    await mcp.call('fl_login', { tab: filled, submit: false });
+    const other = tabOf(await mcp.call('fl_open', { url: `${site.url}/` }));
+    await assert.rejects(mcp.call('fl_trace', { tab: other, action: 'start' }), /Blocked: this page holds a password/);
+    await mcp.call('fl_close', { tab: filled });
+    assert.match(await mcp.call('fl_trace', { tab: other, action: 'start' }), /Trace started/);
+    assert.match(await mcp.call('fl_close', { tab: other }), /Trace saved/);
+  });
+
+  test('a trace and a video running when a password is filled are deleted, never saved', async () => {
+    const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+    await mcp.call('fl_trace', { tab, action: 'start', name: 'with-login' });
+    await mcp.call('fl_video', { tab, action: 'start', name: 'with-login' });
+    await mcp.call('fl_login', { tab });
+    assert.match(await mcp.call('fl_trace', { tab, action: 'stop' }), /Trace deleted: Flintrail filled a password, a code or a secret while it recorded/);
+    assert.match(await mcp.call('fl_video', { tab, action: 'stop' }), /Video deleted: Flintrail filled a password/);
+    // Nothing left on disk, under any name.
+    await new Promise((r) => setTimeout(r, 500));
+    const left = existsSync(env.FLINTRAIL_DOWNLOADS) ? readdirSync(env.FLINTRAIL_DOWNLOADS).filter((f) => /with-login/.test(f)) : [];
+    assert.deepEqual(left, []);
+    // Nor in Playwright's own working folders, where it keeps a copy until the browser closes: no trace file, picture
+    // or video is left there.
+    const copies = readdirSync(work).filter((d) => /^playwright-(artifacts|tracing)-/.test(d))
+      .flatMap((d) => readdirSync(join(work, d), { recursive: true }).map((f) => join(work, d, String(f))))
+      .filter((f) => statSync(f).isFile() && /\.(trace|network|jpe?g|webm|png)$/.test(f));
+    assert.deepEqual(copies, [], 'no working copy left');
+    assert.ok(readdirSync(work).some((d) => d.startsWith('playwright-artifacts-')), 'the browser did use this folder');
+    // A new trace on the signed-in page is refused until it loads another page.
+    await assert.rejects(mcp.call('fl_trace', { tab, action: 'start' }), /Blocked: this page holds a password/);
     await mcp.call('fl_close', { tab });
   });
 

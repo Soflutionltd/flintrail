@@ -9,7 +9,7 @@ import type { Locator, Page } from 'playwright-core';
 import { describe, mcphub, onePasswordBin, parseDestination, type Destination } from './capture.js';
 import { config } from './config.js';
 import { domainProblem } from './domains.js';
-import { agentRanJs, elementByRef, loginRunning, markSecretFilled, pageBrowser, sealSite, withNavigation } from './engine.js';
+import { agentRanJs, beforeSecret, elementByRef, loginRunning, markSecretFilled, pageBrowser, sealSite, withNavigation } from './engine.js';
 import { siteOf } from './login.js';
 import { vaultAllowed, vaultRules } from './fill-policy.js';
 import { hostOf } from './passwords.js';
@@ -104,6 +104,8 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
   loginRunning(page, true);
   let value = '';
   try {
+    // A trace or video of this tab is dropped before the user is even asked: it would hold the secret.
+    await beforeSecret(page);
     let answer: { refused?: string; confirmed?: boolean };
     try {
       answer = await relay.request('pastePolicy', { key: where.browser, domain: siteOf(host), host, origin, item: describe(source), source: 'vault', ...(source.kind === '1password' ? { vault: source.vault } : {}), fields: [`into the ${kind} field the page calls "${name}"`] }, 130_000);

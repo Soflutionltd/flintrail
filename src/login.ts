@@ -6,7 +6,7 @@ import { domainProblem } from './domains.js';
 import type { Frame, Locator, Page } from 'playwright-core';
 import { config } from './config.js';
 import { randomBytes } from 'node:crypto';
-import { agentRanJs, elementByRef, loginRunning, markSecretFilled, pageBrowser, withNavigation } from './engine.js';
+import { agentRanJs, beforeSecret, elementByRef, loginRunning, markSecretFilled, pageBrowser, withNavigation } from './engine.js';
 import { askFill, recordFill, vaultAllowed, vaultRules, type VaultRules } from './fill-policy.js';
 import { hostOf, parseSources, type Account, type CliSource, type SourceSpec } from './passwords.js';
 import { remember } from './secrets.js';
@@ -443,6 +443,8 @@ export async function signIn(page: Page, opts: { item?: string; source?: string;
   }
   loginRunning(page, true);
   try {
+    // A trace or video of this tab is dropped before anything is typed: it would hold the password.
+    await beforeSecret(page);
     return await fillAndSubmit(page, opts, all, expected);
   } finally {
     loginRunning(page, false);

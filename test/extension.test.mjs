@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { startFixture } from './fixture.mjs';
-import { connect, refOf, testEnv } from './helpers.mjs';
+import { connect, refOf, testEnv, zipEntries } from './helpers.mjs';
 
 const extPath = new URL('../extension', import.meta.url).pathname;
 const fakeOp = new URL('./fake-op.mjs', import.meta.url).pathname;
@@ -418,6 +418,33 @@ test('emulation in the user\'s browser goes through the extension, and the tab g
   assert.equal(now.width, 412);
   assert.notEqual(after.width, 412);
   assert.equal(after.touch, before.touch);
+  await page.close();
+});
+
+test('network rules, a trace and a video work in the user\'s browser, and the trace leaves out page copies and network there', async () => {
+  const page = await ctx.newPage();
+  await page.goto(`${site.url.replace('127.0.0.1', 'localhost')}/stock`);
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: '/stock', browser: 'chromium', text: 0 }))[1];
+  const load = async () => {
+    await mcp.call('fl_act', { tab, actions: [{ do: 'click', selector: '#load' }, { do: 'wait', network: true, ms: 8000 }], snapshot: false });
+    return page.locator('#out').textContent();
+  };
+  assert.match(await mcp.call('fl_trace', { tab, action: 'start', name: 'user-browser' }), /every action with a picture before and after \(no page copy or network log/);
+  assert.match(await mcp.call('fl_video', { tab, action: 'start', actions: false }), /Filming tab: \d+x\d+\. fl_video stop/);
+  await mcp.call('fl_mock', { tab, action: 'respond', url: '/api/stock', body: '{"left":0}' });
+  assert.match(await load(), /^200 \{"left":0\}/);
+  const zip = /Trace saved: (.*\.zip) \(/.exec(await mcp.call('fl_trace', { tab, action: 'stop' }))[1];
+  assert.equal(readFileSync(zip).subarray(0, 2).toString(), 'PK');
+  // No page copy, no network log: they would hold the user's cookies.
+  const files = zipEntries(zip);
+  assert.equal(files.get('trace.network').length, 0, 'no network entry in a trace of the user\'s browser');
+  assert.ok(!files.get('trace.trace').includes('frame-snapshot'), 'no page copy in a trace of the user\'s browser');
+  assert.ok(files.get('trace.trace').includes('"type":"before"'), 'the actions are in it');
+  const filmed = await mcp.call('fl_release', { tab });
+  assert.match(filmed, /released: still open in the browser, no longer driven\. Video saved: .*\.webm/);
+  // Released: the rule went with it, the real API answers the user.
+  await page.click('#load');
+  await page.waitForFunction(() => /left":12/.test(document.getElementById('out').textContent));
   await page.close();
 });
 

@@ -113,10 +113,45 @@ export function agentRanJs(page: Page): boolean {
 /** Marks the tab while fl_login works in it: scripts and screenshots wait for the end, they are refused. */
 export function loginRunning(page: Page, on: boolean) {
   stateOf(page).loginRunning = on;
+  if (on) void secretNear(page);
 }
 
 export function markSecretFilled(page: Page) {
   stateOf(page).secretFilled = true;
+  void secretNear(page);
+}
+
+/** Told when a password, code or secret is about to be filled or shown in a tab (a trace or video of it is dropped). */
+const secretListeners = new Set<(page: Page) => Promise<void>>();
+export function onSecret(fn: (page: Page) => Promise<void>) { secretListeners.add(fn); }
+function secretNear(page: Page): Promise<void> {
+  return Promise.allSettled([...secretListeners].map((fn) => fn(page))).then(() => {});
+}
+
+/** Waits until nothing records the tab any more: called before a password, code or secret is filled in it. */
+export function beforeSecret(page: Page): Promise<void> {
+  return secretNear(page);
+}
+
+/** Whether Flintrail is filling, or the tab shows, a password, code or secret (a network rule then stands aside). */
+export function secretInTab(page: Page): boolean {
+  const s = stateOf(page);
+  return !!(s.loginRunning || s.secretFilled);
+}
+
+/** Refuses when any tab Flintrail drives in this browser holds a secret: a trace records them all. */
+export function assertNoSecretIn(ctx: BrowserContext, what: string) {
+  for (const page of tabs.values()) if (!page.isClosed() && page.context() === ctx) assertNoSecret(page, what);
+}
+
+/** How many tabs Flintrail still drives in this browser. */
+export function drivenIn(ctx: BrowserContext): number {
+  return [...tabs.values()].filter((p) => !p.isClosed() && p.context() === ctx).length;
+}
+
+/** A network rule (fl_mock) can change what the page runs, or stop its scripts: the same as running JavaScript there. */
+export function markAgentJs(page: Page) {
+  stateOf(page).agentJs = true;
 }
 
 // Sites a secret was just captured from: a page of theirs the agent drives, now or later, is closed to scripts and

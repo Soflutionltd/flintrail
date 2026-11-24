@@ -100,6 +100,18 @@ export function startFixture(port = 0) {
           col.addEventListener('drop', (e) => { e.preventDefault(); col.append(card); });
         }
       </script>`);
+    if (url.pathname === '/stock') return html('Stock level', `<h1>Stock level</h1><button type="button" id="load">Load</button><p id="out"></p>
+      <script>
+        document.getElementById('load').onclick = async () => {
+          const out = document.getElementById('out');
+          const t0 = Date.now();
+          try {
+            const r = await fetch('/api/stock');
+            out.textContent = r.status + ' ' + (await r.text()) + ' in ' + (Date.now() - t0) + ' ms';
+          } catch (e) { out.textContent = 'network error'; }
+        };
+      </script>`);
+    if (url.pathname === '/api/stock') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('{"left":12}'); }
     if (url.pathname === '/env') return html('Environment', `<h1>Environment</h1><p id="out"></p>
       <script>
         const read = () => JSON.stringify({ width: screen.width, touch: navigator.maxTouchPoints, ua: navigator.userAgent, lang: navigator.language,
