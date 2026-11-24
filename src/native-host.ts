@@ -5,7 +5,9 @@
 // Protocol (Chrome native messaging): each message is a 32-bit little-endian length, then UTF-8 JSON.
 import { loadToken } from './auth.js';
 import { config } from './config.js';
-import { profileOfInstance } from './profiles.js';
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { profileOfInstance, profileReadProblems } from './profiles.js';
 
 function reply(message: unknown) {
   const body = Buffer.from(JSON.stringify(message), 'utf8');
@@ -34,7 +36,15 @@ try {
   if (message?.type === 'pair') reply({ type: 'paired', token: loadToken(), port: config.relayPort });
   // Started by the browser itself, this process may read the browser's own profile files, which macOS often
   // keeps from other apps (the relay among them): it tells the extension which profile it runs in.
-  else if (message?.type === 'profile') reply({ type: 'profile', name: profileOfInstance(String(message.instance || ''))?.name || '' });
+  else if (message?.type === 'profile') {
+    const name = profileOfInstance(String(message.instance || ''))?.name || '';
+    // Not found: say why in ~/.flintrail/native-host.log (a browser's files closed to this process, most often).
+    if (!name) {
+      const why = profileReadProblems().join(', ') || 'no profile holds this extension instance';
+      try { appendFileSync(join(config.home, 'native-host.log'), `${new Date().toISOString()} profile of ${String(message.instance || '').slice(0, 8)} not found: ${why}\n`); } catch { /* nothing to report to */ }
+    }
+    reply({ type: 'profile', name });
+  }
   else reply({ type: 'error', error: 'unknown request' });
 } catch (e) {
   reply({ type: 'error', error: (e as Error).message });
