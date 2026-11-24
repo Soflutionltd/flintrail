@@ -64,7 +64,7 @@ after(async () => {
 
 test('a connected browser is named after its profile, and picked by that name', async () => {
   const listed = await mcp.call('fl_extension');
-  assert.match(listed, /^chromium-soflution: Extension connected \(Chromium, profile "Soflution", extension 1\.5\.9\)/m);
+  assert.match(listed, /^chromium-soflution: Extension connected \(Chromium, profile "Soflution", extension 1\.5\.10\)/m);
   const snap = await mcp.call('fl_open', { url: site.url, browser: 'Soflution', text: 0 });
   assert.match(snap, /^Tab t\d+ \[chromium-soflution\]/);
   await mcp.call('fl_close', { tab: tabId(snap) });
