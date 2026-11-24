@@ -182,6 +182,27 @@ test('an agent takes over a tab the user has open, unless the settings say no', 
   await again.close();
 });
 
+test('fl_open takes over the tab already showing the address, and fl_release lets it go without closing it', async () => {
+  const own = await ctx.newPage();
+  await own.goto(site.url + '/search?q=mine');
+  const count = () => sw.evaluate(async () => (await chrome.tabs.query({})).length);
+  const before = await count();
+  const snap = await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', text: 0 });
+  const tab = /Tab (t\d+)/.exec(snap)[1];
+  assert.match(snap, /search\?q=mine/, 'the user\'s own tab, not a new one');
+  assert.equal(await count(), before);
+  assert.match(await mcp.call('fl_release', { tab }), /released: still open/);
+  assert.doesNotMatch(await mcp.call('fl_tabs'), new RegExp(`${tab} `));
+  assert.ok(!own.isClosed());
+  const driven = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '*' })).some((t) => attached.has(t.id)), site.url + '/search');
+  assert.equal(driven, false, 'no longer attached, so the debugging bar can go');
+  // newTab:true opens a tab of its own anyway.
+  const fresh = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', newTab: true, text: 0 }))[1];
+  assert.equal(await count(), before + 1);
+  await mcp.call('fl_close', { tab: fresh });
+  await own.close();
+});
+
 test('browser and extension pages, the settings included, are never driven', async () => {
   const settingsPage = `chrome-extension://${new URL(sw.url()).host}/options.html`;
   await assert.rejects(mcp.call('fl_open', { url: settingsPage, browser: 'chromium' }), /never opens browser or extension pages/);

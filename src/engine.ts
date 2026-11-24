@@ -240,10 +240,17 @@ async function openPage(where: Driven, placement: Placement = {}): Promise<Page>
 }
 
 /** Opens a tab in the named browser (see getDriven), optionally on a URL. */
-export async function openTab(url?: string, browserName?: string, placement: Placement = {}): Promise<string> {
+export async function openTab(url?: string, browserName?: string, placement: Placement = {}, reuse = true): Promise<string> {
   const where = await getDriven(browserName);
   if ((placement.window !== undefined || placement.newWindow) && !where.viaExtension) {
     throw new Error('window and newWindow apply to the user\'s browsers only (set browser, see fl_extension).');
+  }
+  // In a user browser, a tab already showing this address (or a page under it) is taken over rather than
+  // opening one more tab: the user does not end up with the same site open ten times.
+  if (url && reuse && where.viaExtension && placement.window === undefined && !placement.newWindow) {
+    assertAllowed(url);
+    const existing = await takeOver(where, url.replace(/[?#].*$/, '').replace(/\/+$/, '')).catch(() => null);
+    if (existing) return register(existing, where);
   }
   const page = await newPage(where, placement);
   const id = register(page, where);
@@ -257,6 +264,13 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
 /** Take over a tab the user already has open, for example one where they just signed in by hand. */
 export async function adoptTab(match: string, browserName?: string): Promise<string> {
   const where = await getDriven(browserName);
+  const page = await takeOver(where, match);
+  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' that this conversation may take: it is driven by another conversation, or the extension is older than 1.5 (share the tab from the Flintrail popup then)' : ''}.`);
+  return register(page, where);
+}
+
+/** A tab open in this browser whose address contains match, now driven by this conversation; null when there is none. */
+async function takeOver(where: Driven, match: string): Promise<Page | null> {
   const owned = new Set(tabs.values());
   const free = () => where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed() && p.url().includes(match)).at(-1);
   let page = free();
@@ -270,8 +284,30 @@ export async function adoptTab(match: string, browserName?: string): Promise<str
     }
   }
   if (page) assertAllowed(page.url());
-  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' that this conversation may take: it is driven by another conversation, or the extension is older than 1.5 (share the tab from the Flintrail popup then)' : ''}.`);
-  return register(page, where);
+  return page ?? null;
+}
+
+/**
+ * Stops driving a tab of the user's browser without closing it: the user keeps it, another conversation may
+ * take it over, and the browser's debugging bar goes away once no tab is driven.
+ */
+export async function releaseTab(id: string) {
+  const page = getTab(id);
+  const where = await getDriven(stateOf(page).browser);
+  if (!where.viaExtension || !where.browser) throw new Error(`Tab ${id} is in the dedicated browser: close it with fl_close.`);
+  const cdp = await where.browser.newBrowserCDPSession();
+  try {
+    const { targetInfos } = await cdp.send('Target.getTargets') as { targetInfos: { targetId: string; url: string }[] };
+    const mine = targetInfos.filter((t) => t.url === page.url());
+    if (mine.length !== 1) throw new Error(`Tab ${id}: cannot tell it apart from another tab of this conversation on the same address. Close it with fl_close instead.`);
+    // A command of the relay only, outside the CDP protocol types.
+    const send = cdp.send.bind(cdp) as (method: string, params: Record<string, unknown>) => Promise<unknown>;
+    await send('Flintrail.releaseTarget', { targetId: mine[0]!.targetId });
+  } finally {
+    await cdp.detach().catch(() => {});
+  }
+  for (let i = 0; i < 50 && !page.isClosed(); i++) await new Promise((r) => setTimeout(r, 100));
+  tabs.delete(id);
 }
 
 /** Browser a Flintrail tab lives in. */

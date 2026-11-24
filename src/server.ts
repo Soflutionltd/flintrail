@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { act, adoptTab, assertNoSecret, closeTab, consoleLog, domQuiet, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { redact, signIn } from './login.js';
@@ -77,15 +77,16 @@ export function buildServer(): McpServer {
   const s = new McpServer({ name: 'flintrail', version: VERSION });
 
   s.registerTool('fl_open', {
-    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, window picks one of its windows (ids from fl_extension tabs:true) and newWindow opens a new window. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, a tab already showing this address (or a page under it) is taken over instead of opening another one (newTab:true forces a new tab), window picks one of its windows (ids from fl_extension tabs:true) and newWindow opens a new window. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
     inputSchema: {
       url: z.string(), browser: browserOpt,
       window: z.number().int().optional().describe('User browser only: open the tab in this window (id from fl_extension tabs:true).'),
       newWindow: z.boolean().optional().describe('User browser only: open the tab in a new window.'),
+      newTab: z.boolean().optional().describe('User browser only: always open a new tab, even when one already shows this address.'),
       ...snapOpts,
     },
-  }, guard(async ({ url, browser, window, newWindow, text: t, max }) => {
-    const id = await openTab(url, browser, { window, newWindow });
+  }, guard(async ({ url, browser, window, newWindow, newTab, text: t, max }) => {
+    const id = await openTab(url, browser, { window, newWindow }, !newTab);
     return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max }));
   }));
 
@@ -172,6 +173,11 @@ export function buildServer(): McpServer {
 
   s.registerTool('fl_close', { description: 'Close a Flintrail tab.', inputSchema: { tab: z.string() } },
     guard(async ({ tab }) => { await closeTab(tab); return `Tab ${tab} closed.`; }));
+
+  s.registerTool('fl_release', {
+    description: 'Stop driving a tab of the user\'s browser without closing it: the user keeps it, and it can be taken over again later (fl_open or fl_adopt). Use it when done with a tab the user had open; fl_close closes it.',
+    inputSchema: { tab: z.string() },
+  }, guard(async ({ tab }) => { await releaseTab(tab); return `Tab ${tab} released: still open in the browser, no longer driven.`; }));
 
   s.registerTool('fl_desktop', {
     description: 'Snapshot a native desktop app (Finder, Mail, Preview, Notes, any app) through the OS accessibility tree: its elements with [dN] refs for fl_desktop_act. No pixels, no pointer move, no window raised. Without app, lists the running apps. The app name can be localized ("Calculatrice"), English ("Calculator") or a bundle id.',

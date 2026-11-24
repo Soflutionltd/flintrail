@@ -463,6 +463,14 @@ class ExtensionBridge {
         const tab = this.addTab(r.tabId, r.targetInfo, view);
         return { targetId: tab.targetInfo.targetId };
       }
+      case 'Flintrail.releaseTarget': {
+        // fl_release: this conversation stops driving the tab, the user keeps it open.
+        const tab = own().find((t) => t.targetInfo.targetId === params.targetId);
+        if (!tab) throw new Error('no such tab of this conversation');
+        this.dropTab(tab.tabId);
+        if (!this.legacy) await this.request('release', { tabIds: [tab.tabId] }, 5000);
+        return {};
+      }
       case 'Target.closeTarget': {
         const tab = own().find((t) => t.targetInfo.targetId === params.targetId);
         if (tab) await this.request('closeTab', { tabId: tab.tabId });
