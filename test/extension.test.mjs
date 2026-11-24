@@ -69,6 +69,22 @@ test('the extension pairs by itself and is listed by name', async () => {
   await mcp.call('fl_close', { tab: /Tab (t\d+)/.exec(snap)[1] });
 });
 
+test('the popup shows the browser\'s name, ready to change, and a name typed whole is kept as it is', async () => {
+  const popup = await ctx.newPage();
+  await popup.goto(`chrome-extension://${new URL(sw.url()).host}/popup.html`);
+  await popup.waitForFunction(() => document.getElementById('label').value !== '');
+  assert.equal(await popup.inputValue('#label'), 'chromium');
+  await popup.close();
+  const rename = async (label, expected) => {
+    await sw.evaluate(async (l) => { await chrome.storage.local.set({ label: l }); ws?.close(); ws = null; await connect(); }, label);
+    await waitFor(async () => new RegExp(`^${expected}: Extension connected`, 'm').test(await mcp.call('fl_extension')));
+  };
+  await rename('chromium', 'chromium');
+  await rename('chromium-perso', 'chromium-perso');
+  await rename('Travail', 'chromium-travail');
+  await rename('', 'chromium');
+});
+
 test('agent tabs open only in the agent window, never in the user\'s window', async () => {
   // The user works in one window and picks another one for the agent.
   const userWindow = await sw.evaluate(async () => (await chrome.windows.getAll())[0].id);

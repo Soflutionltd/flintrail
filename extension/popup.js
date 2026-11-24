@@ -10,10 +10,11 @@ async function render() {
   $('status').textContent = connected ? 'Connected to Flintrail.' : (s.statusDetail || 'Not connected.');
   if (!$('token').value && s.token) $('token').value = s.token;
   if (!$('port').value) $('port').value = s.port || 8932;
-  if (!labelLoaded) { $('label').value = s.label || ''; labelLoaded = true; }
+  // The name agents use for this browser, shown ready to change: the one the user gave, else the one Flintrail gave.
+  if (!labelLoaded && (s.label || s.name)) { $('label').value = s.label || s.name; labelLoaded = true; }
   $('nameInfo').textContent = connected && s.name
-    ? `Agents pick this browser as "${s.name}".`
-    : 'Give each browser or profile a name, so agents pick the right one.';
+    ? `Agents pick this browser as "${s.name}". Change it above if you like.`
+    : 'Each browser gets a name of its own; change it above if you like.';
   $('connect').classList.toggle('hidden', connected);
   $('disconnect').classList.toggle('hidden', !connected);
   $('share').disabled = !connected || !tab;

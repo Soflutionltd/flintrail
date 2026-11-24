@@ -737,15 +737,19 @@ export class ExtensionRelay {
     // A name the user gave in the extension wins ("brave-ideekdo"), then the browser profile's own name
     // ("brave-soflution"), then the name this browser got before, then the brand, numbered: brave, brave-2...
     const base = browserKey(hello.browser);
-    const named = label || profile;
+    // A name typed whole ("brave-2", "brave-work") is kept as it is; "Work" becomes brave-work.
+    const whole = (n: string) => { const s = slug(n); return s === base || s.startsWith(`${base}-`) ? s : `${base}-${s || 'browser'}`; };
     const taken = (k: string) => [...this.bridges.values()].some((b) => b.key === k && b.instance !== instance) || this.names.takenBy(k, instance);
-    let key = named ? `${base}-${slug(named) || 'browser'}` : known && known.key.startsWith(base) ? known.key : base;
-    if (taken(key)) {
-      const stem = key;
-      key = `${stem}-2`;
-      for (let n = 3; taken(key); n++) key = `${stem}-${n}`;
-    }
-    this.names.set(instance, key, profile);
+    const free = (k: string) => {
+      if (!taken(k)) return k;
+      let n = 2;
+      while (taken(`${k}-${n}`)) n++;
+      return `${k}-${n}`;
+    };
+    const defaultKey = free(profile ? whole(profile) : known && known.key.startsWith(base) ? known.key : base);
+    const key = label ? free(whole(label)) : defaultKey;
+    // Only the name Flintrail gave is kept: clearing the name typed in the popup brings that one back.
+    this.names.set(instance, defaultKey, profile);
     const bridge = new ExtensionBridge(key, instance, { ...hello, label, profile, token: undefined }, ws, legacy, this);
     this.bridges.set(key, bridge);
     log(`${key}: extension connected (${hello.browser || 'browser'} ${hello.version || '?'}${profile ? `, profile "${profile}"` : ''})`);
