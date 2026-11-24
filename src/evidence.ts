@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 import type { BrowserContext, Page } from 'playwright-core';
 import { config } from './config.js';
-import { assertNoSecret, assertNoSecretIn, onSecret } from './engine.js';
+import { assertNoSecret, assertNoSecretIn, drivenIn, onSecret } from './engine.js';
 import { holdsRemembered } from './secrets.js';
 
 interface Recording {
@@ -28,6 +28,8 @@ interface Recording {
   drop: () => Promise<void>;
   /** Stops at the time limit. */
   timer?: NodeJS.Timeout;
+  /** Stops watching the browser's new tabs (a trace saved when its last tab closes). */
+  unwatch?: () => void;
 }
 
 const traces = new Map<BrowserContext, Recording>();
@@ -167,7 +169,10 @@ function saveTrace(ctx: BrowserContext, rec: Recording): Promise<string> {
     }
     const s = Math.round((Date.now() - rec.started) / 1000);
     return `Trace saved: ${rec.file} (${s} s). The user opens it with: npx playwright show-trace "${rec.file}" (or by dropping it on trace.playwright.dev, which reads it locally).`;
-  })().finally(() => { if (traces.get(ctx) === rec) traces.delete(ctx); });
+  })().finally(() => {
+    rec.unwatch?.();
+    if (traces.get(ctx) === rec) traces.delete(ctx);
+  });
   return rec.saving;
 }
 
@@ -189,6 +194,8 @@ export async function trace(page: Page, action: 'start' | 'stop', name?: string)
   }
   if (now) throw new Error(`A trace is already running in this browser, since ${Math.round((Date.now() - now.started) / 1000)} s (fl_trace stop first).`);
   assertNoList('a trace');
+  // A new trace: what an older one said when it stopped by itself is no longer the answer to a stop.
+  endedTraces.delete(ctx);
   // Every tab Flintrail drives in this browser is in the trace, not only this one.
   assertNoSecretIn(ctx, 'A trace');
   const work = `flintrail-${randomUUID()}`;
@@ -201,6 +208,7 @@ export async function trace(page: Page, action: 'start' | 'stop', name?: string)
     started: Date.now(),
     ready,
     drop: async () => {
+      rec.unwatch?.();
       await ctx.tracing.stop().catch(() => {});
       removeTraceWork(work);
       removeFile(file);
@@ -223,6 +231,15 @@ export async function trace(page: Page, action: 'start' | 'stop', name?: string)
     void saveTrace(ctx, rec).then((said) => endedTraces.set(ctx, `The trace stopped by itself after ${MAX_MS / 60_000} minutes. ${said}`), () => {});
   }, MAX_MS);
   rec.timer.unref();
+  // The user or the site closes the last tab Flintrail drove there: the trace is saved then, as with fl_close.
+  const onClose = () => setTimeout(() => {
+    if (traces.get(ctx) !== rec || drivenIn(ctx) > 0) return;
+    void saveTrace(ctx, rec).then((said) => endedTraces.set(ctx, `The trace stopped when its last tab closed. ${said}`), () => {});
+  }, 0);
+  const watch = (p: Page) => p.once('close', onClose);
+  ctx.pages().forEach(watch);
+  ctx.on('page', watch);
+  rec.unwatch = () => ctx.off('page', watch);
   return `Trace started for every tab Flintrail drives in this browser: every action with a picture before and after (no page copy or network log: they would hold the browser's cookies). fl_trace stop saves it; it stops by itself after ${MAX_MS / 60_000} minutes or when the last tab is released or closed. It is deleted if Flintrail fills a password or secret meanwhile.`;
 }
 
@@ -265,6 +282,7 @@ export async function video(page: Page, action: 'start' | 'stop', o: { name?: st
   }
   if (now) throw new Error('This tab is already being filmed (fl_video stop first).');
   assertNoList('a video');
+  endedVideos.delete(page);
   assertNoSecret(page, 'A video');
   const file = fileFor(o.name || (await page.title().catch(() => '')) || 'video', 'webm');
   const view = page.viewportSize() || await page.evaluate(() => ({ width: innerWidth, height: innerHeight })).catch(() => ({ width: 1280, height: 800 }));

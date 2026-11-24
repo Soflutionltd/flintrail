@@ -448,6 +448,22 @@ test('network rules, a trace and a video work in the user\'s browser, and the tr
   await page.close();
 });
 
+test('a trace is saved when the user closes the last tab it recorded', async () => {
+  const page = await ctx.newPage();
+  await page.goto(`${site.url.replace('127.0.0.1', 'localhost')}/stock`);
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: '/stock', browser: 'chromium', text: 0 }))[1];
+  await mcp.call('fl_trace', { tab, action: 'start', name: 'closed-by-user' });
+  await page.close();
+  await new Promise((r) => setTimeout(r, 1500));
+  const page2 = await ctx.newPage();
+  await page2.goto(`${site.url.replace('127.0.0.1', 'localhost')}/rows`);
+  const other = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: '/rows', browser: 'chromium', text: 0 }))[1];
+  assert.match(await mcp.call('fl_trace', { tab: other, action: 'stop' }), /The trace stopped when its last tab closed\. Trace saved: .*closed-by-user/);
+  await assert.rejects(mcp.call('fl_trace', { tab: other, action: 'stop' }), /No trace is running/);
+  await mcp.call('fl_release', { tab: other });
+  await page2.close();
+});
+
 test('browser and extension pages, the settings included, are never driven', async () => {
   const settingsPage = `chrome-extension://${new URL(sw.url()).host}/options.html`;
   await assert.rejects(mcp.call('fl_open', { url: settingsPage, browser: 'chromium' }), /never opens browser or extension pages/);

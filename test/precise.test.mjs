@@ -205,7 +205,12 @@ test('a trace of the dedicated browser and a video of a tab are saved where the 
   // WebM starts with the EBML magic number.
   assert.equal(readFileSync(webm).subarray(0, 4).toString('hex'), '1a45dfa3');
   await assert.rejects(mcp.call('fl_video', { tab, action: 'stop' }), /No video is being recorded/);
-  // A video still running when the tab closes is saved then, and so is a trace when its last tab closes.
+  // A video still running when the tab closes is saved then, and so is a trace when its last tab closes: the tabs
+  // earlier tests left open are closed first.
+  for (const line of (await mcp.call('fl_tabs', {})).split('\n')) {
+    const other = /^(t\d+)/.exec(line)?.[1];
+    if (other && other !== tab) await mcp.call('fl_close', { tab: other });
+  }
   await mcp.call('fl_video', { tab, action: 'start' });
   await mcp.call('fl_trace', { tab, action: 'start', name: 'until-close' });
   assert.match(await mcp.call('fl_close', { tab }), /Tab t\d+ closed\. Video saved: .*\.webm.* Trace saved: .*until-close.*\.zip/);

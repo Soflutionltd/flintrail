@@ -245,7 +245,7 @@ export function buildServer(): McpServer {
       status: z.number().int().optional().describe('respond: HTTP status (default 200).'),
       body: z.string().optional().describe('respond: the body (1 MB at most).'),
       contentType: z.string().optional().describe('respond: default application/json when the body looks like JSON, text/plain otherwise.'),
-      headers: z.record(z.string(), z.string()).optional().describe('respond: extra headers (no Set-Cookie).'),
+      headers: z.record(z.string(), z.string()).optional().describe('respond: extra headers (no Set-Cookie or Clear-Site-Data).'),
       ms: z.number().int().optional().describe('delay: milliseconds, up to 60000.'),
       times: z.number().int().min(1).optional().describe('Only the first N matching requests.'),
     },

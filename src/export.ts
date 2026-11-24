@@ -8,9 +8,9 @@ import { loadFlow } from './store.js';
 import { VERSION } from './version.js';
 
 const q = (s: string) => JSON.stringify(s);
-/** Text for a // comment: a line break of any kind would end the comment and turn the rest into code. */
 /** A number from the flow file, written as a number whatever the file holds. */
 const n = (v: unknown, fallback: number) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : fallback);
+/** Text for a // comment: a line break of any kind would end the comment and turn the rest into code. */
 const comment = (s: string) => s.replace(/[\r\n\u2028\u2029]+/g, ' ');
 /** A recorded string, with {{var}} read from the environment at run time. */
 const val = (s: string | undefined) => (s === undefined ? 'undefined' : /\{\{\w+\}\}/.test(s) ? `v(${q(s)})` : q(s));
@@ -105,7 +105,6 @@ export function exportFlow(name: string): string {
   const body: string[] = [];
   if (flow.startUrl) body.push('// start', `await page.goto(${val(flow.startUrl)});`);
   flow.steps.forEach((s, i) => body.push(...stepCode(s, i)));
-  const all = JSON.stringify(flow);
   const uses = (what: string) => body.some((l) => l.includes(what));
   const vars = flow.vars.filter((v) => v !== 'password');
   const env = (v: string) => `FLOW_${v.replace(/\W/g, '_').toUpperCase()}`;
@@ -117,7 +116,7 @@ export function exportFlow(name: string): string {
     ...(uses('signIn(') ? ['// Sign-in: LOGIN_USERNAME and LOGIN_PASSWORD (never written in this file).'] : []),
   ];
   const helpers: string[] = [];
-  if (/\{\{\w+\}\}/.test(all)) {
+  if (uses('v(')) {
     helpers.push(
       '/** A recorded value with its {{variables}} read from the environment. */',
       'function v(s: string): string {',

@@ -126,7 +126,14 @@ export async function mock(page: Page, o: MockOptions): Promise<string> {
   rules.set(page, list);
   if (!routed.has(page)) {
     routed.add(page);
-    await page.route(() => true, (route) => handle(page, route));
+    try {
+      await page.route(() => true, (route) => handle(page, route));
+    } catch (e) {
+      // No interception: no rule either, rather than one listed that does nothing.
+      routed.delete(page);
+      rules.delete(page);
+      throw e;
+    }
   }
   const outside = config.allowedDomains.length ? ' Requests to sites outside the allowed list are never touched.' : '';
   const reload = rule.action === 'respond' || rule.action === 'block' ? ' Requests already made are not changed: reload the page (goto) if the site loads this only once.' : '';
