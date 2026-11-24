@@ -147,7 +147,7 @@ test('password filling follows the extension settings, and only the user answers
   await assert.rejects(mcp.call('fl_login', { tab }), /Refused by the Flintrail extension settings in chromium: password filling is turned off/);
   // Vaults the user left out in the extension settings are never searched.
   await settings({ vaultsDeny: ['test'] });
-  await assert.rejects(mcp.call('fl_login', { tab }), /never test; left out by those settings: "Fixture shop"/);
+  await assert.rejects(mcp.call('fl_login', { tab }), /never test; 1 matching login\(s\) left out by those settings/);
   await settings({ vaultsAllow: ['Clients'] });
   await assert.rejects(mcp.call('fl_login', { tab }), /only Clients/);
   // A subdomain in the list never allows its parent domain.
@@ -382,6 +382,10 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
   await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'Other site', from: 'mcphub:EXISTING_TOKEN' }), /form is sent to another site/);
   await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'Search', from: 'mcphub:EXISTING_TOKEN', submit: true }), /form is sent to another site, or by GET with submit/);
   await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: 'clipboard' }), /from: "mcphub:NAME"/);
+  // A 1Password vault the user excluded is not read, even with a click.
+  await sw.evaluate(() => chrome.storage.local.set({ fillSettings: { vaultsDeny: ['Clients'] } }));
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: '1password:clients/Deploy key' }), /the vault "clients" is not one Flintrail may use/);
+  await sw.evaluate(() => chrome.storage.local.set({ fillSettings: {} }));
   // The site stays sealed a few minutes after the paste: the next page may show the secret again.
   assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /Blocked: this page holds a password, code or secret/);
   // Elsewhere, once the agent ran a script in the tab, no paste.
@@ -389,6 +393,31 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
   assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /-> 1/);
   await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: 'mcphub:EXISTING_TOKEN' }), /JavaScript was run in this tab/);
   await mcp.call('fl_release', { tab });
+  await page.close();
+});
+
+test('emulation in the user\'s browser goes through the extension, and the tab gets its own look back when released', async () => {
+  const page = await ctx.newPage();
+  // Another host than the one the capture and paste tests sealed for a few minutes.
+  await page.goto(`${site.url.replace('127.0.0.1', 'localhost')}/env`);
+  const env = () => page.evaluate(() => JSON.parse(window.env()));
+  const before = await env();
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: '/env', browser: 'chromium', text: 0 }))[1];
+  assert.match(await mcp.call('fl_emulate', { tab, device: 'Pixel 7', colorScheme: 'dark' }), /Emulating Pixel 7/);
+  // Chrome keeps the time zone from extensions: said plainly, with where it works.
+  await assert.rejects(mcp.call('fl_emulate', { tab, timezone: 'America/New_York' }), /Chrome does not let an extension change this in your own browser.*dedicated browser/);
+  const now = await env();
+  assert.equal(now.dark, true);
+  assert.match(now.ua, /Android/);
+  const pdf = await mcp.call('fl_pdf', { tab, name: 'env-user-browser' });
+  assert.match(pdf, /PDF saved: .*env-user-browser\.pdf/);
+  await mcp.call('fl_release', { tab });
+  const after = await env();
+  assert.deepEqual([after.tz, after.dark, after.ua], [before.tz, before.dark, before.ua]);
+  // The phone screen is gone (the test browser's own window size, not the size its test harness forced, comes back).
+  assert.equal(now.width, 412);
+  assert.notEqual(after.width, 412);
+  assert.equal(after.touch, before.touch);
   await page.close();
 });
 

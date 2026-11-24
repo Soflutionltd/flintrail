@@ -5,6 +5,9 @@ import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { captureSecret } from './capture.js';
 import { pasteSecret } from './paste.js';
+import { loadSession, saveSession } from './session.js';
+import { emulate, resetEmulation } from './emulate.js';
+import { savePdf } from './pdf.js';
 import { redact, signIn } from './login.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
@@ -30,7 +33,7 @@ const guard = <A>(fn: (a: A) => Promise<string>) => async (a: A): Promise<ToolRe
 };
 
 const actionSchema = z.object({
-  do: z.enum(['click', 'dblclick', 'hover', 'fill', 'type', 'select', 'check', 'uncheck', 'press', 'download', 'upload', 'goto', 'back', 'wait', 'scroll', 'eval', 'request', 'mouse', 'dialog', 'resize'])
+  do: z.enum(['click', 'dblclick', 'hover', 'drag', 'fill', 'type', 'select', 'check', 'uncheck', 'press', 'download', 'upload', 'goto', 'back', 'wait', 'scroll', 'eval', 'request', 'mouse', 'dialog', 'resize'])
     .describe('upload: files into a file input, or a button / drop zone that opens the file chooser. mouse: click at x,y (escape hatch for canvas, shadow DOM, extension overlays). dialog: how to answer the NEXT alert/confirm/prompt (default dismiss). resize: viewport width x height.'),
   ref: z.string().optional().describe('Element ref from the latest snapshot, e.g. e12 or f1:e3. Fastest way to target.'),
   selector: z.string().optional().describe('CSS or Playwright selector.'),
@@ -49,6 +52,8 @@ const actionSchema = z.object({
   files: z.array(z.string()).optional().describe('upload: absolute file paths. With var, a single file becomes {{var}}.'),
   js: z.string().optional().describe('Function body for eval, must return a value.'),
   method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(),
+  toRef: z.string().optional().describe('drag: the element to drop on, by ref (or toSelector / toText).'),
+  toSelector: z.string().optional(), toText: z.string().optional(),
   within: z.string().optional().describe('With role / text / label / placeholder / selector: the match closest to this text, e.g. {do:"click", role:"button", name:"Delete", within:"my-token"} clicks Delete in the row of my-token. "dialog": the match inside the open dialog.'),
   state: z.enum(['visible', 'hidden', 'attached', 'detached']).optional().describe('wait with ref / selector / role / label / placeholder / text: until it is visible (default) or hidden (a spinner gone).'),
   network: z.boolean().optional().describe('wait: until the page made no request for half a second.'),
@@ -178,7 +183,40 @@ export function buildServer(): McpServer {
     guard(async () => listTabs().join('\n') || 'No tabs.'));
 
   s.registerTool('fl_close', { description: 'Close a Flintrail tab.', inputSchema: { tab: z.string() } },
-    guard(async ({ tab }) => { await closeTab(tab); return `Tab ${tab} closed.`; }));
+    guard(async ({ tab }) => {
+      // A tab of the user's browser keeps living if closing fails: its own look comes back first. A tab that left
+      // the allowed sites is closed all the same.
+      try { await resetEmulation(getTab(tab)); } catch { /* closed below anyway */ }
+      await closeTab(tab);
+      return `Tab ${tab} closed.`;
+    }));
+
+  s.registerTool('fl_emulate', {
+    description: 'Make a tab look to the site like a phone or tablet (device, e.g. "iPhone 15", or width/height/mobile), with another user agent, position, language, time zone, color scheme, or offline. Per tab; reset:true, fl_release or fl_close puts it back. Reload the page (goto) for sites that read these only at load.',
+    inputSchema: {
+      tab: z.string(),
+      device: z.string().optional().describe('A Playwright device name: "iPhone 15", "Pixel 7", "iPad Pro 11"...'),
+      width: z.number().int().min(200).max(4000).optional(), height: z.number().int().min(200).max(4000).optional(),
+      mobile: z.boolean().optional().describe('Mobile viewport and touch events.'),
+      userAgent: z.string().max(500).optional(),
+      latitude: z.number().optional(), longitude: z.number().optional(), accuracy: z.number().optional(),
+      locale: z.string().optional().describe('e.g. fr-FR'),
+      timezone: z.string().optional().describe('e.g. Europe/Paris'),
+      colorScheme: z.enum(['light', 'dark', 'no-preference']).optional(),
+      offline: z.boolean().optional(),
+      reset: z.boolean().optional().describe('Back to the tab\'s own values.'),
+    },
+  }, guard(async ({ tab, ...o }) => emulate(getTab(tab), o)));
+
+  s.registerTool('fl_pdf', {
+    description: 'Save the page of a tab as a PDF file (A4 by default, backgrounds printed) and return its path. Works in the dedicated browser and in the user\'s browsers.',
+    inputSchema: {
+      tab: z.string(),
+      name: z.string().optional().describe('File name, without .pdf (default: the page title).'),
+      landscape: z.boolean().optional(),
+      format: z.enum(['A4', 'Letter', 'A3', 'Legal']).optional(),
+    },
+  }, guard(async ({ tab, name, landscape, format }) => savePdf(getTab(tab), { name, landscape, format })));
 
   s.registerTool('fl_capture_secret', {
     description: 'Store a secret a site shows once (a new GitHub or Cloudflare token, an API key) straight from the user\'s open tab into a vault: the value never reaches you, you only get its kind, length, public prefix and destination. The tab must be on the site that issues that kind. Works even when another extension stopped the tab from being driven. The user confirms a "prefix" kind, a 1Password vault, or replacing a name the McpHub vault already holds. Afterwards the pages of that site refuse scripts and screenshots until they change page. To use the secret later, give its vault name to the tool or service that needs it.',
@@ -208,10 +246,31 @@ export function buildServer(): McpServer {
     return `${said}\n\n${await snapshot(page, { text: t, max, within })}`;
   }));
 
+  s.registerTool('fl_session', {
+    description: 'Save the signed-in state of one site from the dedicated browser (cookies and local storage) to a file readable by the user only, or load it back, e.g. on another machine or after clearing the profile. The content is never shown to you. Dedicated browser only: the user\'s own browsers keep their sessions themselves.',
+    inputSchema: {
+      action: z.enum(['save', 'load']),
+      name: z.string().describe('Name of the saved session, e.g. "github-work".'),
+      site: z.string().optional().describe('save: the site whose session to save, e.g. github.com (its subdomains included).'),
+      replace: z.boolean().optional().describe('save: replace a session already saved under that name.'),
+    },
+  }, guard(async ({ action, name, site, replace }) => {
+    if (action === 'save') {
+      if (!site) throw new Error('save needs site, e.g. github.com.');
+      return saveSession({ site, name, replace });
+    }
+    return loadSession({ name });
+  }));
+
   s.registerTool('fl_release', {
     description: 'Stop driving a tab of the user\'s browser without closing it: the user keeps it, and it can be taken over again later (fl_open or fl_adopt). Use it when done with a tab the user had open; fl_close closes it.',
     inputSchema: { tab: z.string() },
-  }, guard(async ({ tab }) => { await releaseTab(tab); return `Tab ${tab} released: still open in the browser, no longer driven.`; }));
+  }, guard(async ({ tab }) => {
+    // The user gets the tab back as it was: no phone screen or other language left on it.
+    try { await resetEmulation(getTab(tab)); } catch { /* released below anyway */ }
+    await releaseTab(tab);
+    return `Tab ${tab} released: still open in the browser, no longer driven.`;
+  }));
 
   s.registerTool('fl_desktop', {
     description: 'Snapshot a native desktop app (Finder, Mail, Preview, Notes, any app) through the OS accessibility tree: its elements with [dN] refs for fl_desktop_act. No pixels, no pointer move, no window raised. Without app, lists the running apps. The app name can be localized ("Calculatrice"), English ("Calculator") or a bundle id.',

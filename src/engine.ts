@@ -1,6 +1,6 @@
 // Live driving: tabs, compact snapshots, batched actions, smart waits, network capture.
-import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import type { BrowserContext, Dialog, Frame, Locator, Page, Request } from 'playwright-core';
 import { AGENT, getDriven, type Driven } from './browser.js';
 import { getRelayClient } from './relay-client.js';
@@ -13,7 +13,7 @@ import { recorder } from './recorder.js';
 import type { DesktopStep } from './desktop.js';
 
 export type ActionKind =
-  | 'click' | 'dblclick' | 'hover' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'press' | 'download' | 'upload'
+  | 'click' | 'dblclick' | 'hover' | 'drag' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'press' | 'download' | 'upload'
   | 'goto' | 'back' | 'wait' | 'scroll' | 'eval' | 'request' | 'mouse' | 'dialog' | 'resize' | 'login' | 'desktop';
 
 export interface Action {
@@ -48,6 +48,10 @@ export interface Action {
   network?: boolean;
   /** Element actions: the target closest to this text (a table row, a card), or "dialog" for the open dialog. */
   within?: string;
+  /** drag: where to drop, by ref, selector or text. */
+  toRef?: string;
+  toSelector?: string;
+  toText?: string;
   /** login steps: password source, login ID in that source, and whether to press Enter after filling. */
   source?: string;
   item?: string;
@@ -58,6 +62,8 @@ export interface Action {
 
 export interface Step extends Omit<Action, 'ref'> {
   target?: TargetDescriptor;
+  /** drag: the element it was dropped on. */
+  toTarget?: TargetDescriptor;
   /** do: 'desktop' steps act on a native app instead of the browser. */
   desktop?: DesktopStep;
 }
@@ -691,7 +697,7 @@ export function fillVars(v: string | undefined, vars?: Record<string, string>): 
 const TIMEOUT = 8000;
 
 /** Performs an element action. Returns optional artefacts (download path). */
-export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record<string, string>): Promise<{ download?: string }> {
+export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record<string, string>, dest?: Locator | null): Promise<{ download?: string }> {
   const value = fillVars(a.value, vars) ?? '';
   if (a.do === 'download') {
     mkdirSync(config.downloadsDir, { recursive: true });
@@ -712,6 +718,11 @@ export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record
     if (!files.length) throw new Error('upload needs files: absolute paths on this machine.');
     const absent = files.find((f) => !existsSync(f));
     if (absent) throw new Error(`File not found: ${absent}`);
+    // Never Flintrail's own files (saved sessions, its token, the dedicated browser's profile): they would hand a
+    // site the user's sign-ins.
+    const own = [config.home, config.profileDir].map((d) => { try { return realpathSync(d); } catch { return d; } });
+    const inside = files.find((f) => { const r = realpathSync(f); return own.some((d) => r === d || r.startsWith(d + sep)); });
+    if (inside) throw new Error(`Refused: ${inside} is one of Flintrail's own files (sessions, token, browser profile), never uploaded.`);
     const isFileInput = await loc.evaluate((el) => el instanceof HTMLInputElement && el.type === 'file', undefined, { timeout: TIMEOUT });
     if (isFileInput) {
       await loc.setInputFiles(files, { timeout: TIMEOUT });
@@ -727,6 +738,9 @@ export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record
       case 'click': return loc.click({ timeout: TIMEOUT });
       case 'dblclick': return loc.dblclick({ timeout: TIMEOUT });
       case 'hover': return loc.hover({ timeout: TIMEOUT });
+      case 'drag':
+        if (!dest) throw new Error('drag needs where to drop: toRef, toSelector or toText.');
+        return loc.dragTo(dest, { timeout: TIMEOUT });
       case 'fill': return loc.fill(value, { timeout: TIMEOUT });
       case 'type': return loc.pressSequentially(value, { delay: 25, timeout: TIMEOUT });
       case 'select': return loc.selectOption(value, { timeout: TIMEOUT });
@@ -911,9 +925,19 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
         if (live.frame !== page.mainFrame()) target.frameUrl = live.frame.url().split('?')[0];
         if (a.ref) seen.set(a.ref, target);
       }
-      const r = await performOn(page, loc, a);
+      // drag: the element to drop on, found like any target.
+      let dest: Locator | null = null;
+      let destTarget: TargetDescriptor | undefined;
+      if (a.do === 'drag') {
+        const to = liveLocator(page, { do: 'click', ref: a.toRef, selector: a.toSelector, text: a.toText } as Action);
+        if (!to) throw new Error('drag needs where to drop: toRef, toSelector or toText.');
+        dest = to.loc.first();
+        destTarget = await dest.evaluate(describeScript, undefined, { timeout: 3000 }).catch(() => undefined);
+        if (destTarget && to.frame !== page.mainFrame()) destTarget.frameUrl = to.frame.url().split('?')[0];
+      }
+      const r = await performOn(page, loc, a, undefined, dest);
       if (recorder.active && target) {
-        const warn = recorder.addElementStep(page, a, target);
+        const warn = recorder.addElementStep(page, a, target, destTarget);
         if (warn) notes.push(`#${i} ${warn}`);
       }
       if (r.download) notes.push(`#${i} downloaded -> ${r.download}`);

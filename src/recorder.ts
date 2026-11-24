@@ -154,13 +154,13 @@ class Recorder {
   }
 
   /** Returns a warning when a value was deliberately not recorded. */
-  addElementStep(_page: Page, a: Action, target: TargetDescriptor): string | null {
+  addElementStep(_page: Page, a: Action, target: TargetDescriptor, toTarget?: TargetDescriptor): string | null {
     if (!this.rec) return null;
     if (target.type === 'password') {
       this.rec.sensitive = true;
       return 'password NOT recorded (keep the session logged in instead)';
     }
-    const step: Step = { do: a.do, target };
+    const step: Step = { do: a.do, target, ...(toTarget ? { toTarget } : {}) };
     let warning: string | null = null;
     if (a.files) {
       if (a.var && a.files.length === 1) step.files = [`{{${a.var}}}`];

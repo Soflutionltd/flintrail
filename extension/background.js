@@ -481,6 +481,15 @@ async function fillSettings() {
   return { ...FILL_DEFAULTS, ...(saved || {}) };
 }
 
+// The user's vault lists: never those, only these (when listed). Names compared without case or Unicode form.
+function vaultOk(vault, settings) {
+  const norm = (x) => String(x).normalize('NFC').trim().toLowerCase();
+  const v = norm(vault || '');
+  if (!v) return true;
+  if (settings.vaultsDeny.some((d) => norm(d) === v)) return false;
+  return !settings.vaultsAllow.length || settings.vaultsAllow.some((a) => norm(a) === v);
+}
+
 // "github.com" also allows "gist.github.com", never the other way round.
 const hostAllowed = (host, list) => list.some((d) => host === d || host.endsWith('.' + d));
 
@@ -491,10 +500,7 @@ async function fillPolicy(p) {
   const host = String(p.host || domain).toLowerCase().replace(/^www\./, '');
   if (!settings.enabled) return { refused: 'password filling is turned off' };
   if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
-  const vault = String(p.vault || '').trim().toLowerCase();
-  if (vault && (settings.vaultsDeny.some((v) => v.toLowerCase() === vault) || settings.vaultsAllow.length && !settings.vaultsAllow.some((v) => v.toLowerCase() === vault))) {
-    return { refused: `the vault "${p.vault}" is not one Flintrail may use` };
-  }
+  if (!vaultOk(p.vault, settings)) return { refused: `the vault "${p.vault}" is not one Flintrail may use` };
   if (!settings.confirm) return { totp: settings.totp };
   const ok = await askUser({ domain, item: String(p.item || ''), source: String(p.source || ''), fields: (p.fields || []).map(String), totp: settings.totp });
   return ok ? { totp: settings.totp, confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
@@ -509,7 +515,9 @@ async function pastePolicy(p) {
   const host = String(p.host || domain).toLowerCase().replace(/^www\./, '');
   if (!settings.enabled) return { refused: 'password filling is turned off' };
   if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
-  const ok = await askUser({ title: 'Flintrail wants to paste a secret from your vault', domain: host, item: String(p.item || 'secret'), source: 'vault', fields: (p.fields || []).map(String), totp: true });
+  if (!vaultOk(p.vault, settings)) return { refused: `the vault "${p.vault}" is not one Flintrail may use` };
+  // The full origin is shown (scheme and port), the domain lists are matched on the host alone.
+  const ok = await askUser({ title: 'Flintrail wants to paste a secret from your vault', domain: p.origin ? `${host} (${String(p.origin)})` : host, item: String(p.item || 'secret'), source: 'vault', fields: (p.fields || []).map(String), totp: true });
   return ok ? { confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
 }
 

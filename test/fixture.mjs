@@ -90,6 +90,22 @@ export function startFixture(port = 0) {
           setTimeout(() => { busy.hidden = true; out.textContent = 'all deleted'; }, 700);
         };
       </script>`);
+    if (url.pathname === '/drag') return html('Board', `<h1>Board</h1>
+      <div id="todo" class="col" style="min-height:80px;border:1px solid #999"><div id="card" draggable="true" style="padding:8px;background:#eee">Write tests</div></div>
+      <div id="done" class="col" style="min-height:80px;border:1px solid #999;margin-top:20px">Done</div>
+      <script>
+        card.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'card'));
+        for (const col of document.querySelectorAll('.col')) {
+          col.addEventListener('dragover', (e) => e.preventDefault());
+          col.addEventListener('drop', (e) => { e.preventDefault(); col.append(card); });
+        }
+      </script>`);
+    if (url.pathname === '/env') return html('Environment', `<h1>Environment</h1><p id="out"></p>
+      <script>
+        const read = () => JSON.stringify({ width: screen.width, touch: navigator.maxTouchPoints, ua: navigator.userAgent, lang: navigator.language,
+          tz: Intl.DateTimeFormat().resolvedOptions().timeZone, dark: matchMedia('(prefers-color-scheme: dark)').matches, online: navigator.onLine });
+        window.env = read;
+      </script>`);
     if (url.pathname === '/paste-form') return html('Deploy settings', `<h1>Deploy settings</h1>
       <form id="f" method="post"><label>API key <input type="password" name="key"></label><label>Note <input name="note"></label><label>Email <input type="email" name="mail"></label><button>Save</button></form>
       <form action="/search"><label>Search <input name="q"></label></form>

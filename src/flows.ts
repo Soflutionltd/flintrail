@@ -98,7 +98,9 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
       }
       const loc = await resolveTarget(p, s.target);
       if (!loc) throw new Error(`element not found (${s.target.role || s.target.tag} "${s.target.name || s.target.text}")`);
-      const r = await performOn(p, loc, s, vars);
+      const dest = s.do === 'drag' && s.toTarget ? await resolveTarget(p, s.toTarget) : null;
+      if (s.do === 'drag' && !dest) throw new Error('drop target not found');
+      const r = await performOn(p, loc, s, vars, dest);
       if (r.download) outputs.push(`#${i} downloaded -> ${r.download}`);
     } catch (e) {
       const ms = Date.now() - t0;

@@ -529,6 +529,18 @@ class ExtensionBridge {
         if (!this.legacy) await this.request('release', { tabIds: [tab.tabId] }, 5000);
         return {};
       }
+      case 'Flintrail.tabCommand': {
+        // fl_emulate and fl_pdf on a tab of the user's browser: a few emulation commands and printing, on the tab of this conversation
+        // at that address. Nothing else goes through here.
+        const allowed = /^(Emulation\.(setDeviceMetricsOverride|clearDeviceMetricsOverride|setTouchEmulationEnabled|setEmitTouchEventsForMouse|setUserAgentOverride|setGeolocationOverride|clearGeolocationOverride|setLocaleOverride|setTimezoneOverride|setEmulatedMedia)|Network\.(enable|emulateNetworkConditions)|Page\.printToPDF)$/;
+        const command = String(params.method || '');
+        if (!allowed.test(command)) throw new Error(`${command} is not an emulation or print command`);
+        const mine = own();
+        const found = this.legacy ? null : await this.request('tabAt', { tabIds: mine.map((t) => t.tabId), url: String(params.url || '') }, 5000) as { tabIds?: number[] };
+        const at = mine.filter((t) => found?.tabIds?.includes(t.tabId));
+        if (at.length !== 1) throw new Error(at.length ? 'two tabs of this conversation are on that address' : 'no such tab of this conversation');
+        return this.request('send', { tabId: at[0]!.tabId, method: command, params: (params.params as Record<string, unknown>) || {} });
+      }
       case 'Target.closeTarget': {
         const tab = own().find((t) => t.targetInfo.targetId === params.targetId);
         if (tab) await this.request('closeTab', { tabId: tab.tabId });
