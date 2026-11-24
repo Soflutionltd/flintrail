@@ -9,8 +9,24 @@ export function remember(s: string, ttl: number) {
   if (s.length >= 4) secrets.set(s, Date.now() + ttl);
 }
 
+/**
+ * Values that look like credentials, wherever they come from (a page showing a freshly created API key in its
+ * buttons, a script the agent ran): masked in everything returned to the agent, whether or not Flintrail
+ * filled them. Only the user can turn this off, in Flintrail's settings (FLINTRAIL_MASK_SECRETS=off), never a tool.
+ */
+const KNOWN_PREFIXES = /\b(?:github_pat_|gh[pousr]_|glpat-|xox[abpors]-|sk_(?:live|test)_|rk_(?:live|test)_|whsec_|cfut_|cfat_|cfk_|AIza|ya29\.|AKIA|ASIA|sk-(?:proj-|ant-)?|npm_|pypi-|dop_v1_|shpat_|SG\.)[A-Za-z0-9_\-.]{12,}/g;
+const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+// A long run of letters and digits shortly after a word that announces a secret ("Secret Access Key", "jeton").
+const NEAR_WORD = /((?:secret|private|access|api|auth|bearer|session|client|credential|password|passwd|token|key|cl[ée]|jeton|mot de passe)[^\n]{0,48}?)([A-Za-z0-9+/_=-]{32,})/gi;
+
+export function maskSecrets(text: string): string {
+  if (process.env.FLINTRAIL_MASK_SECRETS === 'off') return text;
+  return text.replace(KNOWN_PREFIXES, '••• (secret masked)').replace(JWT, '••• (secret masked)')
+    .replace(NEAR_WORD, (_, before: string) => `${before}••• (secret masked)`);
+}
+
 export function redact(text: string): string {
-  let out = text;
+  let out = maskSecrets(text);
   for (const [s, until] of secrets) {
     if (until < Date.now()) {
       secrets.delete(s);
