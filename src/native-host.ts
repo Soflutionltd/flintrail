@@ -5,6 +5,7 @@
 // Protocol (Chrome native messaging): each message is a 32-bit little-endian length, then UTF-8 JSON.
 import { loadToken } from './auth.js';
 import { config } from './config.js';
+import { profileOfInstance } from './profiles.js';
 
 function reply(message: unknown) {
   const body = Buffer.from(JSON.stringify(message), 'utf8');
@@ -29,8 +30,11 @@ function readMessage(): Promise<unknown> {
 }
 
 try {
-  const message = (await readMessage()) as { type?: string } | null;
+  const message = (await readMessage()) as { type?: string; instance?: string } | null;
   if (message?.type === 'pair') reply({ type: 'paired', token: loadToken(), port: config.relayPort });
+  // Started by the browser itself, this process may read the browser's own profile files, which macOS often
+  // keeps from other apps (the relay among them): it tells the extension which profile it runs in.
+  else if (message?.type === 'profile') reply({ type: 'profile', name: profileOfInstance(String(message.instance || ''))?.name || '' });
   else reply({ type: 'error', error: 'unknown request' });
 } catch (e) {
   reply({ type: 'error', error: (e as Error).message });

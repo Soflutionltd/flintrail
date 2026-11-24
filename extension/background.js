@@ -70,6 +70,18 @@ async function pair() {
   }
 }
 
+// The name of the browser profile this extension runs in ("Soflution"), asked of the pairing host: started by
+// the browser, it may read the browser's profile files when the relay may not. Empty when it cannot tell.
+async function profileName(instance) {
+  if (!await chrome.permissions.contains({ permissions: ['nativeMessaging'] })) return '';
+  try {
+    const r = await chrome.runtime.sendNativeMessage(HOST_NAME, { type: 'profile', instance });
+    return r?.type === 'profile' ? String(r.name || '').slice(0, 60) : '';
+  } catch {
+    return '';
+  }
+}
+
 // Stable per-browser id, so a reconnecting browser keeps its name on the Flintrail side.
 async function instanceId() {
   const { instance } = await store.get('instance');
@@ -107,6 +119,7 @@ async function openConnection() {
   const { port = 8932, label = '' } = await store.get(['port', 'label']);
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   const instance = await instanceId();
+  const profile = await profileName(instance);
   const cnonce = crypto.randomUUID();
   let welcomed = false;
   await setStatus('connecting');
@@ -118,7 +131,7 @@ async function openConnection() {
     const m = JSON.parse(ev.data);
     if (!welcomed && m.type === 'challenge') {
       sock.send(JSON.stringify({
-        type: 'hello', mac: await hmac(token, 'extension:' + m.nonce), cnonce, version: VERSION, userAgent: navigator.userAgent, instance, label,
+        type: 'hello', mac: await hmac(token, 'extension:' + m.nonce), cnonce, version: VERSION, userAgent: navigator.userAgent, instance, label, profile,
         browser: (navigator.userAgentData?.brands || []).map((b) => b.brand).filter((b) => !/Not.A.Brand|Chromium/i.test(b))[0] || 'Chromium',
       }));
       return;

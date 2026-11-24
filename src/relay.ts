@@ -53,7 +53,7 @@ interface Hello {
   browser?: string;
   instance?: string;
   label?: string;
-  /** Found by the relay (src/profiles.ts), never sent by the extension. */
+  /** The browser profile's name: found by the relay (src/profiles.ts), else as the extension's pairing host read it. */
   profile?: string;
 }
 
@@ -720,7 +720,7 @@ export class ExtensionRelay {
     const label = String(hello.label || '').trim().slice(0, 60);
     const same = [...this.bridges.values()].find((b) => b.instance === instance);
     const known = this.names.get(instance);
-    const found = profileOfInstance(instance)?.name || '';
+    const found = profileOfInstance(instance)?.name || String(hello.profile || '').trim().slice(0, 60);
     if (!found && !label) {
       const problems = profileReadProblems();
       if (problems.length) log(`browser profiles not readable here: ${problems.join(', ')}. Names come from ~/.flintrail/browsers.json or the extension popup.`);
