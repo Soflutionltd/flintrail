@@ -115,7 +115,7 @@ test('the user names a browser, agents pick it by that name and see its open sit
     ws = null;
     await connect();
   });
-  await waitFor(async () => /chromium-ideekdo: Extension connected \(Chromium "IdéeKdo", extension 1\.5\.1\)/.test(await a.call('fl_extension')));
+  await waitFor(async () => /chromium-ideekdo: Extension connected \(Chromium "IdéeKdo", extension 1\.5\.2\)/.test(await a.call('fl_extension')));
   const snap = await a.call('fl_open', { url: site.url, browser: 'IdéeKdo', text: 0 });
   assert.match(snap, /^Tab t\d+ \[chromium-ideekdo\]/);
   const listed = await b.call('fl_extension', { tabs: true });
