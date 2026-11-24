@@ -730,6 +730,8 @@ export class ExtensionRelay {
     // Same browser, same name: it keeps its tabs. A new label or a profile found since is a new name.
     if (same && (same.info.label || '') === label && (same.info.profile || '') === profile) {
       log(`${same.key}: extension reconnected (${hello.version || '?'})`);
+      // A reloaded extension may be a newer version: what agents are told about it follows.
+      Object.assign(same.info, { version: hello.version, userAgent: hello.userAgent, browser: hello.browser });
       same.replaceSocket(ws);
       return same;
     }
