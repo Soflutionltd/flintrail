@@ -123,6 +123,14 @@ Updating the extension: after an update, reload it in every browser and profile 
 
 Agent window: the agent never opens tabs in the window you work in. Click *Use this window for the agent* in the popup of the window you leave to it; without a choice, or once that window is closed, it opens a window of its own in the background. Chrome shows its "started debugging this browser" bar in every window while a tab is driven (the browser enforces this, extensions cannot hide it), so the extension releases tabs left unused for 5 minutes; the agent takes one back with `fl_adopt`.
 
+That bar shows in every window of the browser process, and every profile of one browser shares that process: driving a tab of your "Soflution" profile shows it in your personal profile's windows too. To keep it to one profile, give that profile a browser instance of its own (macOS): quit the browser completely, then run
+
+```bash
+npx flintrail --separate-profile brave "Soflution"
+```
+
+It copies the profile, without its caches, into `~/Library/Application Support/Flintrail/Browsers/brave/Soflution` (its own data folder, so its own process), and adds a `Brave Soflution` launcher to `~/Applications`. The sign-ins come along: the copy uses the same key from your macOS keychain. Nothing is deleted. The original profile is renamed "Soflution (old)", with a backup of `Local State`, and you delete it in the browser once the new one works. The Flintrail extension in the new instance pairs by itself and starts with fresh settings; extensions that sign in (1Password) may ask once. Flintrail lists that profile and opens it in its own instance, so `browser: "Soflution"` keeps working. Set `FLINTRAIL_INSTANCES_DIR` to keep the instances elsewhere.
+
 ### Teach by demonstration
 
 You do not have to explain a task to the agent. Type a flow name in the popup, click *Start recording*, do the task yourself in the tab, click *Stop and save*. The extension records clicks, typing, selects, checkboxes and Enter with the same element fingerprints the engine uses, and never records password fields. Then:
@@ -312,6 +320,7 @@ The list is read from the environment when Flintrail starts: the agent has no to
 | `FLINTRAIL_ALLOWED_DOMAINS` | any site | The only sites the agent may work on, comma separated: `example.com` is that host, `*.example.com` is `example.com` and its subdomains. See Allowed sites. |
 | `FLINTRAIL_PASSWORDS` | `browser` | Password sources for `fl_login`, in order: `browser`, `1password[:path]`, `bitwarden[:path]`, `command:path`. `off` removes the tool. |
 | `FLINTRAIL_VAULTS` / `FLINTRAIL_EXCLUDE_VAULTS` | | Dedicated browser: only these 1Password vaults / never these, comma separated. In your own browsers, the extension settings decide. |
+| `FLINTRAIL_INSTANCES_DIR` | `~/Library/Application Support/Flintrail/Browsers` | Where browser instances of their own live, one folder each: `<brand>/<name>` (see `--separate-profile`). |
 | `FLINTRAIL_MCPHUB` | found in `PATH`, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` | Full path of the McpHub program `fl_capture_secret` and `fl_paste_secret` use for `mcphub:` vaults. An app opened from the Dock starts Flintrail with a short `PATH`, so Flintrail also looks where McpHub installs itself. |
 
 ## Develop

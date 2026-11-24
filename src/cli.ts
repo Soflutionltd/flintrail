@@ -13,6 +13,7 @@ import { shutdown } from './browser.js';
 import { config } from './config.js';
 import { installNativeHost } from './pairing.js';
 import { runRelayDaemon } from './relay.js';
+import { separateProfile } from './separate.js';
 import { relayClient } from './relay-client.js';
 import { buildServer, VERSION } from './server.js';
 import { attachUpdateNotice, startUpdateCheck } from './update-notice.js';
@@ -33,6 +34,8 @@ if (flag('help')) {
   flintrail                 MCP over stdio
   flintrail --http          MCP over HTTP (default 127.0.0.1:8931, path /mcp)
   flintrail --relay         shared extension relay (started by Flintrail itself when needed)
+  flintrail --separate-profile <brand> "<profile>"   move a copy of a browser profile into an instance of its own
+                            (macOS): the "is debugging this browser" bar then stays in its windows
     --host <h> --port <p>   listen address
     --token <t>             bearer token (default: FLINTRAIL_TOKEN or ~/.flintrail/token)
 Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_RELAY=off, FLINTRAIL_RELAY_IDLE_MS, FLINTRAIL_PAIRING=off,
@@ -41,6 +44,23 @@ Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINT
   FLINTRAIL_PASSWORDS=browser,1password[:path],bitwarden[:path],command:path   sources for fl_login, in order (default browser, "off" to disable)
   FLINTRAIL_MASK_SECRETS=off   show values that look like credentials in tool results (masked by default)`);
   process.exit(0);
+}
+
+// A browser profile moved into an instance of its own (see src/separate.ts).
+if (flag('separate-profile')) {
+  const i = args.indexOf('--separate-profile');
+  const [brand, name] = [args[i + 1], args[i + 2]];
+  if (!brand || !name) {
+    console.error('Usage: flintrail --separate-profile <brand> "<profile name>"   e.g. flintrail --separate-profile brave Soflution');
+    process.exit(2);
+  }
+  try {
+    for (const line of separateProfile(brand, name, { launcher: !flag('no-launcher') })) console.log(line);
+    process.exit(0);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
 }
 
 // The shared relay daemon (started by Flintrail itself): it never returns, the rest is the MCP server.

@@ -29,6 +29,8 @@ export interface KnownBrowser {
   dataDir: string;
   /** macOS application that opens it, null when Flintrail cannot open a given profile of it. */
   app: string | null;
+  /** A browser instance of its own (its own data folder, its own process): opened with --user-data-dir. */
+  separate?: boolean;
 }
 
 /** One profile of one browser. */
@@ -40,6 +42,32 @@ export interface LocalProfile {
   dir: string;
   /** Name the user gave the profile, e.g. "Soflution". */
   name: string;
+  /** In a browser instance of its own (see separateInstancesDir). */
+  separate?: boolean;
+}
+
+/**
+ * Where the user keeps browser instances of their own, one folder each: <brand>/<name>, e.g. brave/Soflution.
+ * Chromium shows its "is debugging this browser" bar in every window of the process, every profile included: a
+ * profile in its own instance keeps that bar to its own windows.
+ */
+export function separateInstancesDir(): string {
+  return process.env.FLINTRAIL_INSTANCES_DIR || join(homedir(), 'Library/Application Support/Flintrail/Browsers');
+}
+
+/** The separate instances of the brands that have an app: one data folder each. */
+function separateInstances(apps: Map<string, string | null>): KnownBrowser[] {
+  const out: KnownBrowser[] = [];
+  for (const [brand, app] of apps) {
+    if (!app) continue;
+    let names: string[];
+    try { names = readdirSync(join(separateInstancesDir(), brand)); } catch { continue; }
+    for (const n of names) {
+      const dataDir = join(separateInstancesDir(), brand, n);
+      if (existsSync(join(dataDir, 'Local State'))) out.push({ brand, dataDir, app, separate: true });
+    }
+  }
+  return out;
 }
 
 /** The Chromium browsers Flintrail knows, per platform (FLINTRAIL_PAIRING_DIRS replaces the list). */
@@ -49,7 +77,7 @@ export function knownBrowsers(): KnownBrowser[] {
   const home = homedir();
   if (platform() === 'darwin') {
     const support = join(home, 'Library/Application Support');
-    return ([
+    const mac = [
       ['chrome', 'Google/Chrome', 'Google Chrome'],
       ['chrome', 'Google/Chrome Beta', 'Google Chrome Beta'],
       ['chrome', 'Google/Chrome Canary', 'Google Chrome Canary'],
@@ -62,7 +90,12 @@ export function knownBrowsers(): KnownBrowser[] {
       ['arc', 'Arc/User Data', null],
       ['vivaldi', 'Vivaldi', 'Vivaldi'],
       ['opera', 'com.operasoftware.Opera', 'Opera'],
-    ] as const).map(([brand, dir, app]) => ({ brand, dataDir: join(support, dir), app }));
+    ] as const;
+    const main: KnownBrowser[] = mac.map(([brand, dir, app]) => ({ brand, dataDir: join(support, dir), app }));
+    // The first app of each brand opens its separate instances.
+    const apps = new Map<string, string | null>();
+    for (const [brand, , app] of mac) if (!apps.has(brand)) apps.set(brand, app);
+    return [...main, ...separateInstances(apps)];
   }
   if (platform() === 'linux') {
     const cfg = process.env.XDG_CONFIG_HOME || join(home, '.config');
@@ -97,7 +130,7 @@ export function localProfiles(): LocalProfile[] {
     if (!cache || typeof cache !== 'object') continue;
     for (const [dir, info] of Object.entries(cache as Record<string, { name?: string }>)) {
       if (!existsSync(join(b.dataDir, dir))) continue;
-      out.push({ brand: b.brand, dataDir: b.dataDir, app: b.app, dir, name: String(info?.name || dir) });
+      out.push({ brand: b.brand, dataDir: b.dataDir, app: b.app, dir, name: String(info?.name || dir), ...(b.separate ? { separate: true } : {}) });
     }
   }
   return out;
@@ -137,6 +170,8 @@ export function matchProfiles(wanted: string, profiles = localProfiles()): Local
 /** The command that opens a window of this profile (macOS), or null if Flintrail cannot open it. */
 export function openCommand(p: LocalProfile): [string, string[]] | null {
   if (!p.app || platform() !== 'darwin') return null;
+  // A separate instance: its own data folder, so its own process (an instance already open takes the window).
+  if (p.separate) return ['open', ['-na', p.app, '--args', `--user-data-dir=${p.dataDir}`, `--profile-directory=${p.dir}`]];
   return ['open', ['-na', p.app, '--args', `--profile-directory=${p.dir}`]];
 }
 
