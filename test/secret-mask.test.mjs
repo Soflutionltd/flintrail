@@ -2,7 +2,7 @@
 // did not fill it: a page showing a new API key in its buttons, a script that reads it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { maskSecrets, redact } from '../dist/secrets.js';
+import { maskSecrets, redact, remember } from '../dist/secrets.js';
 
 // Built at run time from parts: fake values only, and no full credential-looking string in the repository
 // (GitHub push protection would take it for a real one).
@@ -36,4 +36,12 @@ test('ordinary text and short ids are left alone', () => {
   assert.equal(maskSecrets(plain), plain);
   const url = 'URL: https://github.com/settings/personal-access-tokens/new';
   assert.equal(maskSecrets(url), url);
+});
+
+test('a remembered secret shown cut short is masked from its start', () => {
+  const value = fake('vault-', 'Q7r2'.repeat(10));
+  remember(value, 60_000);
+  const cut = `[e4] text "API key" = "${value.slice(0, 40)}"`;
+  assert.ok(!redact(cut).includes(value.slice(0, 12)));
+  assert.match(redact(cut), /\[e4\] text "API key" = "•••/);
 });

@@ -38,6 +38,8 @@ export function redact(text: string): string {
     }
     const forms = [s, encodeURIComponent(s), new URLSearchParams({ v: s }).toString().slice(2), JSON.stringify(s).slice(1, -1)];
     for (const f of new Set(forms)) out = out.split(f).join('•••');
+    // A long secret shown cut short (a field value, a text excerpt): its start is masked with what follows it.
+    if (s.length >= 16) out = out.replace(new RegExp(s.slice(0, 12).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\S*', 'g'), '•••');
   }
   return out;
 }
