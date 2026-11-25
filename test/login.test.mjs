@@ -1,7 +1,7 @@
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -161,7 +161,7 @@ describe('1Password CLI source', () => {
   });
 });
 
-for (const [kind, file] of [['bitwarden', 'fake-bw.mjs'], ['command', 'fake-command.mjs']]) {
+for (const [kind, file] of [['bitwarden', 'fake-bw.mjs'], ['command', 'fake-command.mjs'], ['dashlane', 'fake-dcli.mjs'], ['protonpass', 'fake-pass-cli.mjs']]) {
   test(`${kind} source signs in with username, password and one-time code`, async () => {
     const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `${kind}:${bin(file)}` }));
     try {
@@ -176,6 +176,51 @@ for (const [kind, file] of [['bitwarden', 'fake-bw.mjs'], ['command', 'fake-comm
     }
   });
 }
+
+test('lastpass source signs in with username and password (its CLI gives no one-time codes)', async () => {
+  const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `lastpass:${bin('fake-lpass.mjs')}` }));
+  try {
+    const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
+    const out = await mcp.call('fl_login', { tab });
+    assert.match(out, /lastpass login "Web\/Fixture shop".*filled username, password, submitted/);
+    assert.match(await mcp.call('fl_act', { tab, diff: false, actions: [{ do: 'wait', text: 'Welcome' }] }), /Welcome ann@example.com/);
+    assert.ok(!leaks(out));
+  } finally {
+    await mcp.client.close();
+  }
+});
+
+test('keepassxc source opens its database with a key file, or with a password a command prints, never one in clear', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flintrail-kp-'));
+  const db = join(dir, 'Passwords.kdbx');
+  const env = (extra) => testEnv({ FLINTRAIL_PASSWORDS: `keepassxc:${db}`, FLINTRAIL_KEEPASSXC_CLI: bin('fake-keepassxc.mjs'), FAKE_KP_DB: db, ...extra });
+  const signIn = async (extra) => {
+    const mcp = await connect(env(extra));
+    try {
+      const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+      const out = await mcp.call('fl_login', { tab });
+      assert.match(out, /keepassxc login "Fixture shop".*filled username, password, one-time code, submitted/);
+      assert.match(await mcp.call('fl_act', { tab, diff: false, actions: [{ do: 'wait', text: 'Welcome' }] }), /Welcome ann@example.com/);
+      assert.ok(!leaks(out));
+    } finally {
+      await mcp.client.close();
+    }
+  };
+  await signIn({ FLINTRAIL_KEEPASSXC_KEYFILE: join(dir, 'key.keyx') });
+  // The password comes from a command (here a stand-in for a Keychain lookup) and goes on standard input only.
+  const printer = join(dir, 'print-password.mjs');
+  writeFileSync(printer, "#!/usr/bin/env node\nprocess.stdout.write('kp master\\n');\n");
+  chmodSync(printer, 0o755);
+  await signIn({ FLINTRAIL_KEEPASSXC_PASSWORD_COMMAND: printer });
+  // Neither: refused at start, the database is never opened without what unlocks it.
+  const none = await connect(env({}));
+  try {
+    const tab = tabOf(await none.call('fl_open', { url: `${site.url}/login` }));
+    await assert.rejects(none.call('fl_login', { tab }), /set FLINTRAIL_KEEPASSXC_KEYFILE or FLINTRAIL_KEEPASSXC_PASSWORD_COMMAND/);
+  } finally {
+    await none.client.close();
+  }
+});
 
 test('1Password vaults: every vault by default, only the ones the user lists, never the ones they exclude', async () => {
   const run = async (extra, check) => {

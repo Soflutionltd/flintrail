@@ -230,7 +230,13 @@ Sources are tried in the order of `FLINTRAIL_PASSWORDS` (default `browser`):
 | `browser` | None. Save the password in Chrome, Edge or Brave as usual. | The browser fills the form itself; Flintrail confirms with a real click and submits. Works in extension mode and in attach mode, on the profile that holds your passwords. With several saved accounts for a site, the browser picks one: use a CLI source to choose. |
 | `1password[:path]` | [1Password CLI](https://developer.1password.com/docs/cli/) through the 1Password app, or a service account. See [1Password vaults](#1password-which-vaults-and-how-flintrail-opens-them). | Every vault it can open, unless you list some. One-time codes stored in 1Password are filled too. |
 | `bitwarden[:path]` | [Bitwarden CLI](https://bitwarden.com/help/cli/) unlocked, `BW_SESSION` in Flintrail's environment. | One-time codes through `bw get totp`. |
-| `command:path` | Any program: Flintrail runs it with the page URL as only argument. | It prints `[{ "url", "username", "password", "totp"?, "title"? }]`. Use it for KeePassXC, Dashlane, `pass` or a company vault. |
+| `dashlane[:path]` | [Dashlane CLI](https://cli.dashlane.com/) (`dcli`), signed in. | Searches the page's site; one-time codes through `dcli password -f otp`. |
+| `lastpass[:path]` | [LastPass CLI](https://lastpass.github.io/lastpass-cli/lpass.1.html) (`lpass`), logged in. | No one-time codes: `lpass` cannot give them, so the agent asks you for the code. |
+| `protonpass[:path]` | [Proton Pass CLI](https://protonpass.github.io/pass-cli/) (`pass-cli`), logged in. | Every vault it can open; passwords and codes are read field by field through `pass://` references. |
+| `keepassxc:database` | [KeePassXC CLI](https://keepassxc.org/docs/KeePassXC_UserGuide) (`keepassxc-cli`, or `FLINTRAIL_KEEPASSXC_CLI`), and the `.kdbx` file. Unlocked with `FLINTRAIL_KEEPASSXC_KEYFILE`, or with the password a command prints, `FLINTRAIL_KEEPASSXC_PASSWORD_COMMAND` (for example `security find-generic-password -w -s keepassxc`). | Never the database password in clear in the configuration: it goes from that command to KeePassXC on standard input. One-time codes included. |
+| `command:path` | Any program: Flintrail runs it with the page URL as only argument. | It prints `[{ "url", "username", "password", "totp"?, "title"? }]`. Use it for `pass`, a company vault or any other manager. |
+
+Apple Passwords (iCloud Keychain) has no command-line access: Apple keeps those passwords for its own apps, and even macOS's `security` tool cannot read them. Save the login in your browser as well, and the `browser` source fills it.
 
 Logins from a CLI source are only filled in frames whose domain matches the login's website, so a look-alike page gets nothing. Several matches: the agent passes `item` (ID, title or username). Example for Claude Desktop:
 
