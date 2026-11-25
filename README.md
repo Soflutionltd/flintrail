@@ -44,6 +44,21 @@ The hatched bar is the floor: the same clicks as a raw Playwright script, with n
 
 Reproduce it: `npm run bench` (installs nothing global; Playwright MCP is a dependency of `bench/` only).
 
+### Four everyday tasks
+
+Signing in with a password manager and a one-time code, creating a GitHub-style fine-grained token, creating a Cloudflare-style token with three permission rows, and filling a 30-field form, on local copies of those pages that check what they receive. Median of 5 runs, headless Chromium, 25 November 2026. Each tool is scripted the way that suits it best: CSS selectors and one `browser_fill_form` for Playwright MCP, a snapshot then one `fill_form` for Chrome DevTools MCP, one `fl_act` batch for Flintrail.
+
+| Task | Playwright MCP 0.0.86 | Chrome DevTools MCP 1.14.0 | Flintrail |
+|---|---|---|---|
+| Sign in (password manager + code) | 1,100 ms · 4 calls | 668 ms · 5 calls | **221 ms** · 4 calls |
+| GitHub-style token | 1,668 ms · 5 calls | 1,045 ms · 7 calls | **429 ms** · 3 calls |
+| Cloudflare-style token | 2,682 ms · 7 calls | 1,869 ms · 12 calls | **712 ms** · 3 calls |
+| 30-field form | 1,300 ms · 4 calls | 1,662 ms · 5 calls | **1,112 ms** · 3 calls |
+
+Every tool succeeded 5 times out of 5 on every task. Each call is one more model turn in real use, which costs seconds on top of these numbers. Flintrail's counts include opening and closing its own tab. What the table does not show: with Playwright MCP and Chrome DevTools MCP the agent has to be given the password and the code, and it reads the new token in the page; with Flintrail the password and code come from the password manager, a token in a known format (GitHub, Cloudflare, Stripe…) is masked in every result, and `fl_capture_secret` stores it without the agent ever seeing it. Claude in Chrome is left out: it runs through its extension and claude.ai, and cannot be scripted.
+
+Reproduce it: `npm run bench:tasks` (the pages are in `bench/task-site.mjs`, the script in `bench/tasks.mjs`).
+
 ## Architecture
 
 <p align="center"><img src="docs/architecture.svg" alt="Architecture" width="900"></p>

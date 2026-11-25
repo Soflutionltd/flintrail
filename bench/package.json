@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Benchmark harness, not published.",
   "dependencies": {
-    "@playwright/mcp": "0.0.83"
+    "@playwright/mcp": "0.0.86",
+    "chrome-devtools-mcp": "1.14.0"
   }
 }

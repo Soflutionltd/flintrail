@@ -9,3 +9,4 @@ bench/.playwright-mcp/
 
 mcpb-bundle/
 *.mcpb
+.playwright-mcp/

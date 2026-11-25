@@ -1,0 +1,91 @@
+{
+  "runs": 5,
+  "date": "2026-11-25T12:24:46.587Z",
+  "node": "v25.0.0",
+  "results": [
+    {
+      "tool": "Playwright MCP 0.0.86",
+      "task": "Sign in (password manager + code)",
+      "medianMs": 1100,
+      "calls": 4,
+      "success": "5/5"
+    },
+    {
+      "tool": "Playwright MCP 0.0.86",
+      "task": "GitHub-style token",
+      "medianMs": 1668,
+      "calls": 5,
+      "success": "5/5"
+    },
+    {
+      "tool": "Playwright MCP 0.0.86",
+      "task": "Cloudflare-style token",
+      "medianMs": 2682,
+      "calls": 7,
+      "success": "5/5"
+    },
+    {
+      "tool": "Playwright MCP 0.0.86",
+      "task": "30-field form",
+      "medianMs": 1300,
+      "calls": 4,
+      "success": "5/5"
+    },
+    {
+      "tool": "Chrome DevTools MCP 1.14.0",
+      "task": "Sign in (password manager + code)",
+      "medianMs": 668,
+      "calls": 5,
+      "success": "5/5"
+    },
+    {
+      "tool": "Chrome DevTools MCP 1.14.0",
+      "task": "GitHub-style token",
+      "medianMs": 1045,
+      "calls": 7,
+      "success": "5/5"
+    },
+    {
+      "tool": "Chrome DevTools MCP 1.14.0",
+      "task": "Cloudflare-style token",
+      "medianMs": 1869,
+      "calls": 12,
+      "success": "5/5"
+    },
+    {
+      "tool": "Chrome DevTools MCP 1.14.0",
+      "task": "30-field form",
+      "medianMs": 1662,
+      "calls": 5,
+      "success": "5/5"
+    },
+    {
+      "tool": "Flintrail",
+      "task": "Sign in (password manager + code)",
+      "medianMs": 221,
+      "calls": 4,
+      "success": "5/5"
+    },
+    {
+      "tool": "Flintrail",
+      "task": "GitHub-style token",
+      "medianMs": 429,
+      "calls": 3,
+      "success": "5/5"
+    },
+    {
+      "tool": "Flintrail",
+      "task": "Cloudflare-style token",
+      "medianMs": 712,
+      "calls": 3,
+      "success": "5/5"
+    },
+    {
+      "tool": "Flintrail",
+      "task": "30-field form",
+      "medianMs": 1112,
+      "calls": 3,
+      "success": "5/5"
+    }
+  ]
+}
