@@ -7,7 +7,7 @@ import { loadToken } from './auth.js';
 import { config } from './config.js';
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { profileOfInstance, profileReadProblems } from './profiles.js';
+import { chosenName, profileOfInstance, profileReadProblems } from './profiles.js';
 
 function reply(message: unknown) {
   const body = Buffer.from(JSON.stringify(message), 'utf8');
@@ -37,7 +37,7 @@ try {
   // Started by the browser itself, this process may read the browser's own profile files, which macOS often
   // keeps from other apps (the relay among them): it tells the extension which profile it runs in.
   else if (message?.type === 'profile') {
-    const name = profileOfInstance(String(message.instance || ''))?.name || '';
+    const name = chosenName(profileOfInstance(String(message.instance || '')));
     // Not found: say why in ~/.flintrail/native-host.log (a browser's files closed to this process, most often).
     if (!name) {
       const why = profileReadProblems().join(', ') || 'no profile holds this extension instance';

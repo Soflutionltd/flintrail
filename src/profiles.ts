@@ -44,6 +44,13 @@ export interface LocalProfile {
   name: string;
   /** In a browser instance of its own (see separateInstancesDir). */
   separate?: boolean;
+  /** The browser's own default name ("Person 1", "Votre Chromium"): it says nothing, so it never names a browser. */
+  defaultName?: boolean;
+}
+
+/** The name a profile gives its browser: the one the user chose, never the browser's default. */
+export function chosenName(p: LocalProfile | undefined): string {
+  return p && !p.defaultName ? p.name : '';
 }
 
 /**
@@ -128,9 +135,9 @@ export function localProfiles(): LocalProfile[] {
     }
     const cache = state?.profile?.info_cache;
     if (!cache || typeof cache !== 'object') continue;
-    for (const [dir, info] of Object.entries(cache as Record<string, { name?: string }>)) {
+    for (const [dir, info] of Object.entries(cache as Record<string, { name?: string; is_using_default_name?: boolean }>)) {
       if (!existsSync(join(b.dataDir, dir))) continue;
-      out.push({ brand: b.brand, dataDir: b.dataDir, app: b.app, dir, name: String(info?.name || dir), ...(b.separate ? { separate: true } : {}) });
+      out.push({ brand: b.brand, dataDir: b.dataDir, app: b.app, dir, name: String(info?.name || dir), ...(b.separate ? { separate: true } : {}), ...(info?.is_using_default_name ? { defaultName: true } : {}) });
     }
   }
   return out;

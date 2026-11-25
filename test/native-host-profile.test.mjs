@@ -38,3 +38,14 @@ test('the pairing host names the profile the extension runs in', async () => {
   assert.deepEqual(await ask({ type: 'profile', instance }, env), { type: 'profile', name: 'Soflution' });
   assert.deepEqual(await ask({ type: 'profile', instance: 'aaaaaaaa-0000-4000-8000-000000000000' }, env), { type: 'profile', name: '' });
 });
+
+test('a profile still under the browser\'s own default name ("Votre Chromium", "Person 1") does not name the browser', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'flintrail-host-'));
+  const instance = 'c0ffee00-5678-4abc-8def-0123456789ab';
+  writeFileSync(join(dataDir, 'Local State'), JSON.stringify({ profile: { info_cache: { Default: { name: 'Votre Chromium', is_using_default_name: true } } } }));
+  const store = join(dataDir, 'Default', 'Local Extension Settings', 'hgkglidmccenjlhdcplcpkgbadonplnb');
+  mkdirSync(store, { recursive: true });
+  writeFileSync(join(store, '000003.log'), `...instance\u0000"${instance}"...`);
+  const env = { FLINTRAIL_HOME: mkdtempSync(join(tmpdir(), 'flintrail-')), FLINTRAIL_PAIRING_DIRS: dataDir };
+  assert.deepEqual(await ask({ type: 'profile', instance }, env), { type: 'profile', name: '' });
+});

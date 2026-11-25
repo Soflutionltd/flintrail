@@ -22,7 +22,7 @@ import { config } from './config.js';
 import { installNativeHost } from './pairing.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { profileOfInstance, profileReadProblems } from './profiles.js';
+import { chosenName, profileOfInstance, profileReadProblems } from './profiles.js';
 import { macFor, macMatches, RELAY_PROTOCOL, slug, urlMatches, type BrowserInfo, type MatchMode } from './relay-protocol.js';
 import { VERSION } from './version.js';
 
@@ -779,7 +779,7 @@ export class ExtensionRelay {
     const label = String(hello.label || '').trim().slice(0, 60);
     const same = [...this.bridges.values()].find((b) => b.instance === instance);
     const known = this.names.get(instance);
-    const found = profileOfInstance(instance)?.name || String(hello.profile || '').trim().slice(0, 60);
+    const found = chosenName(profileOfInstance(instance)) || String(hello.profile || '').trim().slice(0, 60);
     if (!found && !label) {
       const problems = profileReadProblems();
       if (problems.length) log(`browser profiles not readable here: ${problems.join(', ')}. Names come from ~/.flintrail/browsers.json or the extension popup.`);
