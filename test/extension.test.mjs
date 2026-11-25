@@ -290,11 +290,15 @@ test('fl_capture_secret puts a token a page shows once straight into the vault, 
     await win.waitForSelector(`${answer}:not([disabled])`);
     const title = await win.textContent('h1');
     const details = await win.textContent('dl');
+    // The window's title says what it asks.
+    const windowTitle = await win.title();
     await win.click(answer);
-    return { pending, title, details };
+    return { pending, title, details, windowTitle };
   };
   const first = await confirm({ browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:ideekdo/GITHUB_TOKEN' });
   assert.match(first.title, /capture a secret/);
+  assert.match(first.windowTitle, /capture a secret/);
+  assert.match(first.details, /^Website.*Secret.*Stored/s);
   assert.ok(!first.details.includes('replacing'));
   const out = await first.pending;
   assert.match(out, /Captured a secret from 127\.0\.0\.1 \(93 characters, starts with github_pat_\) into McpHub vault of ideekdo as GITHUB_TOKEN/);

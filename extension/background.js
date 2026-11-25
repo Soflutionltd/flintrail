@@ -517,7 +517,7 @@ async function pastePolicy(p) {
   if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
   if (!vaultOk(p.vault, settings)) return { refused: `the vault "${p.vault}" is not one Flintrail may use` };
   // The full origin is shown (scheme and port), the domain lists are matched on the host alone.
-  const ok = await askUser({ title: 'Flintrail wants to paste a secret from your vault', domain: p.origin ? `${host} (${String(p.origin)})` : host, item: String(p.item || 'secret'), source: 'vault', fields: (p.fields || []).map(String), totp: true });
+  const ok = await askUser({ title: 'Flintrail wants to paste a secret from your vault', labels: ['Website', 'Secret', 'Where'], note: 'The agent never sees the secret. No answer within 2 minutes means no.', domain: p.origin ? `${host} (${String(p.origin)})` : host, item: String(p.item || 'secret'), source: 'vault', fields: (p.fields || []).map(String), totp: true });
   return ok ? { confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
 }
 
@@ -565,7 +565,7 @@ async function captureSecret(p) {
   const values = [...new Set(found?.values || [])];
   if (values.length !== 1) return { host };
   if (p.confirm || settings.confirm) {
-    const ok = await askUser({ title: 'Flintrail wants to capture a secret shown on a page', domain: host, item: String(p.what || 'secret'), source: 'capture', fields: [`into ${String(p.to || 'a vault')}`], totp: true });
+    const ok = await askUser({ title: 'Flintrail wants to capture a secret shown on a page', labels: ['Website', 'Secret', 'Stored'], note: 'The agent never sees the secret. No answer within 2 minutes means no.', domain: host, item: String(p.what || 'secret'), source: 'capture', fields: [`into ${String(p.to || 'a vault')}`], totp: true });
     // Read the same as a miss: a refusal must not tell the agent that such a secret was on the page.
     if (!ok) return {};
   }

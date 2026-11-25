@@ -4,10 +4,20 @@ const $ = (x) => document.getElementById(x);
 
 chrome.runtime.sendMessage({ type: 'fillRequest', id }).then(({ request }) => {
   if (!request) { window.close(); return; }
-  if (request.title) document.querySelector('h1').textContent = request.title;
+  if (request.title) {
+    document.querySelector('h1').textContent = request.title;
+    document.title = request.title;
+  }
+  // A capture or a paste is not a login: its own words for each line.
+  const [domainLabel, itemLabel, fieldsLabel] = request.labels || [];
+  if (domainLabel) $('l-domain').textContent = domainLabel;
+  if (itemLabel) $('l-item').textContent = itemLabel;
+  if (fieldsLabel) $('l-fields').textContent = fieldsLabel;
+  if (request.note) $('note').textContent = request.note;
   $('domain').textContent = request.domain;
   $('item').textContent = `${request.item} (${request.source})`;
   $('fields').textContent = request.fields.filter((f) => request.totp || f !== 'one-time code').join(', ');
+  fit();
   // A click already on its way when the window appeared does not count: the buttons wake up after a moment.
   setTimeout(() => {
     for (const b of ['allow', 'deny']) $(b).disabled = false;
@@ -28,3 +38,14 @@ for (const b of ['allow', 'deny']) {
     answer(b === 'allow');
   });
 }
+
+// The window takes the height of what it shows: a long vault name, or the browser's own "is debugging" bar
+// appearing above the page, must never hide the question or the buttons.
+async function fit() {
+  const needed = document.documentElement.scrollHeight;
+  if (needed <= window.innerHeight) return;
+  const win = await chrome.windows.getCurrent();
+  const frame = window.outerHeight - window.innerHeight;
+  await chrome.windows.update(win.id, { height: Math.min(screen.availHeight, needed + frame + 4) }).catch(() => {});
+}
+window.addEventListener('resize', () => { fit(); });
