@@ -1,6 +1,7 @@
 // Signs in on the open sign-in form. Either the browser's own password manager has filled it (Flintrail only
 // confirms with a real click), or Flintrail reads a password manager CLI and fills the form itself. Either way
 // the agent only gets the list of fields filled: passwords and one-time codes are masked in every tool result.
+import { lookup } from 'node:dns/promises';
 import { getDomain } from 'tldts';
 import { domainProblem } from './domains.js';
 import type { Frame, Locator, Page } from 'playwright-core';
@@ -8,7 +9,7 @@ import { config } from './config.js';
 import { randomBytes } from 'node:crypto';
 import { agentRanJs, beforeSecret, elementByRef, loginRunning, markSecretFilled, pageBrowser, withNavigation } from './engine.js';
 import { askFill, recordFill, vaultAllowed, vaultRules, type VaultRules } from './fill-policy.js';
-import { hostOf, parseSources, type Account, type CliSource, type SourceSpec } from './passwords.js';
+import { hostOf, isLocalHost, parseSources, type Account, type CliSource, type SourceSpec } from './passwords.js';
 import { remember } from './secrets.js';
 
 export { redact } from './secrets.js';
@@ -26,19 +27,55 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export function siteOf(host: string): string {
   const h = host.replace(/\.$/, '').toLowerCase();
+  // A saved local address with its port ("localhost:5191") is its own site: only that app fits.
+  if (/:\d+$/.test(h)) return h;
   return getDomain(h, { allowPrivateDomains: true }) || h;
 }
 
-const LOOPBACK = /^(localhost|127(\.\d+){3}|\[::1\])$/;
+// Browsers send localhost, 127.x.x.x, [::1] and *.localhost to this computer whatever the DNS says.
+const LOOPBACK = (host: string) => /^(localhost|127(\.\d+){3}|\[::1\])$/.test(host) || host.endsWith('.localhost');
+/** *.test names last checked to point to this computer only (set by checkLocalNames before each sign-in). */
+const loopbackTestNames = new Set<string>();
 
 /** A secret is only ever sent over HTTPS (or to this computer). Plain HTTP would hand it to anyone on the network. */
 export function fillProblem(url: string): string | null {
   let u: URL;
   try { u = new URL(url); } catch { return `not a web page (${url.slice(0, 80)})`; }
   if (u.protocol === 'https:') return null;
-  if (u.protocol === 'http:' && LOOPBACK.test(u.hostname)) return null;
-  return u.protocol === 'http:' ? `${u.hostname} is served over plain HTTP` : `${u.protocol} pages are never filled`;
+  const host = u.hostname.toLowerCase();
+  if (u.protocol === 'http:' && (LOOPBACK(host) || loopbackTestNames.has(host))) return null;
+  if (u.protocol === 'http:' && host.endsWith('.test')) return `${host} is served over plain HTTP and does not point to this computer only`;
+  return u.protocol === 'http:' ? `${host} is served over plain HTTP` : `${u.protocol} pages are never filled`;
 }
+
+const isLoopbackAddress = (address: string) => /^127\./.test(address) || address === '::1' || address === '::ffff:127.0.0.1';
+
+/**
+ * A *.test name is a development address only when it points to this computer (hosts file, local DNS). Pointing
+ * elsewhere, plain HTTP would send the secret over the network: it is then treated like any other website.
+ */
+export async function checkLocalNames(urls: string[], resolve: (host: string) => Promise<string[]> = async (host) => (await lookup(host, { all: true })).map((a) => a.address)): Promise<void> {
+  const names = new Set(urls.map((url) => hostOf(url)).filter((host) => host.endsWith('.test')));
+  await Promise.all([...names].map(async (host) => {
+    const addresses = await resolve(host).catch(() => [] as string[]);
+    if (addresses.length && addresses.every(isLoopbackAddress)) loopbackTestNames.add(host);
+    else loopbackTestNames.delete(host);
+  }));
+}
+
+/** What a page address is matched against: its site, and on a local development address also host:port. */
+export function keysOf(url: string): Set<string> {
+  let u: URL;
+  try { u = new URL(url); } catch { return new Set(); }
+  const host = u.hostname.toLowerCase();
+  const keys = new Set([siteOf(host)]);
+  if (isLocalHost(host)) keys.add(`${host}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`);
+  return keys;
+}
+const fits = (sites: Iterable<string>, url: string) => { const keys = keysOf(url); return [...sites].some((s) => keys.has(s)); };
+
+/** The address to add to a saved login so that it fits this page, for the refusal messages. */
+const addressToSave = (url: string) => { try { const u = new URL(url); return isLocalHost(u.hostname) ? u.origin : u.hostname; } catch { return url.slice(0, 80); } };
 
 let sources: SourceSpec[] | null = null;
 const getSources = () => (sources ??= parseSources(config.passwordSources));
@@ -110,7 +147,7 @@ async function assertStillOn(loc: Locator, sites: string[]) {
   const where = await loc.evaluate(() => location.href, undefined, { timeout: TIMEOUT });
   const why = fillProblem(where) || domainProblem(where);
   const site = siteOf(hostOf(where));
-  if (why || !sites.includes(site)) throw new Error(`Refused: the page moved to ${site || where.slice(0, 80)} before the fill${why ? ` (${why})` : ''}. Nothing more was filled.`);
+  if (why || !fits(sites, where)) throw new Error(`Refused: the page moved to ${site || where.slice(0, 80)} before the fill${why ? ` (${why})` : ''}. Nothing more was filled.`);
 }
 
 /** A filled password or code: never shown in snapshots, drawn as dots, and the page is closed to the agent's scripts. */
@@ -233,7 +270,7 @@ function readIdentity(): { text: string; values: string[]; partial: boolean } {
 /** Reads what the visible sign-in step says about the account, in the frames of the given websites only. */
 async function identityOnPage(page: Page, sites: Set<string>): Promise<Identity> {
   // An embedded frame of another website (advert, chat widget) says nothing about the account of this sign-in.
-  const frames = liveFrames(page).filter((f) => sites.has(siteOf(hostOf(f.url()))));
+  const frames = liveFrames(page).filter((f) => fits(sites, f.url()));
   // Its own token: only tells whether a username field is shown (the fill marks its fields again afterwards).
   const marks = await markAll(frames, randomBytes(8).toString('hex'));
   const read = await Promise.all(frames.map((f) => f.evaluate(readIdentity).catch(() => ({ text: '', values: [] as string[], partial: true }))));
@@ -278,7 +315,7 @@ interface Searched { vaults: Set<string>; excluded: Set<string> }
 
 async function findAccount(page: Page, source: CliSource, wanted?: string, expected?: string, others: string[] = [], rules: VaultRules = { allow: [], deny: [] }, searched?: Searched): Promise<Account | null> {
   const pageHosts = new Set(liveFrames(page).map((f) => hostOf(f.url())));
-  const pageSites = new Set([...pageHosts].map(siteOf));
+  const pageSites = new Set(liveFrames(page).flatMap((f) => [...keysOf(f.url())]));
   const w = wanted?.toLowerCase();
   const matchOf = (all: Account[]) => {
     // Only the vaults the user lets Flintrail use are named: an excluded vault says nothing of what it holds.
@@ -306,7 +343,7 @@ async function findAccount(page: Page, source: CliSource, wanted?: string, expec
     const here = found.filter((a) => sitesOf(a).some((s) => pageSites.has(s)));
     if (!here.length) {
       const where = sitesOf(found[0]!).join(', ') || 'no website';
-      throw new Error(`Refused: login ${label(found[0]!)} is for ${where}, this tab is on ${[...pageSites].join(', ')}. Add this website to the saved login if it is really the same account.`);
+      throw new Error(`Refused: login ${label(found[0]!)} is for ${where}, this tab is on ${addressToSave(page.url())}. If it is really the same account, the user adds ${addressToSave(page.url())} to that saved login.`);
     }
     found = here;
   } else {
@@ -349,8 +386,8 @@ async function useAccount(page: Page, account: Account, token: string, ref?: str
   const sites = sitesOf(account);
   // The tab itself must be on the login's website: a login form framed by another site is not filled.
   const tabSite = siteOf(hostOf(page.url()));
-  if (!sites.includes(tabSite)) throw new Error(`Refused: this tab is on ${tabSite}, login ${label(account)} is for ${sites.join(', ') || 'no website'}.`);
-  const frames = liveFrames(page).filter((f) => sites.includes(siteOf(hostOf(f.url()))));
+  if (!fits(sites, page.url())) throw new Error(`Refused: this tab is on ${addressToSave(page.url())}, login ${label(account)} is for ${sites.join(', ') || 'no website'}.`);
+  const frames = liveFrames(page).filter((f) => fits(sites, f.url()));
   let targets: { frame: Frame | null; m: Marked; field?: Locator; kind?: 'pass' | 'otp' }[];
   if (ref) {
     // The agent named the field: it must be a password or code input, on the account's website.
@@ -436,8 +473,9 @@ export async function signIn(page: Page, opts: { item?: string; source?: string;
     throw new Error(opts.source ? `Password source "${opts.source}" is not configured in FLINTRAIL_PASSWORDS${opts.field ? ', or cannot fill a named field (browser)' : ''}.`
       : opts.field ? 'Filling a named field needs a password manager CLI in FLINTRAIL_PASSWORDS (1password, bitwarden, command).' : 'fl_login is off (FLINTRAIL_PASSWORDS=off).');
   }
+  await checkLocalNames(page.frames().map((f) => f.url()));
   const unsafe = fillProblem(page.url());
-  if (unsafe) throw new Error(`Refused: ${unsafe}. Flintrail fills passwords and codes over HTTPS only.`);
+  if (unsafe) throw new Error(`Refused: ${unsafe}. Flintrail fills passwords and codes over HTTPS only, or on this computer (localhost, *.localhost, a *.test name pointing here).`);
   if (agentRanJs(page)) {
     throw new Error('Refused: you ran JavaScript in this tab (eval, extract or request), which could catch what gets filled. Open the sign-in page in a new tab (fl_open) and call fl_login there before running any script.');
   }
@@ -489,12 +527,16 @@ async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean
   if (!done) {
     const tried = all.map((s) => s.kind).join(', ') + vaultNote(all, searched, rules);
     const sites = [...new Set(liveFrames(page).map((f) => siteOf(hostOf(f.url()))))].join(', ');
+    // On a development address no saved login fits by itself: say exactly what the user adds, whatever the manager.
+    const local = isLocalHost(hostOf(page.url()))
+      ? ` This is a local development address: a saved login only fits it once ${addressToSave(page.url())} is in it. Ask the user to add that address to the login in their password manager, or, with no password manager, to sign in by hand once and let the browser save the password.`
+      : '';
     if (expected) {
-      throw new Error(`Refused: no saved login for ${expected.slice(0, 80)} on ${sites} (tried ${tried}).${others.length ? ` Found for this site, for other accounts: ${[...new Set(others)].slice(0, 5).join('; ')}.` : ''} Nothing was filled: ask the user, do not sign in with another account.`);
+      throw new Error(`Refused: no saved login for ${expected.slice(0, 80)} on ${sites} (tried ${tried}).${others.length ? ` Found for this site, for other accounts: ${[...new Set(others)].slice(0, 5).join('; ')}.` : ''} Nothing was filled: ask the user, do not sign in with another account.${local}`);
     }
     throw new Error(opts.item
       ? `No saved login "${opts.item}" in ${tried}.`
-      : `No saved login for ${sites} (tried ${tried}), or no sign-in field visible yet. Open the sign-in form first; for the browser source, sign in by hand once and let the browser save the password; or add a password manager to FLINTRAIL_PASSWORDS (1password, bitwarden, command).`);
+      : `No saved login for ${sites} (tried ${tried}), or no sign-in field visible yet.${local} Open the sign-in form first; for the browser source, sign in by hand once and let the browser save the password; or add a password manager to FLINTRAIL_PASSWORDS (1password, bitwarden, command).`);
   }
   // A form marked to send by GET would put the password in the address, where the history, the server logs and the
   // site's own scripts keep it: it is filled, not sent. (A form with no method is usually sent by the site's script.)

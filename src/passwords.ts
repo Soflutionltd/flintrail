@@ -44,6 +44,24 @@ export const hostOf = (url: string) => {
   }
 };
 
+/** Development addresses of this computer: localhost, 127.x.x.x, [::1], *.localhost and *.test (reserved, never on the Internet). */
+export const isLocalHost = (host: string) =>
+  /^(localhost|127(\.\d+){3}|\[::1\])$/.test(host) || host.endsWith('.localhost') || host.endsWith('.test');
+
+/**
+ * Host of an address saved in a login. On a local development address an explicit port is kept: the login then
+ * only fits that one app ("localhost:5191"), not every app the computer serves. Without a port, every port fits.
+ */
+export const savedHostOf = (url: string) => {
+  try {
+    const u = new URL(url.includes('://') ? url : `https://${url}`);
+    const host = u.hostname.toLowerCase();
+    return u.port && isLocalHost(host) ? `${host}:${u.port}` : host;
+  } catch {
+    return '';
+  }
+};
+
 function run(bin: string, args: string[], input?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(bin, args, { timeout: 90_000, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -95,7 +113,7 @@ function onePassword(bin: string): CliSource {
       username: i.additional_information || '',
       where: `1Password vault ${i.vault.name}`,
       vault: i.vault.name,
-      hosts: (i.urls || []).map((u) => hostOf(u.href)).filter(Boolean),
+      hosts: (i.urls || []).map((u) => savedHostOf(u.href)).filter(Boolean),
       async reveal() {
         const raw = await run(bin, ['item', 'get', i.id, '--vault', i.vault.id, '--reveal', '--format', 'json']);
         const item = parseJson<{ category?: string; fields?: OpField[] }>(raw, bin);
@@ -123,7 +141,7 @@ function bitwarden(bin: string): CliSource {
       title: name,
       username: login!.username || '',
       where: 'Bitwarden',
-      hosts: (login!.uris || []).map((u) => hostOf(u.uri || '')).filter(Boolean),
+      hosts: (login!.uris || []).map((u) => savedHostOf(u.uri || '')).filter(Boolean),
       async reveal() {
         const item = parseJson<BwItem>(await run(bin, ['get', 'item', id]), bin);
         return {
@@ -153,7 +171,7 @@ function dashlane(bin: string): CliSource {
         title: c.title || c.url || c.id,
         username: c.login || c.email || '',
         where: 'Dashlane',
-        hosts: c.url ? [hostOf(c.url)].filter(Boolean) : [],
+        hosts: c.url ? [savedHostOf(c.url)].filter(Boolean) : [],
         async reveal() {
           const [item] = parseJson<DlCredential[]>(await run(bin, ['password', `id=${c.id}`, '-o', 'json']), bin);
           if (!item) throw new Error(`Dashlane: login ${c.id} not found any more.`);
@@ -181,7 +199,7 @@ function lastpass(bin: string): CliSource {
       title: e.fullname || e.name || e.id,
       username: e.username || '',
       where: 'LastPass',
-      hosts: [hostOf(e.url!)].filter(Boolean),
+      hosts: [savedHostOf(e.url!)].filter(Boolean),
       async reveal() {
         const [item] = parseJson<LpEntry[]>(await run(bin, ['show', '--sync=no', '--json', e.id]), bin);
         if (!item) throw new Error(`LastPass: entry ${e.id} not found any more.`);
@@ -230,7 +248,7 @@ function protonPass(bin: string): CliSource {
           title: it.title || it.id,
           username: d.username || d.email,
           where: 'Proton Pass',
-          hosts: d.urls.map(hostOf).filter(Boolean),
+          hosts: d.urls.map(savedHostOf).filter(Boolean),
           async reveal() {
             return {
               username: d.username || d.email,
@@ -284,7 +302,7 @@ function keepassxc(bin: string, db: string): CliSource {
           title: title || path,
           username,
           where: `KeePassXC ${db}`,
-          hosts: [hostOf(url)].filter(Boolean),
+          hosts: [savedHostOf(url)].filter(Boolean),
           async reveal() {
             const password = (await kp('show', ['--show-protected', '-a', 'Password'], path)).replace(/\r?\n$/, '');
             // An entry without a TOTP makes --totp fail: then there is no code to fill.
@@ -313,7 +331,7 @@ function command(bin: string): CliSource {
           title: o.title || creds.username,
           username: creds.username,
           where: bin,
-          hosts: o.url ? [hostOf(o.url)].filter(Boolean) : [],
+          hosts: o.url ? [savedHostOf(o.url)].filter(Boolean) : [],
           reveal: async () => creds,
         };
       });
