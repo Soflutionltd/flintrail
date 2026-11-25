@@ -345,6 +345,17 @@ test('fl_capture_secret puts a token a page shows once straight into the vault, 
   // A refusal reads the same as a miss: it does not tell the agent such a secret was there.
   await assert.rejects(replace.pending, /Nothing captured \(or not confirmed by the user\): no single such secret/);
   assert.equal(stored().length, count);
+  // Questions turned off by the user, in the extension: even a replacement goes ahead without a window.
+  const windows = [];
+  const onPage = (p) => { if (p.url().includes('/confirm.html')) windows.push(p); };
+  ctx.on('page', onPage);
+  await sw.evaluate(() => chrome.storage.local.set({ fillSettings: { askSecrets: false } }));
+  const silent = await mcp.call('fl_capture_secret', { browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:EXISTING_TOKEN' });
+  assert.match(silent, /Captured a secret from 127\.0\.0\.1/);
+  assert.equal(stored().length, count + 1);
+  assert.deepEqual(windows, [], 'no question asked');
+  ctx.off('page', onPage);
+  await sw.evaluate(() => chrome.storage.local.set({ fillSettings: {} }));
   await page.close();
 });
 
@@ -392,6 +403,23 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
   await sw.evaluate(() => chrome.storage.local.set({ fillSettings: {} }));
   // The site stays sealed a few minutes after the paste: the next page may show the secret again.
   assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /Blocked: this page holds a password, code or secret/);
+  // Questions turned off by the user, in the extension: the paste goes ahead without a window, and says so.
+  const quiet = await ctx.newPage();
+  await quiet.goto(`${site.url}/paste-form?quiet=1`);
+  const quietTab = /Tab (t\d+)/.exec(await mcp.call('fl_adopt', { url: '/paste-form?quiet=1', browser: 'chromium', text: 0 }))[1];
+  const asked = [];
+  const onAsk = (p) => { if (p.url().includes('/confirm.html')) asked.push(p); };
+  ctx.on('page', onAsk);
+  await sw.evaluate(() => chrome.storage.local.set({ fillSettings: { askSecrets: false } }));
+  const pasted = await mcp.call('fl_paste_secret', { tab: quietTab, label: 'API key', from: 'mcphub:EXISTING_TOKEN' });
+  assert.match(pasted, /Pasted the secret .* not asked \(the user turned questions off\)/);
+  assert.ok(!pasted.includes(vaultValue));
+  assert.equal(await quiet.evaluate(() => document.querySelector('[name=key]').value), vaultValue);
+  assert.deepEqual(asked, [], 'no question asked');
+  ctx.off('page', onAsk);
+  await sw.evaluate(() => chrome.storage.local.set({ fillSettings: {} }));
+  await mcp.call('fl_release', { tab: quietTab });
+  await quiet.close();
   // An older McpHub printed "NAME = value": that line is never typed into the field.
   const old = await ctx.newPage();
   await old.goto(`${site.url.replace('127.0.0.1', 'localhost')}/paste-form`);

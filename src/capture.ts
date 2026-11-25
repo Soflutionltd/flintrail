@@ -134,7 +134,7 @@ export async function captureSecret(o: { browser: string; match: string; kind: S
     key: o.browser, match, source: whole(form), sites, confirm,
     what: `${o.kind === 'prefix' ? `secret starting with ${o.prefix}` : `${o.kind} secret`}`,
     to: `${replaces ? 'replacing ' : ''}${describe(destination)}`,
-  }, 130_000) as { refused?: string; value?: string; host?: string };
+  }, 130_000) as { refused?: string; value?: string; host?: string; asked?: boolean };
   if (found.refused) throw new Error(`Refused by the Flintrail extension in ${o.browser}: ${found.refused}.`);
   const value = String(found.value || '');
   const host = String(found.host || '');
@@ -146,7 +146,7 @@ export async function captureSecret(o: { browser: string; match: string; kind: S
   remember(value, Infinity);
   sealSite(host);
   await store(value, destination);
-  const entry = { at: new Date().toISOString(), browser: o.browser, domain: host, captured: o.kind, to: describe(destination), approval: confirm ? 'confirmed by the user' : 'silent' };
+  const entry = { at: new Date().toISOString(), browser: o.browser, domain: host, captured: o.kind, to: describe(destination), approval: found.asked ? 'confirmed by the user' : 'silent' };
   try {
     mkdirSync(config.home, { recursive: true });
     appendFileSync(join(config.home, 'fill-audit.log'), JSON.stringify(entry) + '\n', { mode: 0o600 });

@@ -471,7 +471,7 @@ async function adoptOpenTab(p) {
 // ---------- password filling ----------
 // The user's settings for the passwords and codes Flintrail fills from their password manager. Only the
 // options page writes them; Flintrail asks before every fill, and no Flintrail tool can change them.
-const FILL_DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true, vaultsAllow: [], vaultsDeny: [] };
+const FILL_DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true, askSecrets: true, vaultsAllow: [], vaultsDeny: [] };
 const CONFIRM_MS = 2 * 60 * 1000;
 const HISTORY_MAX = 200;
 const pendingFills = new Map();
@@ -516,9 +516,11 @@ async function pastePolicy(p) {
   if (!settings.enabled) return { refused: 'password filling is turned off' };
   if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
   if (!vaultOk(p.vault, settings)) return { refused: `the vault "${p.vault}" is not one Flintrail may use` };
+  // The user chose, in these settings only, not to be asked: the paste goes ahead, and is still in the history.
+  if (settings.askSecrets === false) return { confirmed: true, asked: false };
   // The full origin is shown (scheme and port), the domain lists are matched on the host alone.
   const ok = await askUser({ title: 'Flintrail wants to paste a secret from your vault', labels: ['Website', 'Secret', 'Where'], note: 'The agent never sees the secret. No answer within 2 minutes means no.', domain: p.origin ? `${host} (${String(p.origin)})` : host, item: String(p.item || 'secret'), source: 'vault', fields: (p.fields || []).map(String), totp: true });
-  return ok ? { confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
+  return ok ? { confirmed: true, asked: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
 }
 
 // A small window of this extension asks the user. Only a click there answers: no page and no agent can reach it.
@@ -564,12 +566,14 @@ async function captureSecret(p) {
   const found = await chrome.tabs.sendMessage(tab.t.id, { type: 'findSecret', source: String(p.source || '') }, { frameId: 0 }).catch(() => null);
   const values = [...new Set(found?.values || [])];
   if (values.length !== 1) return { host };
-  if (p.confirm || settings.confirm) {
+  // Not asked when the user turned questions about secrets off, in these settings only.
+  const ask = (p.confirm || settings.confirm) && settings.askSecrets !== false;
+  if (ask) {
     const ok = await askUser({ title: 'Flintrail wants to capture a secret shown on a page', labels: ['Website', 'Secret', 'Stored'], note: 'The agent never sees the secret. No answer within 2 minutes means no.', domain: host, item: String(p.what || 'secret'), source: 'capture', fields: [`into ${String(p.to || 'a vault')}`], totp: true });
     // Read the same as a miss: a refusal must not tell the agent that such a secret was on the page.
     if (!ok) return {};
   }
-  return { host, value: values[0] };
+  return { host, value: values[0], asked: ask };
 }
 
 async function fillAudit(p) {

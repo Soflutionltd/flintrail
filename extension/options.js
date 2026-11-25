@@ -1,6 +1,6 @@
 // Settings page: the only place where the password filling settings change.
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true, vaultsAllow: [], vaultsDeny: [] };
+const DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true, askSecrets: true, vaultsAllow: [], vaultsDeny: [] };
 
 // Bare domains only: "https://www.GitHub.com/login" becomes "github.com".
 function cleanDomain(line) {
@@ -30,7 +30,7 @@ async function saveTabs() {
 async function load() {
   const { fillSettings } = await chrome.storage.local.get('fillSettings');
   const s = { ...DEFAULTS, ...(fillSettings || {}) };
-  for (const k of ['enabled', 'confirm', 'totp', 'capture', 'allDomains']) $(k).checked = s[k];
+  for (const k of ['enabled', 'confirm', 'totp', 'capture', 'askSecrets', 'allDomains']) $(k).checked = s[k];
   $('domains').value = s.domains.join('\n');
   $('domains').disabled = s.allDomains;
   $('vaultsAllow').value = s.vaultsAllow.join('\n');
@@ -42,7 +42,7 @@ const vaultList = (id) => [...new Set($(id).value.split('\n').map((v) => v.trim(
 
 async function save() {
   const domains = [...new Set($('domains').value.split('\n').map(cleanDomain).filter(Boolean))];
-  const fillSettings = { enabled: $('enabled').checked, confirm: $('confirm').checked, totp: $('totp').checked, capture: $('capture').checked, allDomains: $('allDomains').checked, domains, vaultsAllow: vaultList('vaultsAllow'), vaultsDeny: vaultList('vaultsDeny') };
+  const fillSettings = { enabled: $('enabled').checked, confirm: $('confirm').checked, totp: $('totp').checked, capture: $('capture').checked, askSecrets: $('askSecrets').checked, allDomains: $('allDomains').checked, domains, vaultsAllow: vaultList('vaultsAllow'), vaultsDeny: vaultList('vaultsDeny') };
   await chrome.storage.local.set({ fillSettings });
   $('domains').disabled = fillSettings.allDomains;
   $('saved').textContent = 'Saved.';
@@ -71,7 +71,7 @@ async function renderHistory() {
 let gestureAt = 0;
 for (const type of ['pointerdown', 'keydown']) document.addEventListener(type, (e) => { if (e.isTrusted) gestureAt = Date.now(); }, true);
 const guarded = (fn) => () => (Date.now() - gestureAt < 2000 ? fn() : Promise.all([load(), loadTabs()]));
-for (const id of ['enabled', 'confirm', 'totp', 'capture', 'allDomains']) $(id).addEventListener('change', guarded(save));
+for (const id of ['enabled', 'confirm', 'totp', 'capture', 'askSecrets', 'allDomains']) $(id).addEventListener('change', guarded(save));
 $('domains').addEventListener('change', guarded(save));
 $('vaultsAllow').addEventListener('change', guarded(save));
 $('vaultsDeny').addEventListener('change', guarded(save));

@@ -105,10 +105,12 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
   // place to catch the value as it is typed.
   loginRunning(page, true);
   let value = '';
+  // The user turned the question off in the extension settings: no click, still in the history.
+  let approval = 'confirmed by the user';
   try {
     // A trace or video of this tab is dropped before the user is even asked: it would hold the secret.
     await beforeSecret(page);
-    let answer: { refused?: string; confirmed?: boolean };
+    let answer: { refused?: string; confirmed?: boolean; asked?: boolean };
     try {
       answer = await relay.request('pastePolicy', { key: where.browser, domain: siteOf(host), host, origin, item: describe(source), source: 'vault', ...(source.kind === '1password' ? { vault: source.vault } : {}), fields: [`into the ${kind} field the page calls "${name}"`] }, 130_000);
     } catch (e) {
@@ -116,6 +118,7 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
       throw e;
     }
     if (answer.refused || !answer.confirmed) throw new Error(`Refused by the Flintrail extension in ${where.browser}: ${answer.refused || 'not confirmed by the user'}.`);
+    if (answer.asked === false) approval = 'not asked (the user turned questions off)';
     value = await reveal(source, host);
     if (!value) throw new Error(`Nothing pasted: ${describe(source)} is empty or missing.`);
     remember(value, Infinity);
@@ -131,12 +134,12 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
     loginRunning(page, false);
     await handle.dispose().catch(() => {});
   }
-  const entry = { at: new Date().toISOString(), browser: where.browser, domain: host, pasted: describe(source), field: name, approval: 'confirmed by the user' };
+  const entry = { at: new Date().toISOString(), browser: where.browser, domain: host, pasted: describe(source), field: name, approval };
   try {
     mkdirSync(config.home, { recursive: true });
     appendFileSync(join(config.home, 'fill-audit.log'), JSON.stringify(entry) + '\n', { mode: 0o600 });
   } catch (e) {
     console.error(`flintrail: could not write the audit log: ${(e as Error).message}`);
   }
-  return `Pasted the secret from ${describe(source)} into "${name}" on ${host} (${value.length} characters), confirmed by the user. Its value is never shown to you; scripts and screenshots of this page are refused until it loads another page.`;
+  return `Pasted the secret from ${describe(source)} into "${name}" on ${host} (${value.length} characters), ${approval}. Its value is never shown to you; scripts and screenshots of this page are refused until it loads another page.`;
 }

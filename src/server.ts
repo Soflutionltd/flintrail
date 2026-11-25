@@ -271,7 +271,7 @@ export function buildServer(): McpServer {
   }, guard(async ({ tab, action, name, actions }) => video(getTab(tab), action, { name, actions })));
 
   s.registerTool('fl_capture_secret', {
-    description: 'Store a secret a site shows once (a new GitHub or Cloudflare token, an API key) straight from the user\'s open tab into a vault: the value never reaches you, you only get its kind, length, public prefix and destination. The tab must be on the site that issues that kind. Works even when another extension stopped the tab from being driven. The user confirms a "prefix" kind, a 1Password vault, or replacing a name the McpHub vault already holds. Afterwards the pages of that site refuse scripts and screenshots until they change page. To use the secret later, give its vault name to the tool or service that needs it.',
+    description: 'Store a secret a site shows once (a new GitHub or Cloudflare token, an API key) straight from the user\'s open tab into a vault: the value never reaches you, you only get its kind, length, public prefix and destination. The tab must be on the site that issues that kind. Works even when another extension stopped the tab from being driven. The user confirms a "prefix" kind, a 1Password vault, or replacing a name the McpHub vault already holds, unless they turned these questions off in the extension. Afterwards the pages of that site refuse scripts and screenshots until they change page. To use the secret later, give its vault name to the tool or service that needs it.',
     inputSchema: {
       browser: z.string().describe('The user\'s browser holding the tab (a name from fl_extension).'),
       url: z.string().min(3).describe('Part of the address of the tab showing the secret, e.g. "github.com/settings/personal-access-tokens".'),
@@ -282,7 +282,7 @@ export function buildServer(): McpServer {
   }, guard(async ({ browser, url, kind, prefix, to }) => captureSecret({ browser, match: url, kind, prefix, to })));
 
   s.registerTool('fl_paste_secret', {
-    description: 'Type a secret from the user\'s vault (a token stored with fl_capture_secret, an API key) into one field of a tab, without the value ever reaching you. The user clicks to allow each paste in the Flintrail extension, which shows the site and the secret\'s name: a refusal is final, do not try another way. Only in the user\'s own browsers, over HTTPS, in a visible text or password field of the page itself, and not in a tab where you ran JavaScript. Afterwards the page refuses scripts and screenshots until it loads another page.',
+    description: 'Type a secret from the user\'s vault (a token stored with fl_capture_secret, an API key) into one field of a tab, without the value ever reaching you. The user clicks to allow each paste in the Flintrail extension, which shows the site and the secret\'s name, unless they turned these questions off there: a refusal is final, do not try another way. Only in the user\'s own browsers, over HTTPS, in a visible text or password field of the page itself, and not in a tab where you ran JavaScript. Afterwards the page refuses scripts and screenshots until it loads another page.',
     inputSchema: {
       tab: z.string(),
       ref: z.string().optional().describe('The field, from the snapshot (eN).'),
