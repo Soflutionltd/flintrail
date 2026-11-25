@@ -3,27 +3,30 @@
 <head>
 <meta charset="utf-8">
 <title>Flintrail: your answer</title>
+<link rel="stylesheet" href="ui.css">
 <style>
-  :root { --bg:#0E1116; --card:#161B23; --line:#262E3B; --text:#E8ECF2; --muted:#8B95A7; --accent:#FF6A1A; }
-  * { box-sizing:border-box; }
-  body { margin:0; padding:18px; background:var(--bg); color:var(--text); font:14px/1.5 Inter,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
-  h1 { font-size:16px; margin:0 0 12px; } h1 span { color:var(--accent); }
-  dl { margin:0 0 16px; padding:12px; background:var(--card); border:1px solid var(--line); border-radius:10px; display:grid; grid-template-columns:auto 1fr; gap:4px 12px; }
-  dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
+  body { padding: 22px 20px 0; background: var(--page); }
+  .brand { margin-bottom: 14px; }
+  .brand img { width: 22px; height: 22px; }
+  .brand b { font-size: 13px; color: var(--ink-muted); font-weight: 500; }
+  h1 { margin: 0 0 16px; font-size: 17px; font-weight: 600; line-height: 1.3; letter-spacing: -0.02em; text-wrap: balance; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; }
+  dt, dd { padding: 10px 14px; }
+  dt { color: var(--ink-muted); }
+  dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+  dt + dd ~ dt, dt + dd ~ dt + dd { border-top: 0.5px solid var(--hairline); }
   /* The answer stays in view, whatever the text above it or the browser's own bar take. */
-  .row { display:flex; gap:8px; position:sticky; bottom:0; padding:8px 0; background:var(--bg); }
-  button { flex:1; padding:10px; border:0; border-radius:8px; font:600 14px inherit; font-family:inherit; cursor:pointer; }
-  #allow { background:var(--accent); color:var(--bg); } #deny { background:transparent; border:1px solid var(--line); color:var(--text); }
-  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  button:disabled { opacity:.5; cursor:default; }
-  p { color:var(--muted); font-size:12px; margin:10px 0 0; }
+  .answer { position: sticky; bottom: 0; display: flex; gap: 10px; margin: 0 -20px; padding: 16px 20px 18px; background: linear-gradient(to top, var(--page) 78%, rgb(245 245 247 / 0)); }
+  .answer button { flex: 1; padding: 10px 14px; font-size: 14px; }
+  p#note { margin: 14px 0 0; font-size: 12px; color: var(--ink-muted); }
 </style>
 </head>
 <body>
-  <h1><span>Flintrail</span> wants to fill a saved login</h1>
-  <dl><dt id="l-domain">Website</dt><dd id="domain"></dd><dt id="l-item">Login</dt><dd id="item"></dd><dt id="l-fields">Fields</dt><dd id="fields"></dd></dl>
-  <div class="row"><button id="deny" type="button" disabled>Refuse</button><button id="allow" type="button" disabled>Allow</button></div>
+  <div class="brand"><img src="icons/48.png" alt="" draggable="false"><b>Flintrail</b></div>
+  <h1>Flintrail wants to fill a saved login</h1>
+  <div class="card"><dl><dt id="l-domain">Website</dt><dd id="domain"></dd><dt id="l-item">Login</dt><dd id="item"></dd><dt id="l-fields">Fields</dt><dd id="fields"></dd></dl></div>
   <p id="note">The agent never sees the password. No answer within 2 minutes means no.</p>
+  <div class="answer"><button id="deny" type="button" disabled>Refuse</button><button id="allow" type="button" class="primary" disabled>Allow</button></div>
 <script src="confirm.js"></script>
 </body>
 </html>

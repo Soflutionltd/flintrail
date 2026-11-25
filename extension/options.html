@@ -4,85 +4,110 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flintrail settings</title>
+<link rel="stylesheet" href="ui.css">
 <style>
-  :root { --bg:#0E1116; --card:#161B23; --line:#262E3B; --text:#E8ECF2; --muted:#8B95A7; --accent:#FF6A1A; --ok:#2FBF71; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
-  main { max-width:720px; margin:0 auto; padding:32px 16px 48px; }
-  h1 { font-size:22px; margin:0 0 4px; letter-spacing:-.3px; } h1 span { color:var(--accent); }
-  p.lead { color:var(--muted); margin:0 0 24px; }
-  section { padding:18px; margin-bottom:16px; background:var(--card); border:1px solid var(--line); border-radius:12px; }
-  h2 { margin:0 0 12px; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
-  label.switch { display:flex; gap:12px; align-items:flex-start; padding:8px 0; cursor:pointer; }
-  label.switch input { margin-top:3px; accent-color:var(--accent); width:16px; height:16px; flex:none; }
-  label.switch small { display:block; color:var(--muted); }
-  textarea { width:100%; min-height:96px; padding:9px 11px; margin-top:8px; background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--text); font:13px/1.5 ui-monospace,Menlo,monospace; }
-  textarea:disabled { opacity:.45; }
-  textarea:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
-  .fixed li { margin:4px 0; color:var(--muted); }
-  #saved, #savedTabs { color:var(--ok); font-size:12px; min-height:18px; margin-top:8px; }
-  p.note { color:var(--muted); font-size:13px; margin:12px 0 0; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-weight:600; }
-  .scroll { overflow-x:auto; }
-  #empty { color:var(--muted); }
-  button { padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--text); font:inherit; cursor:pointer; }
+  body { font-size: 13px; }
+  main { max-width: 640px; margin: 0 auto; padding: 44px 20px 64px; }
+  header.page { margin: 0 0 30px; }
+  header.page .brand img { width: 32px; height: 32px; }
+  header.page h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.025em; }
+  header.page p { max-width: 58ch; margin: 10px 0 0; font-size: 13px; color: var(--ink-muted); }
+  .block > .note:first-child { margin-top: 0; }
+  .block textarea { margin-top: 8px; }
+  .rules { margin: 0; padding: 4px 14px; list-style: none; }
+  .rules li { display: flex; gap: 10px; padding: 9px 0; color: var(--ink-soft); }
+  .rules li + li { border-top: 0.5px solid var(--hairline); }
+  .rules svg { flex: none; width: 16px; height: 16px; margin-top: 1px; color: var(--on); }
+  .table { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 9px 14px; text-align: left; vertical-align: top; }
+  th { font-weight: 500; color: var(--ink-muted); }
+  tbody tr { border-top: 0.5px solid var(--hairline); }
+  #empty { margin: 0; padding: 12px 14px; color: var(--ink-muted); }
+  .actions { display: flex; justify-content: flex-end; padding: 10px 14px; border-top: 0.5px solid var(--hairline); }
 </style>
 </head>
 <body>
 <main>
-  <h1>Flint<span>rail</span> settings</h1>
-  <p class="lead">Passwords and one-time codes Flintrail fills from your password manager (1Password, Bitwarden...) in this browser. Only you can change these settings: no agent can, through Flintrail.</p>
+  <header class="page">
+    <div class="brand"><img src="icons/48.png" alt="" draggable="false"><h1>Flintrail settings</h1></div>
+    <p>Passwords and one-time codes Flintrail fills from your password manager (1Password, Bitwarden…) in this browser. Only you can change these settings: no agent can, through Flintrail.</p>
+  </header>
 
-  <section>
+  <section class="group">
     <h2>Password filling</h2>
-    <label class="switch"><input type="checkbox" id="enabled"><span>Fill saved passwords<small>Off: Flintrail never fills a password in this browser.</small></span></label>
-    <label class="switch"><input type="checkbox" id="confirm"><span>Ask me before each fill<small>A Flintrail window shows the website and the login. Only your click answers; no answer within 2 minutes means no.</small></span></label>
-    <label class="switch"><input type="checkbox" id="totp"><span>Fill one-time codes (TOTP)<small>Off: Flintrail fills the password, and the agent asks you for the code.</small></span></label>
-    <label class="switch"><input type="checkbox" id="capture"><span>Capture secrets shown on a page<small>A token a site shows once (GitHub, Cloudflare...) goes straight into your vault, never to the agent. You confirm an unknown kind, a 1Password vault, or replacing a saved name.</small></span></label>
-    <label class="switch"><input type="checkbox" id="askSecrets"><span>Ask me before capturing or pasting a secret<small>On: a Flintrail window asks you for an unknown kind, a 1Password vault, replacing a saved name, and every paste. Off: the agent captures and pastes without asking, each one still listed in the history below.</small></span></label>
+    <div class="card">
+      <label class="row"><span class="text"><span class="title">Fill saved passwords</span><small>Off: Flintrail never fills a password in this browser.</small></span><input type="checkbox" class="switch" id="enabled"></label>
+      <label class="row"><span class="text"><span class="title">Ask me before each fill</span><small>A Flintrail window shows the website and the login. Only your click answers; no answer within 2 minutes means no.</small></span><input type="checkbox" class="switch" id="confirm"></label>
+      <label class="row"><span class="text"><span class="title">Fill one-time codes (TOTP)</span><small>Off: Flintrail fills the password, and the agent asks you for the code.</small></span><input type="checkbox" class="switch" id="totp"></label>
+    </div>
   </section>
 
-  <section>
+  <section class="group">
+    <h2>Secrets</h2>
+    <div class="card">
+      <label class="row"><span class="text"><span class="title">Capture secrets shown on a page</span><small>A token a site shows once (GitHub, Cloudflare…) goes straight into your vault, never to the agent.</small></span><input type="checkbox" class="switch" id="capture"></label>
+      <label class="row"><span class="text"><span class="title">Ask me before capturing or pasting a secret</span><small>On: a Flintrail window asks you for an unknown kind, a 1Password vault, replacing a saved name, and every paste. Off: the agent captures and pastes without asking, each one still listed in the history.</small></span><input type="checkbox" class="switch" id="askSecrets"></label>
+    </div>
+  </section>
+
+  <section class="group">
     <h2>Websites</h2>
-    <label class="switch"><input type="checkbox" id="allDomains"><span>Every website<small>Off: only the domains below, one per line (example.com also covers its subdomains).</small></span></label>
-    <textarea id="domains" aria-label="Allowed domains" placeholder="github.com&#10;cloudflare.com"></textarea>
-    <div id="saved" role="status"></div>
+    <div class="card">
+      <label class="row"><span class="text"><span class="title">Every website</span><small>Off: only the domains below, one per line (example.com also covers its subdomains).</small></span><input type="checkbox" class="switch" id="allDomains"></label>
+      <div class="block">
+        <textarea id="domains" aria-label="Allowed domains" placeholder="github.com&#10;cloudflare.com"></textarea>
+        <div id="saved" class="status ok" role="status"></div>
+      </div>
+    </div>
   </section>
 
-  <section>
+  <section class="group">
     <h2>Password manager vaults</h2>
-    <p class="note">Empty: every vault your password manager opens (1Password). Otherwise only these vaults, one per line, as named in the manager.</p>
-    <textarea id="vaultsAllow" aria-label="Only these vaults" placeholder="Work&#10;Clients"></textarea>
-    <p class="note">Never these vaults, one per line.</p>
-    <textarea id="vaultsDeny" aria-label="Never these vaults" placeholder="Private"></textarea>
+    <div class="card">
+      <div class="block">
+        <p class="note">Only these vaults, one per line, as named in the manager. Empty: every vault your password manager opens.</p>
+        <textarea id="vaultsAllow" aria-label="Only these vaults" placeholder="Work&#10;Clients"></textarea>
+      </div>
+      <div class="block">
+        <p class="note">Never these vaults, one per line.</p>
+        <textarea id="vaultsDeny" aria-label="Never these vaults" placeholder="Private"></textarea>
+      </div>
+    </div>
   </section>
 
-  <section>
+  <section class="group">
     <h2>Your open tabs</h2>
-    <label class="switch"><input type="checkbox" id="adoptOpenTabs"><span>Agents may take over a tab I have open<small>An agent asks for a tab by its address (fl_adopt) and drives it, without you sharing it first. Off: share the tab from the Flintrail popup.</small></span></label>
-    <p class="note">Never these sites, one per line (example.com also covers its subdomains). Add your banks here.</p>
-    <textarea id="neverAdopt" aria-label="Sites agents never take over"></textarea>
-    <div id="savedTabs" role="status"></div>
+    <div class="card">
+      <label class="row"><span class="text"><span class="title">Agents may take over a tab I have open</span><small>An agent asks for a tab by its address and drives it, without you sharing it first. Off: share the tab from the Flintrail popup.</small></span><input type="checkbox" class="switch" id="adoptOpenTabs"></label>
+      <div class="block">
+        <p class="note">Never these sites, one per line (example.com also covers its subdomains). Add your banks here.</p>
+        <textarea id="neverAdopt" aria-label="Sites agents never take over"></textarea>
+        <div id="savedTabs" class="status ok" role="status"></div>
+      </div>
+    </div>
   </section>
 
-  <section class="fixed">
+  <section class="group">
     <h2>Always, whatever the settings</h2>
-    <ul>
-      <li>A login is filled only on the website it is saved for.</li>
-      <li>Never over plain HTTP.</li>
-      <li>Only in password and code fields, never in a free text field.</li>
-      <li>Never a payment card or bank details.</li>
-      <li>The agent never receives a password or a code.</li>
-    </ul>
+    <div class="card">
+      <ul class="rules">
+        <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>A login is filled only on the website it is saved for.</li>
+        <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>Never over plain HTTP.</li>
+        <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>Only in password and code fields, never in a free text field.</li>
+        <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>Never a payment card or bank details.</li>
+        <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>The agent never receives a password or a code.</li>
+      </ul>
+    </div>
   </section>
 
-  <section>
+  <section class="group">
     <h2>History</h2>
-    <div class="scroll"><table><thead><tr><th>When</th><th>Website</th><th>Login</th><th>Filled</th><th>Approval</th></tr></thead><tbody id="history"></tbody></table></div>
-    <p id="empty">No fill yet.</p>
-    <button id="clear" type="button">Clear the history</button>
+    <div class="card">
+      <div class="table"><table><thead><tr><th>When</th><th>Website</th><th>Login</th><th>Filled</th><th>Approval</th></tr></thead><tbody id="history"></tbody></table></div>
+      <p id="empty">No fill yet.</p>
+      <div class="actions"><button id="clear" type="button">Clear the history</button></div>
+    </div>
   </section>
 </main>
 <script src="options.js"></script>

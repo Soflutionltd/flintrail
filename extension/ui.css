@@ -1,0 +1,89 @@
+/* Flintrail extension pages: light, quiet, in the manner of macOS System Settings. One stylesheet for the popup,
+   the settings page and the confirmation window. */
+:root {
+  --page: #f5f5f7;
+  --card: #ffffff;
+  --ink: #1d1d1f;
+  --ink-soft: #424245;
+  --ink-muted: #6e6e73;
+  --hairline: rgb(0 0 0 / 0.08);
+  --fill: #e8e8ed;
+  --fill-strong: #dcdce1;
+  --accent: #0071e3;
+  --accent-strong: #0062c4;
+  --on: #34c759;
+  --danger: #d70015;
+  --warn: #c93400;
+  --radius: 14px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 13px/1.45 var(--font); letter-spacing: -0.01em; caret-color: var(--accent); }
+::selection { background: rgb(0 113 227 / 0.18); }
+a { color: #0066cc; text-decoration: none; text-underline-offset: 2px; }
+a:hover { text-decoration: underline; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgb(0 0 0 / 0.18); border: 3px solid transparent; border-radius: 10px; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+:focus-visible { outline: 3px solid rgb(0 113 227 / 0.45); outline-offset: 1px; border-radius: 8px; }
+
+/* Brand: the icon and the name, in ink. */
+.brand { display: flex; align-items: center; gap: 10px; user-select: none; -webkit-user-select: none; }
+.brand img { width: 26px; height: 26px; -webkit-user-drag: none; }
+.brand b { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
+
+/* Groups: a heading above a white card of rows, as in System Settings. */
+.group { margin: 0 0 22px; }
+.group > h2 { margin: 0 0 7px 4px; font-size: 13px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+.card { background: var(--card); border-radius: var(--radius); box-shadow: 0 0 0 0.5px var(--hairline), 0 1px 2px rgb(0 0 0 / 0.04); }
+.row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; }
+.row + .row, .card > .block + .block, .card > .row + .block, .card > .block + .row { border-top: 0.5px solid var(--hairline); }
+.row .text { flex: 1; min-width: 0; }
+.row .title { display: block; font-size: 13px; color: var(--ink); }
+.row small, .note { display: block; margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--ink-muted); }
+.block { padding: 12px 14px; }
+label.row { cursor: pointer; }
+
+/* Switch: a real checkbox, drawn the Apple way. */
+input.switch { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 38px; height: 22px; margin: 0; border-radius: 11px; background: var(--fill-strong); cursor: pointer; transition: background-color .2s ease-out; }
+input.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.2), 0 2px 6px rgb(0 0 0 / 0.08); transition: transform .22s cubic-bezier(.2, .8, .2, 1); }
+input.switch:checked { background: var(--on); }
+input.switch:checked::after { transform: translateX(16px); }
+input.switch:focus-visible { outline: 3px solid rgb(0 113 227 / 0.45); outline-offset: 2px; border-radius: 11px; }
+
+/* Fields. */
+input[type=text], input[type=password], input:not([type]), textarea {
+  width: 100%; padding: 8px 10px; background: var(--card); border: 0.5px solid rgb(0 0 0 / 0.14); border-radius: 8px;
+  color: var(--ink); font: 13px/1.4 var(--font); transition: border-color .15s ease-out, box-shadow .15s ease-out;
+}
+textarea { min-height: 88px; resize: vertical; font: 12px/1.55 var(--mono); }
+input::placeholder, textarea::placeholder { color: var(--ink-muted); }
+input:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgb(0 113 227 / 0.2); }
+textarea:disabled, input:disabled { background: var(--page); color: var(--ink-muted); }
+
+/* Buttons: a filled blue action, a quiet grey one. */
+button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px; border: 0; border-radius: 999px;
+  background: var(--fill); color: var(--ink); font: 500 13px/1.2 var(--font); letter-spacing: -0.01em; cursor: pointer;
+  transition: background-color .15s ease-out, transform .15s ease-out; }
+button:hover { background: var(--fill-strong); }
+button:active { transform: scale(0.98); }
+button.primary { background: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-strong); }
+button.record { background: var(--danger); color: #fff; }
+button.record:hover { background: #b80012; }
+button:disabled { opacity: .45; cursor: default; transform: none; }
+.hidden { display: none !important; }
+
+/* Status text. */
+.status { margin-top: 8px; font-size: 12px; color: var(--ink-muted); }
+.status:empty { display: none; }
+.status.ok { color: #1b7f3b; }
+.status.alert { color: var(--danger); font-weight: 500; }
+
+@media (prefers-reduced-motion: reduce) {
+  input.switch, input.switch::after, button { transition: none; }
+}
