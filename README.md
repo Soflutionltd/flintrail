@@ -354,6 +354,8 @@ npm run pack:extension                 # flintrail-extension-<version>.zip
 npm run bench                          # benchmark vs Playwright MCP
 ```
 
+Publishing the extension to the Chrome Web Store goes through its API with a Google Cloud service account added in the Developer Dashboard (Settings, Service account): `CWS_SERVICE_ACCOUNT_KEY='<key JSON>' npm run publish:extension` packs the store zip, uploads it and submits it for review (`node scripts/publish-extension.mjs status` shows where the item stands). The key can also come on standard input with `--key -`; it is never written to disk.
+
 ## Roadmap
 
 - Chrome Web Store and Edge Add-ons listings for the extension.

@@ -23,6 +23,7 @@
     "bench:tasks": "npm run build && npm --prefix bench install --no-audit --no-fund --no-package-lock && node bench/tasks.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pack:extension": "npm run build && node scripts/build-extension.mjs --zip",
+    "publish:extension": "npm run pack:extension && node scripts/publish-extension.mjs release",
     "prepare": "npm run build"
   },
   "keywords": [
