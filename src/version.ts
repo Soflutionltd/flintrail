@@ -1,2 +1,2 @@
 /** Flintrail version, kept in step with package.json. */
-export const VERSION = '1.5.10';
+export const VERSION = '1.5.11';
