@@ -331,6 +331,16 @@ function siteOf(address: string): string {
   }
 }
 
+/** Where a tab of this conversation was before fl_open brought it to another page of its site. */
+const reusedFrom = new Map<string, string>();
+
+/** The address a tab was on when the last fl_open reused it, told once to the agent: the page it held is gone. */
+export function takeReusedFrom(id: string): string | undefined {
+  const from = reusedFrom.get(id);
+  reusedFrom.delete(id);
+  return from;
+}
+
 /** The tab of this conversation showing this site in this browser, if any. */
 function ownTabOn(where: Driven, site: string): { id: string; page: Page } | null {
   for (const [id, page] of tabs) {
@@ -341,7 +351,8 @@ function ownTabOn(where: Driven, site: string): { id: string; page: Page } | nul
 
 /**
  * Is this site already open in the user's browser? Asked to the extension, which sees every tab of the
- * profile, driven or not; an extension too old to list its tabs leaves the tabs this process can see.
+ * profile, driven or not. An extension too old to list its tabs, or a relay that does not answer, leaves only
+ * the tabs this process drives: the user's other tabs are then not seen and the new tab is let through.
  */
 async function siteOpenIn(where: Driven, site: string): Promise<boolean> {
   const listed = await getRelayClient()?.request('tabs', { key: where.name }, 5000).catch(() => null) as { origin?: string }[] | null | undefined;
@@ -379,6 +390,7 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
     // A tab this conversation already drives on that site goes to the page asked for: no second tab of it.
     const own = wanted && !placement.evenIfSiteOpen ? ownTabOn(where, wanted) : null;
     if (own) {
+      reusedFrom.set(own.id, own.page.url());
       await gotoFast(own.page, url);
       recorder.onOpen(url);
       return own.id;

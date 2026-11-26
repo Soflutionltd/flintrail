@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from 'playwright-core';
 import { z } from 'zod';
-import { act, adoptTab, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { captureSecret } from './capture.js';
@@ -109,7 +109,7 @@ export function buildServer(): McpServer {
   const s = new McpServer({ name: 'flintrail', version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
   s.registerTool('fl_open', {
-    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, a tab already showing this address, or any tab of the same site, is taken over and brought to the address instead of opening another one. newTab and newWindow are refused while the site is already open there, unless evenIfSiteOpen is set; window picks one of its windows (ids from fl_extension tabs:true). Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, a tab already showing this address, or any tab of the same site, is taken over and brought to the address instead of opening another one. newTab and newWindow are refused while the site is already open there, unless evenIfSiteOpen is set. window picks one of its windows (ids from fl_extension tabs:true): a choice of yours, so the tab opens there even when the site is open elsewhere. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
     inputSchema: {
       url: z.string(), browser: browserOpt,
       window: z.number().int().optional().describe('User browser only: open the tab in this window (id from fl_extension tabs:true).'),
@@ -120,7 +120,9 @@ export function buildServer(): McpServer {
     },
   }, guard(async ({ url, browser, window, newWindow, newTab, evenIfSiteOpen, text: t, max, within }) => {
     const id = await openTab(url, browser, { window, newWindow, evenIfSiteOpen }, !newTab);
-    return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max, within }));
+    const from = takeReusedFrom(id);
+    const reused = from ? `Tab ${id} was already yours, on ${from}: it went to this address, so that page and its refs are gone. For a second tab of the site, pass evenIfSiteOpen:true.\n` : '';
+    return `Tab ${id} [${tabBrowser(id)}]\n${reused}` + (await snapshot(getTab(id), { text: t, max, within }));
   }));
 
   s.registerTool('fl_adopt', {

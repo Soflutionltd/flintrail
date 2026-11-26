@@ -250,6 +250,7 @@ test('fl_open brings the tab this conversation already drives to another page of
   const before = await count();
   const second = await mcp.call('fl_open', { url: site.url + '/search?q=next', browser: 'chromium', text: 0 });
   assert.equal(/Tab (t\d+)/.exec(second)[1], tab, 'the same tab');
+  assert.match(second, new RegExp(`Tab ${tab} was already yours, on .*/details: it went to this address`), 'the agent is told the page it held is gone');
   assert.match(second, /URL: .*\/search\?q=next/);
   assert.equal(await count(), before, 'no second tab of the site');
   await assert.rejects(
