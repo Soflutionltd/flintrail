@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { startFixture } from './fixture.mjs';
 import { connect, testEnv } from './helpers.mjs';
+// The extension's own version, as it reports it: a test never pins a release's number.
+const EXT_VERSION = JSON.parse(readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8')).version.replaceAll('.', '\\.');
 
 const extPath = new URL('../extension', import.meta.url).pathname;
 let site, mcp, ctx, userDataDir;
@@ -64,7 +66,7 @@ after(async () => {
 
 test('a connected browser is named after its profile, and picked by that name', async () => {
   const listed = await mcp.call('fl_extension');
-  assert.match(listed, /^chromium-soflution: Extension connected \(Chromium, profile "Soflution", extension 1\.5\.14\)/m);
+  assert.match(listed, new RegExp(String.raw`^chromium-soflution: Extension connected \(Chromium, profile "Soflution", extension ${EXT_VERSION}\)`, 'm'));
   const snap = await mcp.call('fl_open', { url: site.url, browser: 'Soflution', text: 0 });
   assert.match(snap, /^Tab t\d+ \[chromium-soflution\]/);
   await mcp.call('fl_close', { tab: tabId(snap) });

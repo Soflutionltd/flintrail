@@ -12,6 +12,10 @@ import { chromium } from 'playwright-core';
 import { WebSocket } from 'ws';
 import { startFixture } from './fixture.mjs';
 import { connect, testEnv } from './helpers.mjs';
+import { readFileSync } from 'node:fs';
+
+// The extension's own version, as it reports it: a test never pins a release's number.
+const EXT_VERSION = JSON.parse(readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8')).version.replaceAll('.', '\\.');
 
 const extPath = new URL('../extension', import.meta.url).pathname;
 const token = 'multi-client-' + Math.random().toString(36).slice(2);
@@ -115,7 +119,7 @@ test('the user names a browser, agents pick it by that name and see its open sit
     ws = null;
     await connect();
   });
-  await waitFor(async () => /chromium-ideekdo: Extension connected \(Chromium "IdéeKdo", extension 1\.5\.14\)/.test(await a.call('fl_extension')));
+  await waitFor(async () => new RegExp(String.raw`chromium-ideekdo: Extension connected \(Chromium "IdéeKdo", extension ${EXT_VERSION}\)`).test(await a.call('fl_extension')));
   const snap = await a.call('fl_open', { url: site.url, browser: 'IdéeKdo', text: 0 });
   assert.match(snap, /^Tab t\d+ \[chromium-ideekdo\]/);
   const listed = await b.call('fl_extension', { tabs: true });
