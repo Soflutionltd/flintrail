@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { buildServer, SERVER_INSTRUCTIONS } from '../dist/server.js';
+import { buildServer, EXTENSION_URL, SERVER_INSTRUCTIONS } from '../dist/server.js';
 
 test('the server sends its instructions at connection', async () => {
   const server = buildServer();
@@ -16,6 +16,9 @@ test('the server sends its instructions at connection', async () => {
   assert.match(instructions, /fl_extension/);
   assert.match(instructions, /ask the user which one/);
   assert.match(instructions, /Connected to Flintrail/);
+  // With no browser connected, the user is given the extension's own link right away.
+  assert.ok(instructions.includes(`give them its link: ${EXTENSION_URL}`));
+  assert.match(EXTENSION_URL, /^https:\/\/chromewebstore\.google\.com\/detail\/flintrail\//);
   await client.close();
   await server.close();
 });

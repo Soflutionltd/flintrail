@@ -92,12 +92,15 @@ const snapOpts = {
  * Sent to every MCP client at connection (initialize result): the agent reads it before its first
  * browser task, whatever the client (Claude, Cursor, Codex...), with or without a hub in between.
  */
+/** The Flintrail extension in the Chrome Web Store: what the agent hands the user to connect their own browser. */
+export const EXTENSION_URL = 'https://chromewebstore.google.com/detail/flintrail/amgonogobcfmneginonbkfjlbbnecchp';
+
 export const SERVER_INSTRUCTIONS = [
   'Flintrail drives a dedicated browser ("agent") or the user\'s own browsers through the Flintrail extension.',
   'Before the first browser task of a conversation, call fl_extension to see which user browsers are connected and which profiles are installed but not open.',
   '- Several user browsers connected: ask the user which one to work in (each is named after its profile or the name set in the extension, e.g. "brave-soflution"), unless they already named it. Remember the answer for the rest of the conversation.',
   '- Exactly one connected: use it, and say which one in one line.',
-  '- None connected and the task needs the user\'s sessions (an account they are signed in to): tell the user how to connect one: install the Flintrail extension in that browser profile (Chrome Web Store, or Load unpacked from the release zip in <brand>://extensions with Developer mode on), open its popup, check it shows "Connected to Flintrail" with a green dot (otherwise click Connect), optionally give the browser a name, then retry. Otherwise use the dedicated "agent" browser.',
+  '- None connected: right away, tell the user to install the Flintrail extension in the browser and profile they use, and give them its link: ' + EXTENSION_URL + ' (Chrome, Edge, Brave, Arc; or Load unpacked from the release zip in <brand>://extensions with Developer mode on). Then they open its popup, check it shows "Connected to Flintrail" with a green dot (otherwise click Connect), and optionally give the browser a name. Until one is connected, a task that needs their sessions (an account they are signed in to) waits for it; any other task runs in the dedicated "agent" browser.',
   'Never switch to another profile of the user than the one agreed, and never sign in for them by typing a password: use fl_login (their password manager) or let them sign in by hand.',
   'Prefer fl_adopt on a tab the user already opened, then fl_open; batch steps in fl_act; read with fl_snapshot rather than screenshots.',
 ].join('\n');

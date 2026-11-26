@@ -12,9 +12,14 @@
 <p align="center">
   <a href="https://github.com/Soflutionltd/flintrail/actions/workflows/ci.yml"><img src="https://github.com/Soflutionltd/flintrail/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-FF6A1A" alt="MCP">
-  <img src="https://img.shields.io/badge/Chrome-extension-4285F4" alt="Chrome extension">
+  <a href="https://chromewebstore.google.com/detail/flintrail/amgonogobcfmneginonbkfjlbbnecchp"><img src="https://img.shields.io/chrome-web-store/v/amgonogobcfmneginonbkfjlbbnecchp?label=Chrome%20Web%20Store&color=4285F4" alt="Chrome Web Store"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A520-3FB950" alt="Node 20+">
   <img src="https://img.shields.io/badge/license-MIT-8B95A7" alt="MIT">
+</p>
+
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/flintrail/amgonogobcfmneginonbkfjlbbnecchp"><b>Install the Flintrail extension from the Chrome Web Store</b></a>: one click, and your agent drives your own browser, with your sessions.<br>
+  Works in Chrome, Edge, Brave and Arc.
 </p>
 
 <p align="center">
@@ -356,7 +361,7 @@ npm run bench                          # benchmark vs Playwright MCP
 
 ## Roadmap
 
-- Chrome Web Store and Edge Add-ons listings for the extension.
+- An Edge Add-ons listing for the extension (it already installs in Edge from the Chrome Web Store).
 - Automatic promotion of recorded UI steps to API steps when the captured call is replay-safe.
 - Shared flow library for common sites.
 - Visual diff on replay failure.
