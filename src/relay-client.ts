@@ -214,6 +214,11 @@ export class RelayClient {
     return this.browsers.filter((b) => b.profile && (slug(b.profile) === s || `${b.key.split('-')[0]}-${slug(b.profile)}` === s));
   }
 
+  /** Names of the user browsers connected right now. */
+  connectedNames(): string[] {
+    return this.browsers.map((b) => b.key);
+  }
+
   /** A browser by name, label or profile, or the first connected one when no name is given. Never guesses between two. */
   find(key?: string): BrowserInfo | undefined {
     if (!key) return this.browsers[0];

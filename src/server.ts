@@ -88,8 +88,22 @@ const snapOpts = {
   within: z.string().optional().describe('List only the part of the page around this text (a row, a card, a section), or "dialog" for the open dialog. An open modal dialog is listed by itself unless within is "page".'),
 };
 
+/**
+ * Sent to every MCP client at connection (initialize result): the agent reads it before its first
+ * browser task, whatever the client (Claude, Cursor, Codex...), with or without a hub in between.
+ */
+export const SERVER_INSTRUCTIONS = [
+  'Flintrail drives a dedicated browser ("agent") or the user\'s own browsers through the Flintrail extension.',
+  'Before the first browser task of a conversation, call fl_extension to see which user browsers are connected and which profiles are installed but not open.',
+  '- Several user browsers connected: ask the user which one to work in (each is named after its profile or the name set in the extension, e.g. "brave-soflution"), unless they already named it. Remember the answer for the rest of the conversation.',
+  '- Exactly one connected: use it, and say which one in one line.',
+  '- None connected and the task needs the user\'s sessions (an account they are signed in to): tell the user how to connect one: install the Flintrail extension in that browser profile (Chrome Web Store, or Load unpacked from the release zip in <brand>://extensions with Developer mode on), open its popup, check it shows "Connected to Flintrail" with a green dot (otherwise click Connect), optionally give the browser a name, then retry. Otherwise use the dedicated "agent" browser.',
+  'Never switch to another profile of the user than the one agreed, and never sign in for them by typing a password: use fl_login (their password manager) or let them sign in by hand.',
+  'Prefer fl_adopt on a tab the user already opened, then fl_open; batch steps in fl_act; read with fl_snapshot rather than screenshots.',
+].join('\n');
+
 export function buildServer(): McpServer {
-  const s = new McpServer({ name: 'flintrail', version: VERSION });
+  const s = new McpServer({ name: 'flintrail', version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
   s.registerTool('fl_open', {
     description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, a tab already showing this address (or a page under it) is taken over instead of opening another one (newTab:true forces a new tab), window picks one of its windows (ids from fl_extension tabs:true) and newWindow opens a new window. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',

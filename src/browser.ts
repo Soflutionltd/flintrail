@@ -154,7 +154,15 @@ async function findOrOpen(relay: RelayClient, name: string | undefined) {
   try {
     return await relay.waitFor(name, Math.max(config.extensionWaitMs, 45000));
   } catch {
-    throw new Error(`Opened ${profile.brand} profile "${profile.name}", but its Flintrail extension did not connect. Install the extension in that profile (${profile.brand}://extensions), then try again.`);
+    const others = relay.connectedNames();
+    throw new Error(
+      `Opened ${profile.brand} profile "${profile.name}", but its Flintrail extension did not connect. ` +
+        `Ask the user to open that profile, check the Flintrail extension is installed and enabled (${profile.brand}://extensions), ` +
+        `then open its popup: it must show "Connected to Flintrail" with a green dot (click Connect otherwise). ` +
+        (others.length
+          ? `Browsers connected right now: ${others.join(', ')}. Use one of them only if the user agrees.`
+          : 'No user browser is connected right now; the dedicated "agent" browser is available.')
+    );
   }
 }
 
