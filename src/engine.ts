@@ -57,6 +57,8 @@ export interface Action {
   item?: string;
   /** login: the account the user asked for; a saved login for another account is refused. */
   account?: string;
+  /** login: the identifier typed instead of the saved login's own (never a secret). */
+  username?: string;
   submit?: boolean;
 }
 

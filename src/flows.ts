@@ -88,7 +88,7 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, t
       // A step may have led to a site outside the user's list: stop there, do and read nothing more.
       assertAllowed(p.url());
       if (s.do === 'login') {
-        await signIn(p, { item: s.item, source: s.source, submit: s.submit, account: s.account });
+        await signIn(p, { item: s.item, source: s.source, submit: s.submit, account: s.account, username: s.username });
         continue;
       }
       if (!s.target) {

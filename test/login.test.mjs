@@ -134,6 +134,19 @@ describe('1Password CLI source', () => {
     await mcp.call('fl_close', { tab: fresh });
   });
 
+  test('types another identifier than the saved login\'s, only with that login named: the password still comes from it', async () => {
+    const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
+    await assert.rejects(mcp.call('fl_login', { tab, username: 'new@example.com' }), /username needs item/);
+    await assert.rejects(mcp.call('fl_login', { tab, item: 'fixture1', username: 'new@example.com', account: 'other@example.com' }), /username new@example\.com is not the account the user asked for/);
+    const out = await mcp.call('fl_login', { tab, item: 'fixture1', username: 'new@example.com', account: 'new@example.com' });
+    assert.match(out, /1password login "Fixture shop".*filled username \(the one you gave\), password, one-time code, submitted/);
+    await mcp.call('fl_act', { tab, actions: [{ do: 'wait', text: 'Wrong credentials' }] });
+    const net = await mcp.call('fl_network', { filter: '/api/login' });
+    assert.match(net, /"email":"new@example\.com","password":"•••"/);
+    assert.ok(!leaks(out + net));
+    await mcp.call('fl_close', { tab });
+  });
+
   test('never fills a payment card or bank item', async () => {
     const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
     await assert.rejects(mcp.call('fl_login', { tab, item: 'Company card' }), /No saved login "Company card"/);

@@ -152,6 +152,7 @@ export function buildServer(): McpServer {
     inputSchema: {
       tab: z.string(),
       item: z.string().optional().describe('Login ID, title or username in a password manager CLI, when several match the site.'),
+      username: z.string().optional().describe('With item only: the identifier to type instead of the saved login\'s own, e.g. the account\'s new e-mail when the user just changed it and the password manager still holds the old one. The password still comes from that login.'),
       account: z.string().optional().describe('Username or e-mail of the account the user asked to work on. Set it whenever the user said whose account it is (a client, a colleague, a second account of theirs): a saved login for any other account is then refused instead of used, even when it is the only one for the site.'),
       source: z.string().optional().describe('Only this source: browser, 1password, bitwarden, dashlane, lastpass, protonpass, keepassxc or command.'),
       submit: z.boolean().optional().describe('Press Enter after filling (default true).'),
@@ -159,7 +160,7 @@ export function buildServer(): McpServer {
       reopen: z.boolean().optional().describe('Default true: when this tab ran your JavaScript, or was cut off by another extension (a password manager\'s frame), its page is opened again in a fresh tab and filled there; the answer gives the new tab id. false: refuse instead.'),
       ...snapOpts,
     },
-  }, guard(async ({ tab, item, account, source, submit, field, reopen, text: t, max, within }) => {
+  }, guard(async ({ tab, item, username, account, source, submit, field, reopen, text: t, max, within }) => {
     let id = tab;
     let moved = '';
     let page;
@@ -177,8 +178,8 @@ export function buildServer(): McpServer {
       const old = await retireTab(tab);
       moved = `Tab ${tab} had run your JavaScript, which could catch what gets filled: its page was opened again in tab ${id} and filled there (tab ${tab} ${old}). Use tab ${id} from now on.`;
     }
-    const r = await signIn(page, { item, source, submit, account, field });
-    recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(account ? { account } : {}), ...(submit === false ? { submit } : {}) } as Step);
+    const r = await signIn(page, { item, source, submit, account, field, username });
+    recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(username ? { username: username.trim() } : {}), ...(account ? { account } : {}), ...(submit === false ? { submit } : {}) } as Step);
     await domQuiet(page);
     return `${moved ? `${moved}\nTab ${id} [${tabBrowser(id)}]\n` : ''}${r.text}\n\n${await snapshot(page, { text: t, max, within })}`;
   }));

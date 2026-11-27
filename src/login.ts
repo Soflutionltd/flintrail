@@ -384,7 +384,7 @@ function secretKind(el: Element): 'pass' | 'otp' | null {
 }
 
 /** Asks the user's settings, then fills from a CLI source, only in frames whose domain matches the account's website. */
-async function useAccount(page: Page, account: Account, token: string, ref?: string, expected?: string) {
+async function useAccount(page: Page, account: Account, token: string, ref?: string, expected?: string, username?: string) {
   const sites = sitesOf(account);
   // The tab itself must be on the login's website: a login form framed by another site is not filled.
   const tabSite = siteOf(hostOf(page.url()));
@@ -423,11 +423,13 @@ async function useAccount(page: Page, account: Account, token: string, ref?: str
   try {
     for (const { frame, m, field: named, kind } of targets) {
       const at = (k: string) => named ?? field(frame!, token, k);
-      if (m.user && creds.username) {
+      // The agent may type another identifier than the login's (an account e-mail that just changed): never a secret.
+      const user = username ?? creds.username;
+      if (m.user && user) {
         last = at('user');
         await assertStillOn(last, sites);
-        await last.fill(creds.username, { timeout: TIMEOUT });
-        filled.push('username');
+        await last.fill(user, { timeout: TIMEOUT });
+        filled.push(username !== undefined ? 'username (the one you gave)' : 'username');
       }
       if (m.pass) {
         if (!creds.password) throw new Error(`Login ${label(account)} has no password.`);
@@ -467,9 +469,18 @@ async function useAccount(page: Page, account: Account, token: string, ref?: str
  * Signs in on the visible step of a sign-in form. Sources are tried in the configured order; item (an ID, title or
  * username) or source restrict the choice. Returns what to record in a flow: the source and the account ref, never a secret.
  */
-export async function signIn(page: Page, opts: { item?: string; source?: string; submit?: boolean; account?: string; field?: string }): Promise<{ text: string; source: string; item?: string }> {
-  const expected = opts.account?.trim().toLowerCase() || undefined;
+export async function signIn(page: Page, opts: { item?: string; source?: string; submit?: boolean; account?: string; field?: string; username?: string }): Promise<{ text: string; source: string; item?: string }> {
+  let expected = opts.account?.trim().toLowerCase() || undefined;
   if (opts.account !== undefined && !expected) throw new Error('account is empty: give the username or e-mail of the account the user asked for, or leave it out.');
+  if (opts.username !== undefined) {
+    const u = opts.username.trim();
+    // Only with a login named by the agent: the password then comes from that login, whatever the page shows.
+    if (!opts.item) throw new Error('username needs item: name the saved login whose password goes with it (its ID or title).');
+    if (!u || u.length > 200 || /\s/.test(u)) throw new Error('username must be the identifier to type (an e-mail or a user name), without spaces.');
+    if (expected && u.toLowerCase() !== expected) throw new Error(`Refused: username ${u.slice(0, 80)} is not the account the user asked for (${expected.slice(0, 80)}). Nothing was filled.`);
+    // The saved login holds the old identifier by design: it is not matched against account.
+    expected = undefined;
+  }
   const all = getSources().filter((s) => !opts.source || s.kind === opts.source).filter((s) => !opts.field || s.kind !== 'browser');
   if (!all.length) {
     throw new Error(opts.source ? `Password source "${opts.source}" is not configured in ROCKETWRIGHT_PASSWORDS${opts.field ? ', or cannot fill a named field (browser)' : ''}.`
@@ -485,7 +496,7 @@ export async function signIn(page: Page, opts: { item?: string; source?: string;
   try {
     // A trace or video of this tab is dropped before anything is typed: it would hold the password.
     await beforeSecret(page);
-    return await fillAndSubmit(page, opts, all, expected);
+    return await fillAndSubmit(page, { ...opts, username: opts.username?.trim() }, all, expected);
   } finally {
     loginRunning(page, false);
   }
@@ -503,7 +514,7 @@ function vaultNote(all: SourceSpec[], searched: Searched, rules: VaultRules): st
   return `; ${parts.join('; ')}`;
 }
 
-async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean; field?: string }, all: SourceSpec[], expected?: string): Promise<{ text: string; source: string; item?: string }> {
+async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean; field?: string; username?: string }, all: SourceSpec[], expected?: string): Promise<{ text: string; source: string; item?: string }> {
   const others: string[] = [];
   // A fresh token for this call's field tags: a page cannot prepare an input to receive the secret.
   const token = randomBytes(8).toString('hex');
@@ -520,7 +531,7 @@ async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean
     } else {
       const account = await findAccount(page, s, opts.item, expected, others, rules, searched);
       if (!account) continue;
-      done = await useAccount(page, account, token, opts.field, expected);
+      done = await useAccount(page, account, token, opts.field, expected, opts.username);
       source = account.source;
       item = account.ref;
     }
