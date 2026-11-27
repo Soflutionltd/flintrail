@@ -5,9 +5,10 @@
 //  - the extension's own storage in each profile, where it keeps its instance id (sent in every hello).
 // The same list lets Rocketwright open a browser profile that is not running yet.
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { slug } from './relay-protocol.js';
 
 /** ID fixed by the "key" in extension/manifest.json (unpacked and packed builds). */
@@ -15,6 +16,14 @@ export const EXTENSION_ID = 'hgkglidmccenjlhdcplcpkgbadonplnb';
 
 /** ID of the Chrome Web Store listing: the store signs the extension with its own key. */
 export const STORE_EXTENSION_ID = 'amgonogobcfmneginonbkfjlbbnecchp';
+
+/** The Rocketwright extension in the Chrome Web Store: what the agent hands the user to connect their own browser. */
+export const EXTENSION_STORE_URL = `https://chromewebstore.google.com/detail/rocketwright/${STORE_EXTENSION_ID}`;
+
+/** The extension folder of this installation (next to dist/): what "Load unpacked" and --load-extension point to. */
+export function extensionDir(): string {
+  return fileURLToPath(new URL('../extension', import.meta.url));
+}
 
 export function extensionIds(): string[] {
   const extra = (process.env.ROCKETWRIGHT_EXTENSION_IDS || '').split(',').map((s) => s.trim()).filter((s) => /^[a-p]{32}$/.test(s));
@@ -188,17 +197,98 @@ export function matchProfiles(wanted: string, profiles = localProfiles()): Local
   return profiles.filter((p) => slug(p.name) === w || `${p.brand}-${slug(p.name)}` === w);
 }
 
-/** The command that opens a window of this profile (macOS), or null if Rocketwright cannot open it. */
-export function openCommand(p: LocalProfile): [string, string[]] | null {
-  if (!p.app || platform() !== 'darwin') return null;
-  // A separate instance: its own data folder, so its own process (an instance already open takes the window).
-  if (p.separate) return ['open', ['-na', p.app, '--args', `--user-data-dir=${p.dataDir}`, `--profile-directory=${p.dir}`]];
-  return ['open', ['-na', p.app, '--args', `--profile-directory=${p.dir}`]];
+/**
+ * Whether a browser has this data folder open: Chromium holds a SingletonLock link to "<host>-<pid>" in it while it
+ * runs. A link left by a browser that crashed or was killed points to a process that is gone.
+ */
+export function dataDirInUse(dataDir: string): boolean {
+  let target: string;
+  try { target = readlinkSync(join(dataDir, 'SingletonLock')); } catch { return false; }
+  const pid = Number(/-(\d+)$/.exec(target)?.[1]);
+  if (!pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
-/** Opens a window of this profile: the browser starts if needed, its Rocketwright extension then connects. */
+/**
+ * Whether this profile seems to have a window open: its browser runs and lists it among the profiles of the session
+ * (a hint for what to tell the user: the list is saved by the browser from time to time).
+ */
+export function profileOpen(p: LocalProfile): boolean {
+  if (!dataDirInUse(p.dataDir)) return false;
+  if (p.separate) return true;
+  try {
+    const active = JSON.parse(readFileSync(join(p.dataDir, 'Local State'), 'utf8'))?.profile?.last_active_profiles;
+    return Array.isArray(active) && active.includes(p.dir);
+  } catch {
+    return false;
+  }
+}
+
+/** The Rocketwright extension in one profile, as the browser's own preferences describe it. */
+export interface ExtensionInstall {
+  status: 'ok' | 'disabled' | 'moved' | 'missing' | 'unknown';
+  /** ok: installed from the Chrome Web Store (signed by the store), not loaded unpacked. */
+  store?: boolean;
+  /** moved: the folder it was loaded unpacked from, which no longer holds it. */
+  path?: string;
+}
+
+/**
+ * Reads the profile's Preferences and Secure Preferences (read only): is the extension installed, turned off, or
+ * loaded unpacked from a folder that is gone (a repository renamed or moved)?
+ */
+export function extensionInstall(p: LocalProfile): ExtensionInstall {
+  const settings: Record<string, { location?: number; path?: string; state?: number; disable_reasons?: number | number[] }> = {};
+  let read = false;
+  for (const file of ['Preferences', 'Secure Preferences']) {
+    try {
+      const prefs = JSON.parse(readFileSync(join(p.dataDir, p.dir, file), 'utf8'));
+      read = true;
+      Object.assign(settings, prefs?.extensions?.settings || {});
+    } catch { /* absent or being rewritten: the other file may say it */ }
+  }
+  if (!read) return { status: 'unknown' };
+  const found = extensionIds().filter((id) => settings[id]).map((id) => ({ id, s: settings[id]! }));
+  if (!found.length) return { status: 'missing' };
+  const off = (s: { state?: number; disable_reasons?: number | number[] }) =>
+    (Array.isArray(s.disable_reasons) ? s.disable_reasons.length > 0 : !!s.disable_reasons) || s.state === 0;
+  // Location 4: loaded unpacked, from the absolute path the browser keeps.
+  const gone = (s: { location?: number; path?: string }) => s.location === 4 && !!s.path && isAbsolute(s.path) && !existsSync(join(s.path, 'manifest.json'));
+  const good = found.find(({ s }) => !off(s) && !gone(s));
+  if (good) return { status: 'ok', store: good.id === STORE_EXTENSION_ID && good.s.location !== 4 };
+  const moved = found.find(({ s }) => gone(s));
+  if (moved) return { status: 'moved', path: moved.s.path };
+  return { status: 'disabled' };
+}
+
+/**
+ * The command that opens a window of this profile (macOS), or null if Rocketwright cannot open it. loadExtension:
+ * the extension of this installation is loaded too (Chrome 137 and later ignore --load-extension unless the feature
+ * that turns it off is disabled), so a profile whose own copy is missing or moved still connects.
+ */
+export function openCommand(p: LocalProfile, o: { loadExtension?: string } = {}): [string, string[]] | null {
+  if (!p.app || platform() !== 'darwin') return null;
+  const load = o.loadExtension ? [`--load-extension=${o.loadExtension}`, '--disable-features=DisableLoadExtensionCommandLineSwitch'] : [];
+  // A separate instance: its own data folder, so its own process (an instance already open takes the window).
+  if (p.separate) return ['open', ['-na', p.app, '--args', `--user-data-dir=${p.dataDir}`, `--profile-directory=${p.dir}`, ...load]];
+  return ['open', ['-na', p.app, '--args', `--profile-directory=${p.dir}`, ...load]];
+}
+
+/**
+ * Opens a window of this profile, only on the agent's explicit request (fl_open launch): the browser starts if needed,
+ * with the extension of this installation loaded unless the store's copy is installed and on there.
+ */
 export function openProfile(p: LocalProfile): void {
-  const cmd = openCommand(p);
+  const ext = extensionInstall(p);
+  const dir = extensionDir();
+  const fromStore = ext.status === 'ok' && !!ext.store;
+  if (!fromStore && !existsSync(join(dir, 'manifest.json'))) throw new Error(`The Rocketwright extension folder of this installation is missing (${dir}): reinstall Rocketwright. Nothing was opened.`);
+  const cmd = openCommand(p, fromStore ? {} : { loadExtension: dir });
   if (!cmd) throw new Error(`Rocketwright cannot open ${p.brand} profile "${p.name}" by itself on this system: open it, the extension then connects.`);
   const child = spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' });
   child.on('error', (e) => console.error(`rocketwright: could not open ${p.brand} profile "${p.name}": ${e.message}`));

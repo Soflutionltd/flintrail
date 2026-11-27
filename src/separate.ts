@@ -4,32 +4,15 @@
 // its own windows. Nothing is deleted: the original profile is renamed "<name> (old)" and stays until the user
 // removes it.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { installNativeHost } from './pairing.js';
-import { extensionIds, localProfiles, separateInstancesDir } from './profiles.js';
+import { dataDirInUse, extensionIds, localProfiles, separateInstancesDir } from './profiles.js';
 import { slug } from './relay-protocol.js';
 
 /** Folders a browser rebuilds by itself: left out of the copy. */
 const CACHES = ['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'Service Worker/CacheStorage', 'Service Worker/ScriptCache'];
-
-/**
- * Whether a browser has this data folder open: Chromium holds a SingletonLock link to "<host>-<pid>" in it while it
- * runs. A link left by a browser that crashed or was killed points to a process that is gone.
- */
-function inUse(dataDir: string): boolean {
-  let target: string;
-  try { target = readlinkSync(join(dataDir, 'SingletonLock')); } catch { return false; }
-  const pid = Number(/-(\d+)$/.exec(target)?.[1]);
-  if (!pid) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
 
 export function separateProfile(brand: string, name: string, o: { launcher?: boolean } = {}): string[] {
   if (platform() !== 'darwin') throw new Error('Separate browser instances are made on macOS only.');
@@ -39,7 +22,7 @@ export function separateProfile(brand: string, name: string, o: { launcher?: boo
   if (matches.length > 1) throw new Error(`Several ${brand} profiles are called "${name}": rename one in the browser first.`);
   const src = matches[0]!;
   if (!src.app) throw new Error(`Rocketwright cannot open ${brand} by itself, so it cannot make a separate instance of it.`);
-  if (inUse(src.dataDir)) throw new Error(`${src.app} is open: quit it completely (Cmd+Q), then run this again. Its profile files cannot be copied while it writes them.`);
+  if (dataDirInUse(src.dataDir)) throw new Error(`${src.app} is open: quit it completely (Cmd+Q), then run this again. Its profile files cannot be copied while it writes them.`);
   const target = join(separateInstancesDir(), brand, src.name.replace(/[/\\:]/g, '-'));
   if (existsSync(target)) throw new Error(`${target} already exists: Rocketwright never writes over a separate instance.`);
   // One made by Flintrail before the rename, under its own folder: a second one of the same name could not be told apart.

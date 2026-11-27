@@ -18,7 +18,7 @@ import { recorder } from './recorder.js';
 import { config } from './config.js';
 import { domainProblem } from './domains.js';
 import { getRelayClient } from './relay-client.js';
-import { localProfiles, matchProfiles } from './profiles.js';
+import { EXTENSION_STORE_URL, localProfiles, matchProfiles } from './profiles.js';
 import { slug } from './relay-protocol.js';
 import { bindVariable, describeShortcut } from './api-shortcut.js';
 import { listFlows, loadFlow, saveFlow } from './store.js';
@@ -94,7 +94,7 @@ const snapOpts = {
  * browser task, whatever the client (Claude, Cursor, Codex...), with or without a hub in between.
  */
 /** The Rocketwright extension in the Chrome Web Store: what the agent hands the user to connect their own browser. */
-export const EXTENSION_URL = 'https://chromewebstore.google.com/detail/rocketwright/amgonogobcfmneginonbkfjlbbnecchp';
+export const EXTENSION_URL = EXTENSION_STORE_URL;
 
 export const SERVER_INSTRUCTIONS = [
   'Rocketwright drives a dedicated browser ("agent") or the user\'s own browsers through the Rocketwright extension.',
@@ -110,17 +110,18 @@ export function buildServer(): McpServer {
   const s = new McpServer({ name: 'rocketwright', version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
   s.registerTool('fl_open', {
-    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, a tab already showing this address, or any tab of the same site, is taken over and brought to the address instead of opening another one. newTab and newWindow are refused while the site is already open there, unless evenIfSiteOpen is set. window picks one of its windows (ids from fl_extension tabs:true): a choice of yours, so the tab opens there even when the site is open elsewhere. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open, or whose extension does not connect, is never opened or restarted by itself: the call fails and says why (extension off, site access "On click", extension folder moved); launch:true opens a profile that is not open, only when the user asked for it. In a user browser, a tab already showing this address, or any tab of the same site, is taken over and brought to the address instead of opening another one. newTab and newWindow are refused while the site is already open there, unless evenIfSiteOpen is set. window picks one of its windows (ids from fl_extension tabs:true): a choice of yours, so the tab opens there even when the site is open elsewhere. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
     inputSchema: {
       url: z.string(), browser: browserOpt,
       window: z.number().int().optional().describe('User browser only: open the tab in this window (id from fl_extension tabs:true).'),
       newWindow: z.boolean().optional().describe('User browser only: open the tab in a new window. Refused while the site is already open in that browser (see evenIfSiteOpen).'),
       newTab: z.boolean().optional().describe('User browser only: open a new tab instead of taking over one. Refused while the site is already open in that browser (see evenIfSiteOpen).'),
       evenIfSiteOpen: z.boolean().optional().describe('User browser only: allow one more tab of a site already open there. Only when two pages of that site have to stay open together, or when the user asked for another tab.'),
+      launch: z.boolean().optional().describe('User browser only: open the browser profile named in browser when it is not open, with the Rocketwright extension of this installation loaded. Only when the user asked for that profile to be opened.'),
       ...snapOpts,
     },
-  }, guard(async ({ url, browser, window, newWindow, newTab, evenIfSiteOpen, text: t, max, within }) => {
-    const id = await openTab(url, browser, { window, newWindow, evenIfSiteOpen }, !newTab);
+  }, guard(async ({ url, browser, window, newWindow, newTab, evenIfSiteOpen, launch, text: t, max, within }) => {
+    const id = await openTab(url, browser, { window, newWindow, evenIfSiteOpen, launch }, !newTab);
     const from = takeReusedFrom(id);
     const reused = from ? `Tab ${id} was already yours, on ${from}: it went to this address, so that page and its refs are gone. For a second tab of the site, pass evenIfSiteOpen:true.\n` : '';
     return `Tab ${id} [${tabBrowser(id)}]\n${reused}` + (await snapshot(getTab(id), { text: t, max, within }));
@@ -456,7 +457,7 @@ export function buildServer(): McpServer {
   }));
 
   s.registerTool('fl_extension', {
-    description: 'Browsers Rocketwright can drive: the dedicated one ("agent") and every user browser where the Rocketwright extension is connected ("brave-soflution", "chrome"...), named after the browser profile or the label the user gave it in the extension, plus the profiles of this computer that are not open (fl_open opens them). Several conversations can drive them at once, each sees only its own tabs. Pass the name as browser to fl_open. tabs: true also lists the tabs open in each browser (site and title), to find the window where an account is signed in.',
+    description: 'Browsers Rocketwright can drive: the dedicated one ("agent") and every user browser where the Rocketwright extension is connected ("brave-soflution", "chrome"...), named after the browser profile or the label the user gave it in the extension, plus the profiles of this computer that are not open (fl_open with launch:true opens one, when the user asks). Several conversations can drive them at once, each sees only its own tabs. Pass the name as browser to fl_open. tabs: true also lists the tabs open in each browser (site and title), to find the window where an account is signed in.',
     inputSchema: {
       tabs: z.boolean().optional().describe('Also list the open tabs of each user browser (origin and title).'),
       browser: z.string().optional().describe('Only this browser.'),
@@ -490,7 +491,7 @@ export function buildServer(): McpServer {
         // Profiles of this computer with no connected window: fl_open opens them on demand.
         const open = new Set(relay.browsers.map((b) => `${b.key.split('-')[0]}/${slug(b.profile)}`));
         const closed = localProfiles().filter((p) => !open.has(`${p.brand}/${slug(p.name)}`) && (!browser || matchProfiles(browser, [p]).length));
-        if (closed.length) lines.push(`Not open (fl_open with browser "<profile name>" opens it): ${closed.map((p) => `${p.brand} "${p.name}"`).join(', ')}.`);
+        if (closed.length) lines.push(`Not connected (fl_open with browser "<profile name>" and launch:true opens one that is not open, only if the user asks): ${closed.map((p) => `${p.brand} "${p.name}"`).join(', ')}.`);
         if (!relay.browsers.length) lines.push(`No user browser connected. The Rocketwright extension pairs and connects by itself once installed (relay 127.0.0.1:${config.relayPort}, version ${relay.relayVersion}).`);
         else if (browser && !list.length) lines.push(`Browser "${browser}" is not connected.`);
       }

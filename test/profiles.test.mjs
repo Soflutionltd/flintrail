@@ -34,6 +34,12 @@ async function waitFor(fn, ms = 20000) {
 const worker = async () => ctx.serviceWorkers()[0] || ctx.waitForEvent('serviceworker');
 const sw = { evaluate: async (fn, arg) => (await worker()).evaluate(fn, arg) };
 const tabId = (snap) => /Tab (t\d+)/.exec(snap)[1];
+// The running browser saves its Local State now and then, without the names a test gave: given again before use.
+const nameProfiles = () => {
+  const state = JSON.parse(readFileSync(join(userDataDir, 'Local State'), 'utf8'));
+  state.profile = { ...(state.profile || {}), info_cache: { Default: { name: 'Soflution' }, 'Profile 7': { name: 'Compta' } } };
+  writeFileSync(join(userDataDir, 'Local State'), JSON.stringify(state));
+};
 const windowsOf = (url) => sw.evaluate(async (u) => (await chrome.tabs.query({ url: u })).map((t) => t.windowId), url);
 
 before(async () => {
@@ -50,10 +56,8 @@ before(async () => {
   });
   await waitFor(async () => /chromium: Extension connected/.test(await mcp.call('fl_extension')));
   // The user named this profile "Soflution", and has a second profile, "Compta", that is not open.
-  const state = JSON.parse(readFileSync(join(userDataDir, 'Local State'), 'utf8'));
-  state.profile = { ...(state.profile || {}), info_cache: { Default: { name: 'Soflution' }, 'Profile 7': { name: 'Compta' } } };
   mkdirSync(join(userDataDir, 'Profile 7'), { recursive: true });
-  writeFileSync(join(userDataDir, 'Local State'), JSON.stringify(state));
+  nameProfiles();
   await sw.evaluate(async () => { ws?.close(); ws = null; await connect(); });
   await waitFor(async () => /chromium-soflution: /.test(await mcp.call('fl_extension')));
 });
@@ -103,10 +107,23 @@ test('a tab opens in the window the agent names, or in a new window', async () =
   await mcp.call('fl_close', { tab: inNew });
 });
 
-test('a profile that is not open is listed, and fl_open says how to open it', async () => {
-  assert.match(await mcp.call('fl_extension'), /Not open \(fl_open with browser "<profile name>" opens it\): chromium "Compta"/);
-  // Test browsers have no application to launch: Rocketwright says so instead of waiting forever.
-  await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'Compta' }), /cannot open chromium profile "Compta" by itself/);
+test('a profile that is not open is listed, never opened by itself, and fl_open says why its extension is not there', async () => {
+  assert.match(await mcp.call('fl_extension'), /Not connected \(fl_open with browser "<profile name>" and launch:true opens one that is not open, only if the user asks\): chromium "Compta"/);
+  // Without launch, nothing is opened: the agent is told how, and what to check.
+  await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'Compta' }), /chromium profile "Compta" is not open, and Rocketwright does not open a browser of the user by itself\. If the user wants it opened, call fl_open again with launch:true/);
+  // Its extension was loaded unpacked from a folder that moved (a repository renamed): the agent learns where it was, and where it is now.
+  writeFileSync(join(userDataDir, 'Profile 7', 'Secure Preferences'), JSON.stringify({ extensions: { settings: { hgkglidmccenjlhdcplcpkgbadonplnb: { location: 4, path: '/nowhere/flintrail/extension' } } } }));
+  nameProfiles();
+  const moved = await mcp.call('fl_open', { url: site.url, browser: 'Compta' }).then(() => '', (e) => e.message);
+  assert.match(moved, /loaded unpacked from \/nowhere\/flintrail\/extension, a folder that no longer holds it \(moved or renamed\)/);
+  assert.ok(moved.includes(`"Load unpacked" on ${extPath.replace(/\/$/, '')}`), moved);
+  // Turned off by the user.
+  writeFileSync(join(userDataDir, 'Profile 7', 'Secure Preferences'), JSON.stringify({ extensions: { settings: { amgonogobcfmneginonbkfjlbbnecchp: { location: 1, path: 'amgonogobcfmneginonbkfjlbbnecchp/2.0.1', disable_reasons: [1] } } } }));
+  nameProfiles();
+  await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'Compta' }), /its Rocketwright extension is turned off in chromium:\/\/extensions/);
+  // With launch: test browsers have no application to launch, Rocketwright says so instead of waiting forever.
+  nameProfiles();
+  await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'Compta', launch: true }), /cannot open chromium profile "Compta" by itself/);
 });
 
 test('on macOS a profile opens with its own application and profile folder', { skip: platform() !== 'darwin' }, async () => {
@@ -116,4 +133,14 @@ test('on macOS a profile opens with its own application and profile folder', { s
     ['open', ['-na', 'Brave Browser', '--args', '--profile-directory=Profile 1']],
   );
   assert.equal(openCommand({ brand: 'arc', dataDir: '/x', app: null, dir: 'Default', name: 'Arc' }), null);
+  // Opened on the agent's request: with the extension of this installation, even where Chrome 137+ ignores --load-extension.
+  assert.deepEqual(
+    openCommand({ brand: 'brave', dataDir: '/x/Soflution', app: 'Brave Browser', dir: 'Default', name: 'Soflution', separate: true }, { loadExtension: '/repo/extension' }),
+    ['open', ['-na', 'Brave Browser', '--args', '--user-data-dir=/x/Soflution', '--profile-directory=Default', '--load-extension=/repo/extension', '--disable-features=DisableLoadExtensionCommandLineSwitch']],
+  );
+});
+
+test('the extension folder of this installation is the one next to dist/', async () => {
+  const { extensionDir } = await import('../dist/profiles.js');
+  assert.equal(extensionDir().replace(/\/$/, ''), extPath.replace(/\/$/, ''));
 });

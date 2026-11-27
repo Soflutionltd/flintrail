@@ -267,6 +267,8 @@ export interface Placement {
   evenIfSiteOpen?: boolean;
   /** The address about to be opened: the new tab goes next to the user's tabs of that site. */
   near?: string;
+  /** A browser profile of this computer that is not open may be opened for this tab (the user asked for it). */
+  launch?: boolean;
 }
 
 /** Tabs being opened, per browser context. */
@@ -362,7 +364,7 @@ async function siteOpenIn(where: Driven, site: string): Promise<boolean> {
 
 /** Opens a tab in the named browser (see getDriven), optionally on a URL. */
 export async function openTab(url?: string, browserName?: string, placement: Placement = {}, reuse = true): Promise<string> {
-  const where = await getDriven(browserName);
+  const where = await getDriven(browserName, { launch: placement.launch });
   if ((placement.window !== undefined || placement.newWindow) && !where.viaExtension) {
     throw new Error('window and newWindow apply to the user\'s browsers only (set browser, see fl_extension).');
   }

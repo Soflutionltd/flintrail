@@ -13,7 +13,7 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { config } from './config.js';
 import { loadToken } from './auth.js';
-import { matchProfiles, openProfile } from './profiles.js';
+import { dataDirInUse, EXTENSION_STORE_URL, extensionDir, extensionInstall, matchProfiles, openProfile, profileOpen, type LocalProfile } from './profiles.js';
 import { getRelayClient, relayClient, type RelayClient } from './relay-client.js';
 import { VERSION } from './version.js';
 import { startCdpFilter, type CdpFilter } from './cdp-filter.js';
@@ -119,10 +119,10 @@ const driven = new Map<string, Promise<Driven>>();
 const connecting = new Map<string, Promise<Driven>>();
 let filter: CdpFilter | null = null;
 
-async function connectExtension(name: string | undefined): Promise<Driven> {
+async function connectExtension(name: string | undefined, launch: boolean): Promise<Driven> {
   const relay = relayClient(loadToken(), VERSION);
   if (!relay) throw new Error('The extension relay is turned off (ROCKETWRIGHT_RELAY=off).');
-  const found = await findOrOpen(relay, name);
+  const found = await findOrOpen(relay, name, launch);
   const { key, cdpUrl } = await relay.open(found.key);
   const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 15000 });
   browser.on('disconnected', () => driven.delete(key));
@@ -131,11 +131,35 @@ async function connectExtension(name: string | undefined): Promise<Driven> {
   return { name: key, ctx, browser, viaExtension: true };
 }
 
+/** Why the extension of this profile is not connected, as far as its browser's files tell, for a person to fix. */
+export function whyNotConnected(profile: LocalProfile): string {
+  const ext = extensionInstall(profile);
+  const page = `${profile.brand}://extensions`;
+  const dir = extensionDir();
+  switch (ext.status) {
+    case 'moved':
+      return `its Rocketwright extension was loaded unpacked from ${ext.path}, a folder that no longer holds it (moved or renamed). ` +
+        `In ${page}, remove that copy and use "Load unpacked" on ${dir}, or install it from the Chrome Web Store: ${EXTENSION_STORE_URL}`;
+    case 'disabled':
+      return `its Rocketwright extension is turned off in ${page}: the user turns it back on there.`;
+    case 'missing':
+      return `the Rocketwright extension is not installed in this profile: the user installs it from ${EXTENSION_STORE_URL} (or "Load unpacked" on ${dir} in ${page}).`;
+    case 'unknown':
+      return `Rocketwright cannot read this profile's extension settings. Likely causes: the Rocketwright extension is not installed or turned off (${page}), ` +
+        `its site access is set to "On click" (Details, Site access: "On all sites"), or it was loaded unpacked from a folder that moved (it must be ${dir}).`;
+    case 'ok':
+      return `the extension looks installed and on. Likely causes: its site access is set to "On click" (${page}, Details, Site access: "On all sites"), ` +
+        `or it is not paired: the user opens its popup, which must show "Connected to Rocketwright" with a green dot (Connect otherwise). ` +
+        `If it was loaded unpacked, the folder must be ${dir}.`;
+  }
+}
+
 /**
- * A connected browser by name. When the name is a browser profile of this computer that is not open
- * ("Soflution", "brave-soflution"), Rocketwright opens a window of it and waits for its extension.
+ * A connected browser by name. A browser profile of this computer whose extension is not connected is never opened
+ * or restarted on Rocketwright's own initiative: the call fails and says why. Only launch (the agent asked, because
+ * the user did) opens a profile that is not open, with the extension of this installation loaded.
  */
-async function findOrOpen(relay: RelayClient, name: string | undefined) {
+async function findOrOpen(relay: RelayClient, name: string | undefined, launch: boolean) {
   await relay.ensure();
   const connected = name ? relay.matching(name) : [];
   if (connected.length > 1) throw new Error(`Several browsers answer to "${name}": ${connected.map((b) => b.key).join(', ')}. Use one of these names.`);
@@ -147,22 +171,31 @@ async function findOrOpen(relay: RelayClient, name: string | undefined) {
   }
   const profile = matches[0];
   if (!profile) return relay.waitFor(name, config.extensionWaitMs);
-  // Open but still reconnecting (the extension retries every 30 s): give it a moment before opening a window.
-  const soon = await relay.waitFor(name, 3000).catch(() => null);
+  const open = profileOpen(profile);
+  // Open but still reconnecting (the extension retries every 30 s after Rocketwright restarts): give it that time.
+  const soon = await relay.waitFor(name, open ? config.extensionWaitMs : Math.min(3000, config.extensionWaitMs)).catch(() => null);
   if (soon) return soon;
+  const others = relay.connectedNames();
+  const where = profile.separate ? ` (its own instance, ${profile.dataDir})` : '';
+  const alternatives = others.length
+    ? ` Browsers connected right now: ${others.join(', ')}. Use one of them only if the user agrees.`
+    : ' No user browser is connected right now; the dedicated "agent" browser is available.';
+  // A separate instance that runs is open whatever is asked: launching it again would only reach the same process.
+  if ((open && !launch) || (profile.separate && dataDirInUse(profile.dataDir))) {
+    throw new Error(`${profile.brand} profile "${profile.name}"${where} is open, but its Rocketwright extension is not connected. Nothing was opened or restarted: ${whyNotConnected(profile)}${alternatives}`);
+  }
+  if (!launch) {
+    throw new Error(
+      `${profile.brand} profile "${profile.name}"${where} is not open, and Rocketwright does not open a browser of the user by itself. ` +
+        `If the user wants it opened, call fl_open again with launch:true: it starts with the Rocketwright extension of this installation loaded (${extensionDir()}). ` +
+        `Otherwise ask the user to open it. If its extension still does not connect once open: ${whyNotConnected(profile)}${alternatives}`
+    );
+  }
   openProfile(profile);
   try {
     return await relay.waitFor(name, Math.max(config.extensionWaitMs, 45000));
   } catch {
-    const others = relay.connectedNames();
-    throw new Error(
-      `Opened ${profile.brand} profile "${profile.name}", but its Rocketwright extension did not connect. ` +
-        `Ask the user to open that profile, check the Rocketwright extension is installed and enabled (${profile.brand}://extensions), ` +
-        `then open its popup: it must show "Connected to Rocketwright" with a green dot (click Connect otherwise). ` +
-        (others.length
-          ? `Browsers connected right now: ${others.join(', ')}. Use one of them only if the user agrees.`
-          : 'No user browser is connected right now; the dedicated "agent" browser is available.')
-    );
+    throw new Error(`Opened ${profile.brand} profile "${profile.name}"${where} with the Rocketwright extension loaded, but it did not connect: ${whyNotConnected(profile)}${alternatives}`);
   }
 }
 
@@ -199,9 +232,9 @@ async function connectAgent(): Promise<Driven> {
 /**
  * The browser to drive. name: "agent" for the dedicated browser, or a connected extension browser
  * ("brave", "chrome", "edge"...). Without a name: the dedicated browser, or in extension mode the first
- * connected browser.
+ * connected browser. launch: a profile of this computer that is not open may be opened (see findOrOpen).
  */
-export async function getDriven(name?: string): Promise<Driven> {
+export async function getDriven(name?: string, o: { launch?: boolean } = {}): Promise<Driven> {
   const wanted = name?.trim().toLowerCase() || (config.mode === 'extension' ? undefined : AGENT);
   if (wanted === AGENT) {
     if (config.mode === 'extension') throw new Error('Mode is "extension": there is no dedicated browser. Name a connected browser (see fl_extension).');
@@ -215,7 +248,7 @@ export async function getDriven(name?: string): Promise<Driven> {
   const request = key ?? '';
   // Calls made at the same time for the same browser share one connection.
   if (!connecting.has(request)) {
-    connecting.set(request, connectExtension(wanted).then((d) => {
+    connecting.set(request, connectExtension(wanted, !!o.launch).then((d) => {
       if (!driven.has(d.name)) driven.set(d.name, Promise.resolve(d));
       return d;
     }).finally(() => connecting.delete(request)));
