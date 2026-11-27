@@ -8,7 +8,7 @@ import { adoptTab, agentRanJs, drivenPages, getTab, idOf, letGo, markSecretFille
 import { fillProblem, siteOf } from './login.js';
 import { hostOf } from './passwords.js';
 import { recorder } from './recorder.js';
-import { remember } from './secrets.js';
+import { maskUrl, remember, rememberUrlTokens } from './secrets.js';
 
 export type MailProvider = 'gmail' | 'outlook';
 
@@ -562,24 +562,6 @@ function parseSite(site: string): string {
 // ---------- fl_mail_link ----------
 
 const VERIFY_WORDS = /verif|confirm|activat|validat|magic|sign.?in|log.?in|connexion|se connecter|valider|vérifi|confirmer|activer|bestätig|anmelden|verifica|accedi|continue|continuer/i;
-
-/** The URL with the values that could be tokens left out: query values, long path segments and the fragment. */
-export function maskUrl(url: string): string {
-  let u: URL;
-  try { u = new URL(url); } catch { return '(not a web address)'; }
-  const path = u.pathname.split('/').map((seg) => (seg.length >= 16 && /\d/.test(seg) && /[a-z]/i.test(seg)) || seg.length >= 32 ? '•••' : seg).join('/');
-  const query = [...u.searchParams.keys()].map((k) => `${k}=•••`).join('&');
-  return `${u.origin}${path}${query ? `?${query}` : ''}${u.hash ? '#•••' : ''}`;
-}
-
-/** Masks, in everything returned from now on, the parts of this URL that could be a one-time token. */
-export function rememberUrlTokens(url: string) {
-  let u: URL;
-  try { u = new URL(url); } catch { return; }
-  for (const v of u.searchParams.values()) if (v.length >= 8) remember(v, 60 * 60_000);
-  for (const seg of u.pathname.split('/')) if ((seg.length >= 16 && /\d/.test(seg)) || seg.length >= 32) remember(seg, 60 * 60_000);
-  if (u.hash.length > 8) remember(u.hash.slice(1), 60 * 60_000);
-}
 
 export interface MailLinkOptions extends MailQuery {
   link?: string;

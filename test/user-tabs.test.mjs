@@ -70,3 +70,20 @@ test('fl_tabs all lists the user\'s open tabs with an id, and fl_adopt takes one
   await mcp.call('fl_release', { tab });
   await mine.close();
 });
+
+test('a tab opened by a click (target=_blank, window.open) is driven at once and named in the answer', async () => {
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url + '/opener', browser: 'chromium', text: 0 }))[1];
+  const out = await mcp.call('fl_act', { tab, actions: [{ do: 'click', text: 'Open landing' }] });
+  const m = /New tab (t\d+) \[[\w-]+\] opened by this page, now driven: (\S+)\. Read it with fl_snapshot/.exec(out);
+  assert.ok(m, out);
+  assert.equal(m[2], site.url + '/landing?k=•••');
+  assert.ok(!out.includes('abcdefgh12345678'), 'its one-time part is masked');
+  assert.match(await mcp.call('fl_snapshot', { tab: m[1], text: 100 }), /Landed here/);
+  // Opened by the page's own script: named in the answer, or in the next one.
+  const said = await mcp.call('fl_act', { tab, actions: [{ do: 'click', text: 'Pop search' }, { do: 'wait', ms: 300 }] });
+  const next = /New tab (t\d+)/.test(said) ? said : await waitFor(async () => { const s = await mcp.call('fl_snapshot', { tab, text: 0 }); return /New tab t\d+/.test(s) ? s : null; });
+  const popped = /New tab (t\d+) \[[\w-]+\] opened by this page, now driven: \S+\/search\./.exec(next);
+  assert.ok(popped, next);
+  assert.match(await mcp.call('fl_snapshot', { tab: popped[1], text: 0 }), /Title: Search/);
+  for (const t of [m[1], popped[1], tab]) await mcp.call('fl_close', { tab: t });
+});

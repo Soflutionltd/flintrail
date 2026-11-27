@@ -8,6 +8,16 @@ import { connect, refOf } from './helpers.mjs';
 
 let site, mcp;
 
+async function waitFor(fn, ms = 10000) {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await fn().catch(() => null);
+    if (v) return v;
+    if (Date.now() - t0 > ms) throw new Error('timeout');
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 before(async () => {
   site = await startFixture();
   mcp = await connect();
@@ -21,7 +31,7 @@ after(async () => {
 test('lists every tool', async () => {
   const { tools } = await mcp.client.listTools();
   const names = tools.map((t) => t.name);
-  for (const n of ['fl_open', 'fl_act', 'fl_snapshot', 'fl_extract', 'fl_network', 'fl_record_start', 'fl_record_stop', 'fl_run', 'fl_run_many', 'fl_flows', 'fl_console', 'fl_login']) {
+  for (const n of ['fl_open', 'fl_act', 'fl_snapshot', 'fl_extract', 'fl_network', 'fl_record_start', 'fl_record_stop', 'fl_run', 'fl_run_many', 'fl_flows', 'fl_console', 'fl_login', 'fl_mail_code', 'fl_mail_link', 'fl_reopen', 'fl_tabs']) {
     assert.ok(names.includes(n), `missing ${n}`);
   }
 });
@@ -191,4 +201,21 @@ test('extract runs JavaScript in the page', async () => {
   const out = await mcp.call('fl_extract', { tab, js: 'return [...document.querySelectorAll("option")].map(o => o.textContent)' });
   assert.match(out, /\["Paris 7","Paris 15"\]/);
   await mcp.call('fl_close', { tab });
+});
+
+test('a tab opened by a click (target=_blank, window.open) is driven at once and named in the answer', async () => {
+  const tab = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url + '/opener', text: 0 }))[1];
+  const out = await mcp.call('fl_act', { tab, actions: [{ do: 'click', text: 'Open landing' }] });
+  const m = /New tab (t\d+) \[[\w-]+\] opened by this page, now driven: (\S+)\. Read it with fl_snapshot/.exec(out);
+  assert.ok(m, out);
+  assert.equal(m[2], site.url + '/landing?k=•••');
+  assert.ok(!out.includes('abcdefgh12345678'), 'its one-time part is masked');
+  assert.match(await mcp.call('fl_snapshot', { tab: m[1], text: 100 }), /Landed here/);
+  // Opened by the page's own script: named in the answer, or in the next one.
+  const said = await mcp.call('fl_act', { tab, actions: [{ do: 'click', text: 'Pop search' }, { do: 'wait', ms: 300 }] });
+  const next = /New tab (t\d+)/.test(said) ? said : await waitFor(async () => { const s = await mcp.call('fl_snapshot', { tab, text: 0 }); return /New tab t\d+/.test(s) ? s : null; });
+  const popped = /New tab (t\d+) \[[\w-]+\] opened by this page, now driven: \S+\/search\./.exec(next);
+  assert.ok(popped, next);
+  assert.match(await mcp.call('fl_snapshot', { tab: popped[1], text: 0 }), /Title: Search/);
+  for (const t of [m[1], popped[1], tab]) await mcp.call('fl_close', { tab: t });
 });

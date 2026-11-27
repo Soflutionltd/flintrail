@@ -6,7 +6,7 @@ import { AGENT, getDriven, type Driven } from './browser.js';
 import { getRelayClient } from './relay-client.js';
 import { config } from './config.js';
 import { assertAllowed, domainProblem } from './domains.js';
-import { redact } from './secrets.js';
+import { maskUrl, redact, rememberUrlTokens } from './secrets.js';
 import { urlMatches, type MatchMode } from './relay-protocol.js';
 import { describeScript, dialogOverrideScript, domQuietScript, fetchScript, snapshotScript, type TargetDescriptor } from './page-scripts.js';
 import { recorder } from './recorder.js';
@@ -95,6 +95,8 @@ interface PageState {
   secretFilled?: boolean;
   /** Rocketwright opened this tab itself (not a tab of the user it took over): closing it takes nothing from the user. */
   openedByAgent?: boolean;
+  /** Tabs this page opened (a link with target=_blank, window.open), driven since, not told to the agent yet. */
+  popups?: string[];
   /** Requests of the page still waiting for an answer, and when the last one started or ended (wait network). */
   inflight?: number;
   netAt?: number;
@@ -235,6 +237,13 @@ function register(page: Page, where: Driven): string {
   });
   page.on('pageerror', (e) => logConsole(page, 'pageerror', e.message));
   page.on('dialog', (d) => void onDialog(page, d));
+  // A tab this page opens (a link with target=_blank, window.open) is driven at once, and told with the next answer.
+  page.on('popup', (popup) => {
+    if (popup.isClosed() || idOf(popup)) return;
+    const child = register(popup, where);
+    stateOf(popup).openedByAgent = true;
+    (stateOf(page).popups ??= []).push(child);
+  });
   return id;
 }
 
@@ -252,6 +261,14 @@ export function consoleLog(page: Page, level: 'errors' | 'all' = 'errors', clear
 function pageNotes(page: Page): string[] {
   const s = stateOf(page);
   const notes = s.dialogs.splice(0);
+  for (const child of s.popups?.splice(0) ?? []) {
+    const opened = tabs.get(child);
+    if (!opened || opened.isClosed()) continue;
+    const url = opened.url();
+    // Its address may carry a one-time token (a sign-in link): masked here and in everything after.
+    rememberUrlTokens(url);
+    notes.push(`New tab ${child} [${s.browser}] opened by this page, now driven: ${domainProblem(url) ? '(a site outside the allowed list: close it with fl_close)' : maskUrl(url)}. Read it with fl_snapshot {tab:"${child}"}.`);
+  }
   if (s.unseenErrors) {
     notes.push(`${s.unseenErrors} new console error${s.unseenErrors > 1 ? 's' : ''}, see fl_console`);
     s.unseenErrors = 0;
@@ -1113,7 +1130,16 @@ export async function act(page: Page, actions: Action[], opts: { snapshot?: bool
         destTarget = await dest.evaluate(describeScript, undefined, { timeout: 3000 }).catch(() => undefined);
         if (destTarget && to.frame !== page.mainFrame()) destTarget.frameUrl = to.frame.url().split('?')[0];
       }
+      // A link that opens another tab: the new tab is waited for, so this answer already names it.
+      const opensTab = (a.do === 'click' || a.do === 'dblclick') && await loc.evaluate((el) => {
+        const link = el.closest('a[href]');
+        const target = (link?.getAttribute('target') || '').toLowerCase();
+        return !!link && !!target && !['_self', '_parent', '_top'].includes(target);
+      }, undefined, { timeout: 2000 }).catch(() => false);
+      const popup = opensTab ? page.waitForEvent('popup', { timeout: 5000 }).catch(() => null) : null;
       const r = await performOn(page, loc, a, undefined, dest);
+      const opened = popup ? await popup : null;
+      if (opened) await opened.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
       if (recorder.active && target) {
         const warn = recorder.addElementStep(page, a, target, destTarget);
         if (warn) notes.push(`#${i} ${warn}`);

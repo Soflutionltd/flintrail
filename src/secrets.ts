@@ -54,3 +54,21 @@ export function holdsRemembered(text: string): boolean {
   }
   return false;
 }
+
+/** The URL with the values that could be tokens left out: query values, long path segments and the fragment. */
+export function maskUrl(url: string): string {
+  let u: URL;
+  try { u = new URL(url); } catch { return '(not a web address)'; }
+  const path = u.pathname.split('/').map((seg) => (seg.length >= 16 && /\d/.test(seg) && /[a-z]/i.test(seg)) || seg.length >= 32 ? '•••' : seg).join('/');
+  const query = [...u.searchParams.keys()].map((k) => `${k}=•••`).join('&');
+  return `${u.origin}${path}${query ? `?${query}` : ''}${u.hash ? '#•••' : ''}`;
+}
+
+/** Masks, in everything returned from now on, the parts of this URL that could be a one-time token. */
+export function rememberUrlTokens(url: string) {
+  let u: URL;
+  try { u = new URL(url); } catch { return; }
+  for (const v of u.searchParams.values()) if (v.length >= 8) remember(v, 60 * 60_000);
+  for (const seg of u.pathname.split('/')) if ((seg.length >= 16 && /\d/.test(seg)) || seg.length >= 32) remember(seg, 60 * 60_000);
+  if (u.hash.length > 8) remember(u.hash.slice(1), 60 * 60_000);
+}

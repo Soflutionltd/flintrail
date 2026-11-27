@@ -62,7 +62,8 @@ describe('reading what a webmail shows', () => {
   });
 
   test('senders, organisations, money sites and token-bearing addresses', async () => {
-    const { senderMatches, orgOf, moneySite, parseFrom, maskUrl } = await import('../dist/mail.js');
+    const { senderMatches, orgOf, moneySite, parseFrom } = await import('../dist/mail.js');
+    const { maskUrl } = await import('../dist/secrets.js');
     assert.ok(senderMatches('noreply@notify.cloudflare.com', 'cloudflare.com'));
     assert.ok(senderMatches('noreply@notify.cloudflare.com', 'noreply@notify.cloudflare.com'));
     assert.ok(!senderMatches('noreply@cloudflare.com.evil.example', 'cloudflare.com'));

@@ -421,6 +421,26 @@ chrome.tabs.onUpdated.addListener(async (tabId, change) => {
   if (change.url && isProtected(change.url) && attached.has(tabId)) await detach(tabId, 'browser or extension page');
 });
 
+// A tab opened from a tab an agent drives (a link with target=_blank, window.open) is the agent's doing: it is driven
+// too, by the same conversation, so the agent does not have to look for it. Never a browser page, never a site the
+// user listed as never taken over.
+// The tabs API's openerTabId can name the active tab rather than the background tab the click happened in: the
+// navigation event names the real source.
+chrome.webNavigation.onCreatedNavigationTarget.addListener(async (d) => {
+  await restored;
+  if (!attached.has(d.sourceTabId) || attached.has(d.tabId) || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (isProtected(d.url)) return;
+  let host = '';
+  try { host = new URL(d.url).hostname.toLowerCase(); } catch { /* still blank: its site is checked when the agent reads it */ }
+  if (host && hostAllowed(host, (await adoptSettings()).neverAdopt)) return;
+  try {
+    const targetInfo = await attach(d.tabId);
+    // Playwright names the opener from this: the new tab is then reported as a popup of the page that opened it.
+    if (!targetInfo.openerId) targetInfo.openerId = (await chrome.debugger.getTargets()).find((t) => t.tabId === d.sourceTabId)?.id;
+    send({ type: 'opened', tabId: d.tabId, openerTabId: d.sourceTabId, targetInfo });
+  } catch { /* closed at once, or a page that cannot be driven */ }
+});
+
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   foreignTabs.delete(tabId);
   await restored;

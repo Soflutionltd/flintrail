@@ -301,6 +301,17 @@ class ExtensionBridge {
       }
       case 'attached': return this.keepOnly(Array.isArray(m.tabIds) ? m.tabIds.map(Number) : []);
       case 'shared': { this.addTab(m.tabId, m.targetInfo, null); return; }
+      case 'opened': {
+        // A tab opened from a driven tab: driven by the same conversation. Nobody drives the opener any more: let it go.
+        const opener = this.tabsById.get(Number(m.openerTabId));
+        if (!opener?.owner || !m.targetInfo) {
+          if (!this.legacy && this.connected) this.request('release', { tabIds: [Number(m.tabId)] }, 5000).catch(() => {});
+          return;
+        }
+        this.addTab(Number(m.tabId), m.targetInfo, opener.owner);
+        log(`${this.key}: tab ${m.tabId} opened from tab ${m.openerTabId}, driven by the same conversation`);
+        return;
+      }
       case 'recorded': {
         this.demoClient?.send({ type: 'recorded', step: m.step });
         return;

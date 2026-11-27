@@ -291,6 +291,9 @@ export function startFixture(port = 0) {
     if (url.pathname === '/hop') return html('Hop', '<h1>Hop</h1><a id="next" href="/switch">Next</a>');
     if (url.pathname === '/switch') { res.writeHead(302, { location: state.away || '/landing' }); return res.end(); }
     if (url.pathname === '/landing') return html('Landing', '<h1>Landed here</h1>');
+    // Links and scripts that open another tab.
+    if (url.pathname === '/opener') return html('Opener', `<h1>Opener</h1><a id="link" href="/landing?k=abcdefgh12345678" target="_blank">Open landing</a>
+      <button type="button" id="pop" onclick="window.open('/search')">Pop search</button>`);
     if (url.pathname === '/dl') return html('Files', `<a id="get" href="${url.searchParams.get('to')}">Get the file</a>`);
     if (url.pathname === '/file') { res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="report.bin"' }); return res.end('FILE-CONTENT'); }
     if (url.pathname === '/based') return html('Based', `<base href="${url.searchParams.get('to')}"><h1>Based</h1>`);
