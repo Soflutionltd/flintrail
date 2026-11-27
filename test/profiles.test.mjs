@@ -79,14 +79,14 @@ test('a tab opens in the window the agent names, or in a new window', async () =
   const inWindow = tabId(await mcp.call('fl_open', { url: site.url + '/search', browser: 'Soflution', window: userWindow, text: 0 }));
   assert.deepEqual(await windowsOf(site.url + '/search'), [userWindow]);
   const before = await sw.evaluate(async () => (await chrome.windows.getAll()).map((w) => w.id));
-  const inNew = tabId(await mcp.call('fl_open', { url: site.url + '/upload', browser: 'Soflution', newWindow: true, text: 0 }));
+  const inNew = tabId(await mcp.call('fl_open', { url: site.url + '/upload', browser: 'Soflution', newWindow: true, evenIfSiteOpen: true, text: 0 }));
   const [created] = await windowsOf(site.url + '/upload');
   assert.ok(!before.includes(created), 'opened in a window that did not exist before');
   await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'Soflution', window: 999999 }), /Window 999999 is closed/);
   // Opened at the same time, each tab still lands in the window asked for.
   const [one, two] = await Promise.all([
     mcp.call('fl_open', { url: site.url + '/canvas', browser: 'Soflution', window: userWindow, text: 0 }),
-    mcp.call('fl_open', { url: site.url + '/login', browser: 'Soflution', newWindow: true, text: 0 }),
+    mcp.call('fl_open', { url: site.url + '/login', browser: 'Soflution', newWindow: true, evenIfSiteOpen: true, text: 0 }),
   ]);
   assert.deepEqual(await windowsOf(site.url + '/canvas'), [userWindow]);
   const [loginWindow] = await windowsOf(site.url + '/login');
@@ -94,7 +94,7 @@ test('a tab opens in the window the agent names, or in a new window', async () =
   await mcp.call('fl_close', { tab: tabId(one) });
   await mcp.call('fl_close', { tab: tabId(two) });
   // Extension mode has no dedicated browser: without a name, newWindow applies to the first user browser.
-  const unnamed = await mcp.call('fl_open', { url: site.url + '/dialogs', newWindow: true, text: 0 });
+  const unnamed = await mcp.call('fl_open', { url: site.url + '/dialogs', newWindow: true, evenIfSiteOpen: true, text: 0 });
   assert.match(unnamed, /^Tab t\d+ \[chromium-soflution\]/);
   const [unnamedWindow] = await windowsOf(site.url + '/dialogs');
   assert.ok(!before.includes(unnamedWindow) && unnamedWindow !== created, 'opened in yet another new window');

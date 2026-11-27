@@ -226,11 +226,39 @@ test('fl_open takes over the tab already showing the address, and fl_release let
   assert.ok(!own.isClosed());
   const driven = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '*' })).some((t) => attached.has(t.id)), site.url + '/search');
   assert.equal(driven, false, 'no longer attached, so the debugging bar can go');
-  // newTab:true opens a tab of its own anyway.
-  const fresh = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', newTab: true, text: 0 }))[1];
+  // One more tab of a site the user already has open is refused, by newTab as by newWindow...
+  await assert.rejects(
+    mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', newTab: true, text: 0 }),
+    /is already open in chromium: use that tab instead of opening one more/
+  );
+  await assert.rejects(
+    mcp.call('fl_open', { url: site.url + '/details', browser: 'chromium', newWindow: true, text: 0 }),
+    /is already open in chromium/
+  );
+  assert.equal(await count(), before, 'nothing was opened');
+  // ... unless it is asked for on purpose.
+  const fresh = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', newTab: true, evenIfSiteOpen: true, text: 0 }))[1];
   assert.equal(await count(), before + 1);
   await mcp.call('fl_close', { tab: fresh });
   await own.close();
+});
+
+test('fl_open brings the tab this conversation already drives to another page of its site, and refuses a second one', async () => {
+  const count = () => sw.evaluate(async () => (await chrome.tabs.query({})).length);
+  const first = await mcp.call('fl_open', { url: site.url + '/details', browser: 'chromium', text: 0 });
+  const tab = /Tab (t\d+)/.exec(first)[1];
+  const before = await count();
+  const second = await mcp.call('fl_open', { url: site.url + '/search?q=next', browser: 'chromium', text: 0 });
+  assert.equal(/Tab (t\d+)/.exec(second)[1], tab, 'the same tab');
+  assert.match(second, new RegExp(`Tab ${tab} was already yours, on .*/details: it went to this address`), 'the agent is told the page it held is gone');
+  assert.match(second, /URL: .*\/search\?q=next/);
+  assert.equal(await count(), before, 'no second tab of the site');
+  await assert.rejects(
+    mcp.call('fl_open', { url: site.url + '/upload', browser: 'chromium', newTab: true, text: 0 }),
+    new RegExp(`is already open in chromium \\(tab ${tab} of this conversation\\)`)
+  );
+  assert.equal(await count(), before);
+  await mcp.call('fl_close', { tab });
 });
 
 test('fl_open on another page of a site the user has open brings that tab there, in its own window', async () => {

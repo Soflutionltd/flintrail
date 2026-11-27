@@ -263,6 +263,8 @@ function pageNotes(page: Page): string[] {
 export interface Placement {
   window?: number;
   newWindow?: boolean;
+  /** One more tab of a site already open in the user's browser, on purpose (see openTab). */
+  evenIfSiteOpen?: boolean;
   /** The address about to be opened: the new tab goes next to the user's tabs of that site. */
   near?: string;
 }
@@ -319,11 +321,64 @@ async function openPage(where: Driven, placement: Placement = {}): Promise<Page>
   return ctx.newPage();
 }
 
+/** The site of a web address ("https://example.com"), or '' for anything else. */
+function siteOf(address: string): string {
+  try {
+    const origin = new URL(address).origin;
+    return /^https?:/.test(origin) ? origin : '';
+  } catch {
+    return '';
+  }
+}
+
+/** Where a tab of this conversation was before fl_open brought it to another page of its site. */
+const reusedFrom = new Map<string, string>();
+
+/** The address a tab was on when the last fl_open reused it, told once to the agent: the page it held is gone. */
+export function takeReusedFrom(id: string): string | undefined {
+  const from = reusedFrom.get(id);
+  reusedFrom.delete(id);
+  return from;
+}
+
+/** The tab of this conversation showing this site in this browser, if any. */
+function ownTabOn(where: Driven, site: string): { id: string; page: Page } | null {
+  for (const [id, page] of tabs) {
+    if (!page.isClosed() && stateOf(page).browser === where.name && siteOf(page.url()) === site) return { id, page };
+  }
+  return null;
+}
+
+/**
+ * Is this site already open in the user's browser? Asked to the extension, which sees every tab of the
+ * profile, driven or not. An extension too old to list its tabs, or a relay that does not answer, leaves only
+ * the tabs this process drives: the user's other tabs are then not seen and the new tab is let through.
+ */
+async function siteOpenIn(where: Driven, site: string): Promise<boolean> {
+  const listed = await getRelayClient()?.request('tabs', { key: where.name }, 5000).catch(() => null) as { origin?: string }[] | null | undefined;
+  if (Array.isArray(listed)) return listed.some((tab) => tab.origin === site);
+  return where.ctx.pages().some((page) => !page.isClosed() && siteOf(page.url()) === site);
+}
+
 /** Opens a tab in the named browser (see getDriven), optionally on a URL. */
 export async function openTab(url?: string, browserName?: string, placement: Placement = {}, reuse = true): Promise<string> {
   const where = await getDriven(browserName);
   if ((placement.window !== undefined || placement.newWindow) && !where.viaExtension) {
     throw new Error('window and newWindow apply to the user\'s browsers only (set browser, see fl_extension).');
+  }
+  // In a user browser, asking for one more tab or window of a site already open there is refused: the user
+  // finds their site open several times and has to clean up. The tab already there is the one to use.
+  const wanted = url && where.viaExtension ? siteOf(url) : '';
+  if (wanted && (!reuse || placement.newWindow) && !placement.evenIfSiteOpen) {
+    const own = ownTabOn(where, wanted);
+    if (own || (await siteOpenIn(where, wanted))) {
+      throw new Error(
+        `${wanted} is already open in ${where.name}${own ? ` (tab ${own.id} of this conversation)` : ''}: use that tab instead of opening one more. ` +
+          'fl_open without newTab or newWindow takes it over and brings it to the address, fl_adopt takes a tab by its address, ' +
+          'and fl_act {do:"goto"} moves a tab you already drive. Pass evenIfSiteOpen:true only when two pages of this site ' +
+          'have to stay open together, or when the user asked for another tab.'
+      );
+    }
   }
   // In a user browser, a tab already showing this address (or a page under it) is taken over rather than
   // opening one more tab: the user does not end up with the same site open ten times.
@@ -332,6 +387,14 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
     // The same page (or one under it) as it is; else a tab of the same site, brought to the page asked for.
     const same = await takeOver(where, url.replace(/[?#].*$/, '').replace(/\/+$/, ''), 'prefix').catch(() => null);
     if (same) return register(same, where);
+    // A tab this conversation already drives on that site goes to the page asked for: no second tab of it.
+    const own = wanted && !placement.evenIfSiteOpen ? ownTabOn(where, wanted) : null;
+    if (own) {
+      reusedFrom.set(own.id, own.page.url());
+      await gotoFast(own.page, url);
+      recorder.onOpen(url);
+      return own.id;
+    }
     let origin = '';
     try { origin = new URL(url).origin; } catch { /* not a web address: a new tab below */ }
     const site = /^https?:/.test(origin) ? await takeOver(where, origin, 'origin').catch(() => null) : null;

@@ -135,7 +135,9 @@ test('closing one conversation leaves the others connected', async () => {
   a = null;
   await new Promise((r) => setTimeout(r, 500));
   assert.match(await b.call('fl_snapshot', { tab: tb }), /Canvas/);
-  const again = tabId(await b.call('fl_open', { url: site.url + '/search', browser: 'chromium-ideekdo', text: 0 }));
+  // A second tab of the same site, on purpose: both stay driven.
+  const again = tabId(await b.call('fl_open', { url: site.url + '/search', browser: 'chromium-ideekdo', evenIfSiteOpen: true, text: 0 }));
+  assert.notEqual(again, tb);
   await b.call('fl_close', { tab: again });
   await b.call('fl_close', { tab: tb });
   // A new conversation joins the same relay and finds the browser right away.
