@@ -16,6 +16,11 @@ test('the server sends its instructions at connection', async () => {
   assert.match(instructions, /fl_extension/);
   assert.match(instructions, /ask the user which one/);
   assert.match(instructions, /Connected to Rocketwright/);
+  // A code or link sent by e-mail: read by Rocketwright from the open mailbox, not copied by the user.
+  assert.match(instructions, /use fl_mail_code \(types the code into the form\) or fl_mail_link \(opens the link in a new tab\) instead of asking the user/);
+  assert.match(instructions, /never opened or restarted by Rocketwright/);
+  assert.match(instructions, /fl_tabs all:true/);
+  assert.match(instructions, /fl_reopen/);
   // With no browser connected, the user is given the extension's own link right away.
   assert.ok(instructions.includes(`give them its link: ${EXTENSION_URL}`));
   assert.match(EXTENSION_URL, /^https:\/\/chromewebstore\.google\.com\/detail\/rocketwright\//);

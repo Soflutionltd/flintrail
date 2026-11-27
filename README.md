@@ -142,7 +142,13 @@ Your open tabs: in the extension settings (the gear at the top of the popup, sec
 
 Several browsers or profiles: each connected browser is named after its browser profile, e.g. `brave-soflution` for the Brave profile called "Soflution", and agents can simply say `browser: "Soflution"`. Rocketwright reads the profile names from the browser's `Local State` file and finds which profile an extension runs in from the extension's own storage (read only, nothing else). A name typed in the popup (*Name of this browser*) wins over the profile name; without either, browsers are called after their brand (`brave`, `chrome`), with a short suffix when two of the same brand are open. `fl_extension` with `tabs: true` lists the windows and sites open in each browser (origin and title, never the full URL), so an agent can find the profile where an account is signed in.
 
-Windows: `fl_open` takes `window` (an id from `fl_extension` `tabs: true`) to open the tab in that window, or `newWindow: true` for a new one. A profile of this computer that is not open (`fl_extension` lists them) is opened on demand on macOS: `fl_open` with `browser: "Soflution"` starts Brave on that profile if needed and waits for its extension, which must be installed in that profile.
+Windows: `fl_open` takes `window` (an id from `fl_extension` `tabs: true`) to open the tab in that window, or `newWindow: true` for a new one.
+
+Rocketwright never opens or restarts one of your browsers by itself. When a profile's extension is not connected, `fl_open` and `fl_adopt` fail and say why, from that profile's own preferences (read only): the extension is not installed, turned off, loaded unpacked from a folder that moved (with the folder it should be loaded from now), or set to *Site access: On click*. A profile of this computer that is not open (`fl_extension` lists them) is only opened when you ask for it: the agent then passes `launch: true`, and on macOS the browser starts on that profile with the Rocketwright extension of this installation loaded (`--load-extension`, which Chrome 137 and later otherwise ignore), unless the Chrome Web Store copy is installed and on there. Instances made by `flintrail --separate-profile` (in `~/Library/Application Support/Flintrail/Browsers`) are still found.
+
+Your open tabs: `fl_tabs` with `all: true` (or `browser`) lists the tabs open in your browsers, driven or not (site and title, never the full address) with an `#id`, and `fl_adopt` with `browser` and `id` takes one directly. A tab the agent's click opens (a link with `target="_blank"`, `window.open`) is driven at once by the same conversation and named in the answer, its one-time parts masked.
+
+Another extension (1Password's autofill menu, typically on sign-in pages) can make the browser stop Rocketwright from driving a tab. The agent is warned as soon as that extension puts its frame in the page, `fl_reopen` opens the same page again in a fresh tab, and `fl_login` does it by itself. To stop it for good, set that extension's *Site access* to *On click* (`brave://extensions` or `chrome://extensions`, Details).
 
 Updating the extension: after an update, reload it in every browser and profile where it is installed (`chrome://extensions` or `brave://extensions`, *Rocketwright*, reload button). An older extension keeps working, and `fl_extension` flags it as outdated.
 
@@ -187,8 +193,11 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_flow_set_var` | Turn a recorded value into a `{{variable}}`, for flows taught by demonstration. |
 | `fl_flow_export` | A recorded flow as a Playwright Test file (`.spec.ts`) for your project's test suite: it runs with `npx playwright test` in Chromium, Firefox and WebKit. Variables come from `FLOW_<NAME>` environment variables, a sign-in step from `LOGIN_USERNAME` and `LOGIN_PASSWORD`; no password is ever in the file. |
 | `fl_extension` | Browsers Rocketwright can drive: the dedicated one and every connected user browser, by name. |
-| `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand, found by part of its address. In your own browsers, the extension settings can turn this off or exclude sites. |
+| `fl_adopt` | Take control of a tab you already opened yourself, for example right after signing in by hand, found by part of its address or by the `#id` `fl_tabs all:true` lists. In your own browsers, the extension settings can turn this off or exclude sites. |
 | `fl_login` | Sign in with your saved password (browser password manager, 1Password, Bitwarden or your own command). Rocketwright fills it, the agent never sees it. See [Sign in](#sign-in). |
+| `fl_mail_code` | Type a verification code sent by e-mail into a form, read by Rocketwright from your mailbox open in the same browser (Gmail, Outlook on the web). The agent gets the code's length, the sender, the subject and the time, never the code. See [Codes and links sent by e-mail](#codes-and-links-sent-by-e-mail). |
+| `fl_mail_link` | Open the verification or sign-in link of such an e-mail in a new driven tab, only to the sender's own organisation, its one-time parts masked. |
+| `fl_reopen` | Open the page of a tab again in a fresh tab of the same browser: a tab another extension cut off, released, closed, or where the agent ran JavaScript. |
 | `fl_capture_secret` | Store a secret a site shows once (a new GitHub, Cloudflare, Stripe, npm, OpenAI, Anthropic or Resend token) from your open tab straight into a vault (`mcphub:NAME` or `1password:Vault/Title`). The agent only gets its kind, length and public prefix. A known kind is only taken on the site that issues it; any other kind, a 1Password vault, or replacing a saved name asks you first, unless you turn *Ask me before capturing or pasting a secret* off in the extension settings. |
 | `fl_paste_secret` | Type a vault secret (`mcphub:NAME` or `1password:Vault/Title`) into one field of a page, after the user's click in the Rocketwright extension, which shows the site and the secret's name (or without asking, once the user turned *Ask me before capturing or pasting a secret* off). The agent never sees the value. Only in the user's browsers, over HTTPS, in a visible field of the page itself, and not in a tab where the agent ran JavaScript. |
 | `fl_emulate` | Make a tab look like a phone or tablet (`device: "iPhone 15"`, or width, height and `mobile`), with another user agent, position, language, time zone, color scheme, or offline. Back to normal with `reset`, `fl_release` or `fl_close`. In your own browsers Chrome keeps the time zone and language from extensions: use the dedicated browser for those. |
@@ -197,7 +206,7 @@ Limits in extension mode: browser-level CDP (download folder, permissions, windo
 | `fl_trace` | Record a Playwright trace of the agent's work in a browser: every action with a picture before and after. Open it with `npx playwright show-trace`. Page copies and the network log are left out, since they would hold the browser's cookies and whatever you type by hand. Saved by `stop`, or when the last tab is released or closed; it stops by itself after 30 minutes. |
 | `fl_video` | Film one tab as a WebM video, each click and fill pointed out on screen (`actions: false` to turn that off), to show a person what was done. Saved by `stop`, `fl_release` or `fl_close`; it stops by itself after 30 minutes. |
 | `fl_session` | Save the signed-in state of one site from the dedicated browser (cookies and local storage) to a file only you can read, and load it back; an existing one is only replaced with `replace: true`. Its content never reaches the agent, and Rocketwright never uploads its own files (sessions, token, profile) to a site. |
-| `fl_tabs` / `fl_close` | Manage tabs. |
+| `fl_tabs` / `fl_close` | List the tabs the agent drives (`all: true` or `browser`: also the tabs open in your browsers, with an `#id` for `fl_adopt`), close one. |
 | `fl_desktop` | Snapshot a native desktop app (Finder, Mail, Preview, Notes, any app) with `[dN]` refs, through the OS accessibility tree. Without `app`, lists running apps. See [Desktop apps](#desktop-apps). |
 | `fl_desktop_act` | Run many actions on a desktop app in one call: `click`, `dblclick`, `rightclick`, `fill`, `type`, `clear`, `press`, `select`, `check`, `uncheck`, `toggle`, `expand`, `collapse`, `focus`, `scroll`, `get`, `wait`, `launch`, `quit`. Recorded like browser actions. |
 
@@ -269,7 +278,20 @@ To narrow the search, list vaults: in the extension settings (*Password manager 
 
 Whose account: when a sign-in step already names the account (the password page after the e-mail page), `fl_login` uses the saved login of that account and fills nothing if none matches. When you tell the agent whose account to work on, it passes `account` (a username or e-mail) and `fl_login` then refuses a saved login for anyone else, even when it is the only one for the site, instead of signing in to your own account by mistake.
 
-Not supported: Apple Passwords (iCloud Keychain) has no command-line access. One-time codes sent by SMS, e-mail or phone prompt: `fl_login` says so and the agent asks you.
+A saved login whose username is out of date (you just changed the account's e-mail): `fl_login` with `item` and `username` types that username instead, the password still coming from the login.
+
+On a tab where the agent ran JavaScript, `fl_login` opens the same page again in a fresh tab and fills it there (the answer gives the new tab id); `reopen: false` refuses instead.
+
+Not supported: Apple Passwords (iCloud Keychain) has no command-line access. One-time codes sent by SMS or a phone prompt: `fl_login` says so and the agent asks you. Codes sent by e-mail: see below.
+
+## Codes and links sent by e-mail
+
+When a site sends a verification code or link by e-mail and your mailbox is open in the same browser (Gmail at `mail.google.com`, Outlook on the web at `outlook.cloud.microsoft`, `outlook.office.com` or `outlook.live.com`, or a webmail you declare in `ROCKETWRIGHT_MAIL_HOSTS`), the agent does not ask you to copy it:
+
+- `fl_mail_code` (`tab`, `from`, optional `field`, `maxAgeMinutes` default 10, `waitSeconds` default 30, `pattern`, `submit`) opens the newest e-mail from `from` received within the delay, takes the code (the 4 to 8 digit number shown on its own, or what `pattern` captures) and types it into the form. The code is masked in everything returned, the mailbox included.
+- `fl_mail_link` (`browser`, `from`, `link` text or `urlContains`) opens the link of that e-mail in a new driven tab, and returns its id and snapshot with the one-time parts of the address masked.
+
+Safeguards: `from` is an address or a domain, never a display name; the sender's organisation (registrable domain: `notify.cloudflare.com` is `cloudflare.com`) must be the form's or the link's, unless you confirmed a pairing and the agent passes `site`; payment, bank and crypto sites and e-mails about a payment are refused (their codes can approve a payment); the form tab must be free of the agent's JavaScript; the extension settings for one-time codes apply; nothing runs while a flow is recorded. A mailbox tab the agent did not drive is taken for the search only, then given back where it was. The sender address is what the webmail shows: a forged sender that your webmail does not flag is not detected.
 
 ## Desktop apps
 
@@ -310,6 +332,8 @@ Each recorded step stores a fingerprint, not a fragile selector: test id, stable
 - A trace or video that is recording when Rocketwright is about to fill a password, a code or a secret (`fl_login`, `fl_paste_secret`), or when a page `fl_capture_secret` just read shows one, is stopped before anything is typed and deleted, together with the working copy Playwright keeps in its temporary folder: it would hold the value. A trace is refused while any tab it would record holds one, a video while its tab does, both while `ROCKETWRIGHT_ALLOWED_DOMAINS` is set (they would record the frames of other sites the page embeds), and a saved trace is deleted if a value Rocketwright masks reached it another way. `fl_session` is refused while a trace records the dedicated browser.
 - A tab with any `fl_mock` rule counts as one the agent ran JavaScript in: a fake answer can carry a script, and a blocked one changes what a sign-in form does. `fl_login` and `fl_paste_secret` refuse it for the rest of its life. Rules are matched on the masked address and stand aside while Rocketwright fills a secret in the tab.
 - `fl_login` fills but never sends a form marked to send by GET: the password would land in the page address.
+- `fl_mail_code` and `fl_mail_link` never return a code or a token: the code is masked everywhere from the moment it is read, and only typed in a one-time code field of the sender's own site, over HTTPS; a link is only followed to the sender's organisation, and its tab is closed again if it lands elsewhere.
+- Rocketwright never opens or restarts a browser of yours unless the agent passes `launch: true` because you asked.
 - Flows are plain JSON in `~/.rocketwright/flows`, easy to review and version.
 - The HTTP transport requires a bearer token (constant-time comparison) and binds to `127.0.0.1` by default.
 - `eval` and `request` run inside the page with the page's own privileges, nothing more.
@@ -351,7 +375,8 @@ The list is read from the environment when Rocketwright starts: the agent has no
 | `ROCKETWRIGHT_ALLOWED_DOMAINS` | any site | The only sites the agent may work on, comma separated: `example.com` is that host, `*.example.com` is `example.com` and its subdomains. See Allowed sites. |
 | `ROCKETWRIGHT_PASSWORDS` | `browser` | Password sources for `fl_login`, in order: `browser`, `1password[:path]`, `bitwarden[:path]`, `command:path`. `off` removes the tool. |
 | `ROCKETWRIGHT_VAULTS` / `ROCKETWRIGHT_EXCLUDE_VAULTS` | | Dedicated browser: only these 1Password vaults / never these, comma separated. In your own browsers, the extension settings decide. |
-| `ROCKETWRIGHT_INSTANCES_DIR` | `~/Library/Application Support/Rocketwright/Browsers` | Where browser instances of their own live, one folder each: `<brand>/<name>` (see `--separate-profile`). |
+| `ROCKETWRIGHT_INSTANCES_DIR` | `~/Library/Application Support/Rocketwright/Browsers` | Where browser instances of their own live, one folder each: `<brand>/<name>` (see `--separate-profile`). Unset, instances made by Flintrail in `~/Library/Application Support/Flintrail/Browsers` are found too. |
+| `ROCKETWRIGHT_MAIL_HOSTS` | | Webmails of your own for `fl_mail_code` and `fl_mail_link`, comma separated: `mail.example.com=outlook,webmail.example.org=gmail`. |
 | `ROCKETWRIGHT_MCPHUB` | found in `PATH`, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` | Full path of the McpHub program `fl_capture_secret` and `fl_paste_secret` use for `mcphub:` vaults. An app opened from the Dock starts Rocketwright with a short `PATH`, so Rocketwright also looks where McpHub installs itself. |
 
 ## Develop
@@ -376,6 +401,8 @@ npm run bench                          # benchmark vs Playwright MCP
 Rocketwright est un serveur MCP de navigation pour agents IA. Il pilote un vrai Chrome dédié (jamais votre navigateur personnel), enchaîne plusieurs actions en un seul appel, enregistre une tâche la première fois puis la rejoue seul, sans IA, en quelques centaines de millisecondes, ou en rejouant directement les appels API du site avec votre session. Sur notre banc d'essai, la même tâche prend 2,4 s avec Playwright MCP et 0,11 s avec Rocketwright en mode API.
 
 L'extension Chrome rend tout cela accessible à tout le monde : on l'installe, elle se jumelle toute seule avec Rocketwright, et l'agent pilote le navigateur qu'on lui nomme (Brave, Chrome, Edge…), plusieurs à la fois. Mieux, on peut lui apprendre une tâche en la faisant soi-même une fois (bouton *Start recording*), Rocketwright la rejoue ensuite seul. Les mots de passe ne sont jamais enregistrés.
+
+Quand un site envoie un code ou un lien de vérification par email et que votre boîte (Gmail, Outlook web) est ouverte dans le même navigateur, l'agent utilise `fl_mail_code` (le code est tapé dans le formulaire sans jamais passer par l'agent) ou `fl_mail_link` (le lien s'ouvre dans un nouvel onglet), au lieu de vous demander de le recopier. Rocketwright ne lance ni ne relance jamais un de vos navigateurs de lui-même : si l'extension ne se connecte pas, il dit pourquoi.
 
 Pour se connecter, l'agent utilise `fl_login` avec vos mots de passe habituels : ceux enregistrés dans le navigateur (sans réglage), ou 1Password, Bitwarden ou tout autre gestionnaire par sa ligne de commande. Rocketwright remplit le formulaire lui-même, l'agent ne voit jamais ni le mot de passe ni le code. De même, `fl_capture_secret` range un jeton qu'un site n'affiche qu'une fois (GitHub, Cloudflare…) directement dans un coffre, sans que l'agent le voie, et `fl_paste_secret` le recolle dans un autre site après votre clic.
 

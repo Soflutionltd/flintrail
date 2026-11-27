@@ -105,7 +105,10 @@ export const SERVER_INSTRUCTIONS = [
   '- Exactly one connected: use it, and say which one in one line.',
   '- None connected: right away, tell the user to install the Rocketwright extension in the browser and profile they use, and give them its link: ' + EXTENSION_URL + ' (Chrome, Edge, Brave, Arc; or Load unpacked from the release zip in <brand>://extensions with Developer mode on). Then they open its popup, check it shows "Connected to Rocketwright" with a green dot (otherwise click Connect), and optionally give the browser a name. Until one is connected, a task that needs their sessions (an account they are signed in to) waits for it; any other task runs in the dedicated "agent" browser.',
   'Never switch to another profile of the user than the one agreed, and never sign in for them by typing a password: use fl_login (their password manager) or let them sign in by hand.',
-  'Prefer fl_adopt on a tab the user already opened, then fl_open; batch steps in fl_act; read with fl_snapshot rather than screenshots.',
+  '- A user browser whose extension does not connect is never opened or restarted by Rocketwright: the error says why (extension off, site access "On click", extension folder moved); pass that on to the user. Use fl_open launch:true only when the user asked to open a profile that is not open.',
+  'Verification codes and links sent by e-mail: when the user\'s mailbox (Gmail, Outlook on the web) is open in the same browser, use fl_mail_code (types the code into the form) or fl_mail_link (opens the link in a new tab) instead of asking the user to copy them. You never see the code. Ask the user only when the tool says no mailbox is open, or refuses.',
+  'Prefer fl_adopt on a tab the user already opened (fl_tabs all:true lists them with an id: fl_adopt {browser, id}), then fl_open; batch steps in fl_act; read with fl_snapshot rather than screenshots. A tab your click opens is driven at once and named in the answer.',
+  'A tab cut off by another extension (a password manager\'s frame) or where you ran JavaScript: fl_reopen opens its page in a fresh tab (fl_login does it by itself); if it gets cut off again, ask the user to set that extension\'s "Site access" to "On click".',
 ].join('\n');
 
 export function buildServer(): McpServer {
