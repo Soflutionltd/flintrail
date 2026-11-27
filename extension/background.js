@@ -366,7 +366,7 @@ async function handle(method, p) {
       return all.map((t) => {
         let origin = '';
         try { origin = t.url ? new URL(t.url).origin : ''; } catch { /* chrome:// and the like */ }
-        return { window: t.windowId, origin: origin === 'null' ? '' : origin, title: t.title || '', attached: attached.has(t.id) };
+        return { id: t.id, window: t.windowId, origin: origin === 'null' ? '' : origin, title: t.title || '', attached: attached.has(t.id) };
       });
     }
     default:
@@ -446,6 +446,14 @@ async function adoptOpenTab(p) {
   if (!(await storageProtected)) return { refused: 'this browser cannot protect the extension settings from web pages, so taking over open tabs stays off' };
   const settings = await adoptSettings();
   if (!settings.adoptOpenTabs) return { refused: 'taking over open tabs is turned off in the Rocketwright extension settings: share the tab from the extension instead' };
+  const hostOf = (t) => { try { return new URL(t.url).hostname.toLowerCase(); } catch { return ''; } };
+  // One tab by its id, as listTabs gave it (fl_tabs all): the same checks as by address.
+  if (typeof p.tabId === 'number') {
+    const tab = await chrome.tabs.get(p.tabId).catch(() => null);
+    if (!tab || !tab.url || !webUrl(tab.url) || tab.url === 'about:blank' || attached.has(tab.id)) return { tabId: null };
+    if (hostAllowed(hostOf(tab), settings.neverAdopt)) return { refused: `${hostOf(tab)} is in the Rocketwright extension's list of sites agents never take over` };
+    return { tabId: tab.id, targetInfo: await attach(tab.id) };
+  }
   const match = String(p.match || '').trim();
   // An empty or tiny address would match any tab, the last one the user looked at included.
   if (match.length < 3) return { refused: 'give at least 3 characters of the tab address' };
@@ -458,7 +466,6 @@ async function adoptOpenTab(p) {
   };
   const candidates = (await chrome.tabs.query({}))
     .filter((t) => t.url && matches(t.url) && webUrl(t.url) && t.url !== 'about:blank' && !attached.has(t.id));
-  const hostOf = (t) => { try { return new URL(t.url).hostname.toLowerCase(); } catch { return ''; } };
   const open = candidates.filter((t) => !hostAllowed(hostOf(t), settings.neverAdopt));
   if (!open.length) {
     return candidates.length ? { refused: `${hostOf(candidates[0])} is in the Rocketwright extension's list of sites agents never take over` } : { tabId: null };

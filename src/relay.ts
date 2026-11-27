@@ -377,9 +377,10 @@ class ExtensionBridge {
   }
 
   /** Gives a tab the user shared (URL containing match) to this client. */
-  async claim(client: ClientConn, match: string, mode: MatchMode = 'contains'): Promise<{ url: string } | null> {
+  async claim(client: ClientConn, match: string, mode: MatchMode = 'contains', tabId?: number): Promise<{ url: string } | null> {
     const view = this.viewOf(client);
-    const shared = [...this.tabsById.values()].filter((t) => !t.owner && urlMatches(String(t.targetInfo.url || ''), match, mode)).at(-1);
+    const fits = (t: Tab) => (tabId !== undefined ? t.tabId === tabId : urlMatches(String(t.targetInfo.url || ''), match, mode));
+    const shared = [...this.tabsById.values()].filter((t) => !t.owner && fits(t)).at(-1);
     if (shared) {
       shared.owner = view;
       if (view.autoAttach) this.announce(shared);
@@ -389,7 +390,7 @@ class ExtensionBridge {
     if (this.legacy) return null;
     let found: { tabId?: number | null; targetInfo?: Tab['targetInfo']; refused?: string };
     try {
-      found = await this.request('adoptTab', { match, mode }, 10000);
+      found = await this.request('adoptTab', tabId !== undefined ? { tabId } : { match, mode }, 10000);
     } catch (e) {
       if (/Unknown method adoptTab/.test((e as Error).message)) return null;
       throw e;
@@ -683,7 +684,7 @@ export class ExtensionRelay {
         return { key: bridge.key, cdpUrl: `ws://127.0.0.1:${this.port}${bridge.openView(client).path}` };
       }
       case 'claim':
-        return this.bridgeFor(p.key).claim(client, String(p.match || ''), p.mode === 'prefix' || p.mode === 'origin' ? p.mode : 'contains');
+        return this.bridgeFor(p.key).claim(client, String(p.match || ''), p.mode === 'prefix' || p.mode === 'origin' ? p.mode : 'contains', typeof p.tabId === 'number' ? p.tabId : undefined);
       case 'tabs': {
         const bridge = this.bridgeFor(p.key);
         if (bridge.legacy) throw new Error(`${bridge.key}: extension ${bridge.info.version} cannot list its tabs, reload it to update.`);

@@ -427,6 +427,24 @@ export async function adoptTab(match: string, browserName?: string, mode: MatchM
   return register(page, where);
 }
 
+/** Take over a tab of a user browser by the id fl_tabs all:true listed (the browser's own tab id). */
+export async function adoptTabById(tabId: number, browserName?: string): Promise<string> {
+  const where = await getDriven(browserName);
+  if (!where.viaExtension) throw new Error('id names a tab of one of the user\'s browsers (from fl_tabs all:true). In the dedicated browser, use url.');
+  const owned = new Set(tabs.values());
+  const claimed = await getRelayClient()?.request('claim', { key: where.name, tabId }) as { url?: string } | null | undefined;
+  if (!claimed) throw new Error(`No tab #${tabId} in ${where.name} that this conversation may take: closed, driven by another conversation, or a browser page. List them again with fl_tabs all:true.`);
+  let page: Page | undefined;
+  for (let i = 0; !page && i < 50; i++) {
+    const fresh = where.ctx.pages().filter((p) => !owned.has(p) && !p.isClosed());
+    page = fresh.find((p) => p.url() === claimed.url) ?? (fresh.length === 1 ? fresh[0] : undefined);
+    if (!page) await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!page) throw new Error(`Tab #${tabId} of ${where.name} was handed over but did not show up: try fl_adopt again.`);
+  assertAllowed(page.url());
+  return register(page, where);
+}
+
 /** A tab open in this browser whose address contains match, now driven by this conversation; null when there is none. */
 async function takeOver(where: Driven, match: string, mode: MatchMode = 'contains'): Promise<Page | null> {
   const owned = new Set(tabs.values());

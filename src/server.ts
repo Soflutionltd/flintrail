@@ -2,7 +2,7 @@ import './legacy.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from 'playwright-core';
 import { z } from 'zod';
-import { act, adoptTab, agentRanJs, reopenTab, retireTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, adoptTabById, agentRanJs, reopenTab, retireTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { getDriven } from './browser.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
@@ -130,10 +130,15 @@ export function buildServer(): McpServer {
   }));
 
   s.registerTool('fl_adopt', {
-    description: 'Take control of a tab the user already has open in the browser (first match on a URL substring), e.g. a site they just signed in to by hand. Returns its snapshot.',
-    inputSchema: { url: z.string().min(3).describe('Substring of the tab URL (at least 3 characters), e.g. "github.com/settings"'), browser: browserOpt, ...snapOpts },
-  }, guard(async ({ url, browser, text: t, max, within }) => {
-    const id = await adoptTab(url, browser);
+    description: 'Take control of a tab the user already has open in the browser (first match on a URL substring, or its id from fl_tabs all:true), e.g. a site they just signed in to by hand. Returns its snapshot.',
+    inputSchema: {
+      url: z.string().min(3).optional().describe('Substring of the tab URL (at least 3 characters), e.g. "github.com/settings"'),
+      id: z.number().int().optional().describe('Instead of url: the tab\'s #id listed by fl_tabs all:true, with its browser.'),
+      browser: browserOpt, ...snapOpts,
+    },
+  }, guard(async ({ url, id: tabId, browser, text: t, max, within }) => {
+    if ((url === undefined) === (tabId === undefined)) throw new Error('Give url or id (from fl_tabs all:true), one of the two.');
+    const id = tabId !== undefined ? await adoptTabById(tabId, browser) : await adoptTab(url!, browser);
     return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max, within }));
   }));
 
@@ -279,8 +284,44 @@ export function buildServer(): McpServer {
     }
   });
 
-  s.registerTool('fl_tabs', { description: 'List tabs opened by Rocketwright.', inputSchema: {} },
-    guard(async () => listTabs().join('\n') || 'No tabs.'));
+  s.registerTool('fl_tabs', {
+    description: 'List the tabs you drive. all:true (or browser) also lists the tabs already open in the user\'s browsers, driven or not, with their site, title and #id: take one with fl_adopt {browser, id}.',
+    inputSchema: {
+      all: z.boolean().optional().describe('Also list the tabs open in every connected user browser.'),
+      browser: z.string().optional().describe('Also list the tabs open in this user browser only (a name from fl_extension).'),
+    },
+  }, guard(async ({ all, browser }) => {
+    const lines = listTabs();
+    const own = lines.length ? ['Driven by you:', ...lines.map((l) => `  ${l}`)] : ['Driven by you: none.'];
+    if (!all && !browser) return lines.join('\n') || 'No tabs.';
+    const relay = getRelayClient();
+    if (!relay) return [...own, 'Extension relay turned off (ROCKETWRIGHT_RELAY=off): no user browser to list.'].join('\n');
+    await relay.ensure();
+    const wanted = browser ? relay.find(browser) : undefined;
+    if (browser && !wanted) throw new Error(`Browser "${browser}" is not connected (see fl_extension).`);
+    const out = [...own];
+    let ids = false;
+    for (const b of wanted ? [wanted] : relay.browsers) {
+      let open: { id?: number; origin: string; title: string; window: number; attached: boolean }[];
+      try {
+        open = await relay.request('tabs', { key: b.key });
+      } catch (e) {
+        out.push(`${b.key}: tabs unavailable: ${(e as Error).message}`);
+        continue;
+      }
+      // Tabs on sites outside the user's list are not described to the agent.
+      const offList = (x: { origin: string }) => config.allowedDomains.length > 0 && (!x.origin || !!domainProblem(x.origin));
+      const hidden = open.filter(offList).length;
+      out.push(`${b.key}: ${open.length} tab(s)${hidden ? `, ${hidden} on sites outside the allowed list, not shown` : ''}`);
+      for (const x of open.filter((y) => !offList(y))) {
+        if (typeof x.id === 'number') ids = true;
+        out.push(`  ${typeof x.id === 'number' ? `#${x.id} ` : ''}window ${x.window}: ${x.origin || '(blank)'}  ${x.title}${x.attached ? '  [driven]' : ''}`);
+      }
+    }
+    if (!relay.browsers.length) out.push('No user browser connected.');
+    out.push(ids ? 'Take one over with fl_adopt {browser:"<name>", id:<#id>} (one marked [driven] belongs to a conversation already).' : 'Take one over with fl_adopt {browser:"<name>", url:"<part of its address>"} (reload the extension in that browser to get ids).');
+    return out.join('\n');
+  }));
 
   s.registerTool('fl_close', { description: 'Close a Rocketwright tab.', inputSchema: { tab: z.string() } },
     guard(async ({ tab }) => {
