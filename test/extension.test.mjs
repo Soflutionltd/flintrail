@@ -65,6 +65,14 @@ after(async () => {
   site?.server.close();
 });
 
+// A click on Allow or Refuse closes the confirmation window: the browser may report the window gone before
+// the click call returns. The click happened; what it decided is checked by the caller on the tool's answer.
+const answerAndClose = async (win, selector) => {
+  const closed = win.isClosed() ? Promise.resolve() : win.waitForEvent('close');
+  await win.click(selector).catch((e) => { if (!/has been closed/.test(e.message)) throw e; });
+  await closed;
+};
+
 test('the extension pairs by itself and is listed by name', async () => {
   assert.match(sw.url(), /^chrome-extension:\/\/hgkglidmccenjlhdcplcpkgbadonplnb\//);
   const { paired } = await sw.evaluate(() => chrome.storage.local.get('paired'));
@@ -355,7 +363,7 @@ test('fl_capture_secret puts a token a page shows once straight into the vault, 
     const details = await win.textContent('dl');
     // The window's title says what it asks.
     const windowTitle = await win.title();
-    await win.click(answer);
+    await answerAndClose(win, answer);
     return { pending, title, details, windowTitle };
   };
   const first = await confirm({ browser: 'chromium', url: '/token-created', kind: 'prefix', prefix: 'github_pat_', to: 'mcphub:ideekdo/GITHUB_TOKEN' });
@@ -435,7 +443,7 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
     const win = await asked;
     await win.waitForSelector(`${answer}:not([disabled])`);
     const shown = { title: await win.textContent('h1'), details: await win.textContent('dl') };
-    await win.click(answer);
+    await answerAndClose(win, answer);
     return { pending, ...shown };
   };
   // Refused by the user: nothing is read from the vault, nothing typed.
@@ -492,7 +500,7 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
   pending2.catch(() => {});
   const win2 = await asked2;
   await win2.waitForSelector('#allow:not([disabled])');
-  await win2.click('#allow');
+  await answerAndClose(win2, '#allow');
   await assert.rejects(pending2, /McpHub printed the name with the value \(an older McpHub\): update it, then try again\. Nothing was pasted/);
   assert.equal(await old.evaluate(() => document.querySelector('[name=key]').value), '');
   await mcp.call('fl_release', { tab: oldTab });
