@@ -264,8 +264,8 @@ async function agentWindow() {
   }
   const last = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
   if (last?.id !== undefined) return { windowId: last.id };
-  // No window open at all: open one, in front.
-  const win = await chrome.windows.create({ focused: true, url: 'about:blank' });
+  // No window open at all: open one, without taking the keyboard from the app the user is in.
+  const win = await chrome.windows.create({ focused: false, url: 'about:blank' });
   return { windowId: win.id, blankTabId: win.tabs?.[0]?.id };
 }
 
@@ -311,10 +311,11 @@ async function handle(method, p) {
     case 'createTab': {
       if (isProtected(p.url)) throw new Error('Rocketwright never opens browser or extension pages.');
       const { windowId, blankTabId } = await placeTab(p);
-      // The new tab is the one shown in its window: a background tab behind about:blank looked empty.
+      // The new tab opens behind the one the user is on, and stays there: the agent works in it without
+      // taking the screen, and the user goes to it when they want to follow or to step in.
       const tab = blankTabId !== undefined
         ? await chrome.tabs.get(blankTabId)
-        : await chrome.tabs.create({ windowId, url: 'about:blank', active: true });
+        : await chrome.tabs.create({ windowId, url: 'about:blank', active: false });
       const targetInfo = await attach(tab.id);
       if (p.url && p.url !== 'about:blank') chrome.tabs.update(tab.id, { url: p.url });
       return { tabId: tab.id, targetInfo };

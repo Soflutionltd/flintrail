@@ -115,11 +115,11 @@ test('agent tabs open in the window the user picked for the agent, else in the w
   await mcp.call('fl_close', { tab: again });
 });
 
-test('the opened tab is shown in its window, and survives the extension reconnecting', async () => {
+test('the opened tab stays behind the one the user is on, and survives the extension reconnecting', async () => {
   const snap = await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', text: 0 });
   const tab = /Tab (t\d+)/.exec(snap)[1];
   const shown = () => sw.evaluate(async (u) => (await chrome.tabs.query({ url: u })).map((t) => t.active), site.url + '/search');
-  assert.deepEqual(await shown(), [true]);
+  assert.deepEqual(await shown(), [false], 'the agent works in a background tab');
   // The browser restarts the extension's service worker now and then: its connection to the relay drops,
   // and the tab must stay driven by the same conversation once it is back.
   await sw.evaluate(() => ws.close());
