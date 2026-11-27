@@ -115,6 +115,41 @@ test('agent tabs open in the window the user picked for the agent, else in the w
   await mcp.call('fl_close', { tab: again });
 });
 
+test('each window has a name the agent can work in, given by itself and changed by the user', async () => {
+  // Named after the site most of its tabs show, whatever the subdomain.
+  const labels = await sw.evaluate(() => ['app.docix.io', 'www.github.com', 'shop.example.co.uk', 'localhost', '127.0.0.1'].map(siteLabel));
+  assert.deepEqual(labels, ['docix', 'github', 'example', 'localhost', '127.0.0.1']);
+  assert.equal(await sw.evaluate(() => autoWindowName(['a.github.com', 'github.com', 'docix.io'], new Set(['github']), 3)), 'Github 2');
+  assert.equal(await sw.evaluate(() => autoWindowName([], new Set(), 3)), 'Window 3');
+
+  const other = await sw.evaluate(async () => (await chrome.windows.create({ focused: false, url: 'about:blank' })).id);
+  const names = await sw.evaluate(() => windowNames());
+  assert.equal(new Set(names.map((w) => w.name.toLowerCase())).size, names.length, 'no two windows share a name');
+  assert.ok(names.every((w) => w.name && !w.manual));
+  // The user renames one in the popup; a name another window has is refused.
+  assert.equal(await sw.evaluate((id) => renameWindow(id, '  Accounting  '), other), 'Accounting');
+  const taken = names.find((w) => w.id !== other).name;
+  await assert.rejects(sw.evaluate(([id, n]) => renameWindow(id, n), [other, taken]), /Another window is already named/);
+
+  // The agent works in the window it was told, and stays there for its next tabs.
+  const windowOf = (path) => sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.windowId, site.url + path);
+  const first = await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', window: 'accounting', text: 0 });
+  assert.match(first, /^Tab t\d+ \[chromium\]\nWindow: "Accounting"\n/);
+  assert.equal(await windowOf('/search'), other);
+  const next = await mcp.call('fl_open', { url: site.url + '/login', browser: 'chromium', evenIfSiteOpen: true, newTab: true, text: 0 });
+  assert.match(next, /^Window: "Accounting"$/m);
+  assert.equal(await windowOf('/login'), other, 'the next tab follows without naming the window again');
+  assert.match(await mcp.call('fl_tabs', { all: true }), /window "Accounting": /);
+  await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'chromium', window: 'Nowhere', evenIfSiteOpen: true, newTab: true }), /No window named "Nowhere"\. Windows: .*"Accounting"/);
+
+  for (const snap of [first, next]) await mcp.call('fl_close', { tab: /Tab (t\d+)/.exec(snap)[1] });
+  await sw.evaluate((id) => chrome.windows.remove(id), other);
+  // The window is gone: the conversation's next tab opens as it would have without it, with no error.
+  const after = await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', text: 0 });
+  assert.doesNotMatch(after, /Window: "Accounting"/);
+  await mcp.call('fl_close', { tab: /Tab (t\d+)/.exec(after)[1] });
+});
+
 test('the opened tab stays behind the one the user is on, and survives the extension reconnecting', async () => {
   const snap = await mcp.call('fl_open', { url: site.url + '/search', browser: 'chromium', text: 0 });
   const tab = /Tab (t\d+)/.exec(snap)[1];

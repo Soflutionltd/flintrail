@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 const send = (msg) => chrome.runtime.sendMessage(msg);
 let tab = null;
 let labelLoaded = false;
+let windowNameLoaded = false;
 
 async function render() {
   const s = await chrome.storage.local.get(['status', 'statusDetail', 'token', 'port', 'recording', 'label', 'name']);
@@ -15,6 +16,15 @@ async function render() {
   $('nameInfo').textContent = connected && s.name
     ? `Agents pick this browser profile as "${s.name}", whatever the window. Change it above if you like.`
     : 'Each browser profile gets a name of its own, the same in all its windows; change it above if you like.';
+  // This window's name: given by Rocketwright after the site it shows, shown ready to change.
+  if (tab && !windowNameLoaded) {
+    const { name, manual } = await send({ type: 'windowName', windowId: tab.windowId });
+    $('windowName').value = name || '';
+    $('windowNameInfo').textContent = name
+      ? `Tell your agent "work in the window ${name}" and its tabs open here. ${manual ? 'You chose this name.' : 'Named after the site this window shows; change it above if you like.'}`
+      : '';
+    windowNameLoaded = true;
+  }
   $('connect').classList.toggle('hidden', connected);
   $('disconnect').classList.toggle('hidden', !connected);
   $('share').disabled = !connected || !tab;
@@ -50,6 +60,13 @@ $('connect').onclick = async () => {
   if (optional && !$('token').value.trim()) await chrome.permissions.request({ permissions: ['nativeMessaging'] }).catch(() => false);
   await send({ type: 'connect', token: $('token').value, port: $('port').value });
   setTimeout(render, 400);
+};
+$('saveWindowName').onclick = async () => {
+  if (!tab) return;
+  const { text } = await send({ type: 'setWindowName', windowId: tab.windowId, name: $('windowName').value });
+  windowNameLoaded = false;
+  await render();
+  if (text?.startsWith('Error')) $('windowNameInfo').textContent = text;
 };
 $('saveLabel').onclick = async () => {
   await send({ type: 'setLabel', label: $('label').value });

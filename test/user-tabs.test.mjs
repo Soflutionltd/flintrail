@@ -56,7 +56,7 @@ test('fl_tabs all lists the user\'s open tabs with an id, and fl_adopt takes one
   assert.match(listed, /^Driven by you: none\.$/m);
   const line = listed.split('\n').find((l) => / Search$/.test(l));
   assert.ok(line, listed);
-  assert.match(line, new RegExp(`^  #(\\d+) window \\d+: ${site.url.replace(/[.]/g, '\\.')}  Search$`));
+  assert.match(line, new RegExp(`^  #(\\d+) window "[^"]+": ${site.url.replace(/[.]/g, '\\.')}  Search$`));
   assert.match(listed, /fl_adopt \{browser:"<name>", id:<#id>\}/);
   const id = Number(/#(\d+)/.exec(line)[1]);
   await assert.rejects(mcp.call('fl_adopt', { browser: 'chromium', id, url: '/search' }), /Give url or id/);
@@ -65,7 +65,7 @@ test('fl_tabs all lists the user\'s open tabs with an id, and fl_adopt takes one
   const tab = /Tab (t\d+)/.exec(snap)[1];
   const after = await mcp.call('fl_tabs', { browser: 'chromium' });
   assert.match(after, new RegExp(`Driven by you:\\n  ${tab}  \\[chromium\\]  .*\\/search\\?user=1`));
-  assert.match(after, /#\d+ window \d+: .*  Search  \[driven\]/);
+  assert.match(after, /#\d+ window "[^"]+": .*  Search  \[driven\]/);
   await assert.rejects(mcp.call('fl_adopt', { browser: 'chromium', id }), /No tab #\d+ in chromium that this conversation may take/);
   await mcp.call('fl_release', { tab });
   await mine.close();

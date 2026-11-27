@@ -2,7 +2,7 @@ import './legacy.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from 'playwright-core';
 import { z } from 'zod';
-import { act, adoptTab, adoptTabById, agentRanJs, reopenTab, retireTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, adoptTabById, agentRanJs, reopenTab, retireTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, tabWindow, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { getDriven } from './browser.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
@@ -103,6 +103,7 @@ export const SERVER_INSTRUCTIONS = [
   'Before the first browser task of a conversation, call fl_extension to see which user browsers are connected and which profiles are installed but not open.',
   '- Several user browsers connected: ask the user which one to work in (each is named after its profile or the name set in the extension, e.g. "brave-soflution"), unless they already named it. Remember the answer for the rest of the conversation.',
   '- Exactly one connected: use it, and say which one in one line.',
+  '- A user browser with several windows: each window has a name (fl_tabs all:true lists them; the user sees and changes it in the extension popup). When the user names a window ("work in Docix"), pass window:"Docix" to fl_open once: this conversation then stays in that window. Never pick another window than the one the user named.',
   '- None connected: right away, tell the user to install the Rocketwright extension in the browser and profile they use, and give them its link: ' + EXTENSION_URL + ' (Chrome, Edge, Brave, Arc; or Load unpacked from the release zip in <brand>://extensions with Developer mode on). Then they open its popup, check it shows "Connected to Rocketwright" with a green dot (otherwise click Connect), and optionally give the browser a name. Until one is connected, a task that needs their sessions (an account they are signed in to) waits for it; any other task runs in the dedicated "agent" browser.',
   'Never switch to another profile of the user than the one agreed, and never sign in for them by typing a password: use fl_login (their password manager) or let them sign in by hand.',
   '- A user browser whose extension does not connect is never opened or restarted by Rocketwright: the error says why (extension off, site access "On click", extension folder moved); pass that on to the user. Use fl_open launch:true only when the user asked to open a profile that is not open.',
@@ -115,10 +116,10 @@ export function buildServer(): McpServer {
   const s = new McpServer({ name: 'rocketwright', version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
   s.registerTool('fl_open', {
-    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open, or whose extension does not connect, is never opened or restarted by itself: the call fails and says why (extension off, site access "On click", extension folder moved); launch:true opens a profile that is not open, only when the user asked for it. In a user browser, a tab already showing this address, or any tab of the same site, is taken over and brought to the address instead of opening another one. newTab and newWindow are refused while the site is already open there, unless evenIfSiteOpen is set. window picks one of its windows (ids from fl_extension tabs:true): a choice of yours, so the tab opens there even when the site is open elsewhere. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab opens behind the one the user is on, so they keep working: they go to it when they want to follow. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open, or whose extension does not connect, is never opened or restarted by itself: the call fails and says why (extension off, site access "On click", extension folder moved); launch:true opens a profile that is not open, only when the user asked for it. In a user browser, a tab already showing this address, or any tab of the same site, is taken over and brought to the address instead of opening another one. newTab and newWindow are refused while the site is already open there, unless evenIfSiteOpen is set. window picks one of its windows (ids from fl_extension tabs:true): a choice of yours, so the tab opens there even when the site is open elsewhere. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
     inputSchema: {
       url: z.string(), browser: browserOpt,
-      window: z.number().int().optional().describe('User browser only: open the tab in this window (id from fl_extension tabs:true).'),
+      window: z.union([z.number().int(), z.string().min(1).max(40)]).optional().describe('User browser only: the window to work in, by its name (each window is named by the extension, e.g. "Github"; fl_tabs all:true lists them, and the user can rename one in the extension popup) or its number. Once named, this conversation stays in that window: its next tabs open there without saying it again.'),
       newWindow: z.boolean().optional().describe('User browser only: open the tab in a new window. Refused while the site is already open in that browser (see evenIfSiteOpen).'),
       newTab: z.boolean().optional().describe('User browser only: open a new tab instead of taking over one. Refused while the site is already open in that browser (see evenIfSiteOpen).'),
       evenIfSiteOpen: z.boolean().optional().describe('User browser only: allow one more tab of a site already open there. Only when two pages of that site have to stay open together, or when the user asked for another tab.'),
@@ -129,7 +130,8 @@ export function buildServer(): McpServer {
     const id = await openTab(url, browser, { window, newWindow, evenIfSiteOpen, launch }, !newTab);
     const from = takeReusedFrom(id);
     const reused = from ? `Tab ${id} was already yours, on ${from}: it went to this address, so that page and its refs are gone. For a second tab of the site, pass evenIfSiteOpen:true.\n` : '';
-    return `Tab ${id} [${tabBrowser(id)}]\n${reused}` + (await snapshot(getTab(id), { text: t, max, within }));
+    const inWindow = tabWindow(id) ? `Window: "${tabWindow(id)}"\n` : '';
+    return `Tab ${id} [${tabBrowser(id)}]\n${inWindow}${reused}` + (await snapshot(getTab(id), { text: t, max, within }));
   }));
 
   s.registerTool('fl_adopt', {
@@ -306,7 +308,7 @@ export function buildServer(): McpServer {
     const out = [...own];
     let ids = false;
     for (const b of wanted ? [wanted] : relay.browsers) {
-      let open: { id?: number; origin: string; title: string; window: number; attached: boolean }[];
+      let open: { id?: number; origin: string; title: string; window: number; windowName?: string; attached: boolean }[];
       try {
         open = await relay.request('tabs', { key: b.key });
       } catch (e) {
@@ -319,7 +321,7 @@ export function buildServer(): McpServer {
       out.push(`${b.key}: ${open.length} tab(s)${hidden ? `, ${hidden} on sites outside the allowed list, not shown` : ''}`);
       for (const x of open.filter((y) => !offList(y))) {
         if (typeof x.id === 'number') ids = true;
-        out.push(`  ${typeof x.id === 'number' ? `#${x.id} ` : ''}window ${x.window}: ${x.origin || '(blank)'}  ${x.title}${x.attached ? '  [driven]' : ''}`);
+        out.push(`  ${typeof x.id === 'number' ? `#${x.id} ` : ''}window ${x.windowName ? `"${x.windowName}"` : x.window}: ${x.origin || '(blank)'}  ${x.title}${x.attached ? '  [driven]' : ''}`);
       }
     }
     if (!relay.browsers.length) out.push('No user browser connected.');

@@ -257,6 +257,107 @@ async function detach(tabId, reason = 'released') {
 // (1.5.3 and older opened a window of their own: that window is no longer used unless the user picks it.)
 chrome.storage.session.remove('agentWindow').catch(() => {});
 
+// ---- Window names ---------------------------------------------------------------------------------
+// Each window gets a name by itself, after the site most of its tabs are on ("Github", "Docix"), so the
+// user can tell an agent "work in Docix" when one profile has several windows open. The user may rename it
+// in the popup. A name stays once given, whatever the window shows later. Window ids change when the
+// browser restarts: names are kept with the sites of their window, and given back to the window that
+// shows those sites again.
+const TWO_PART_SUFFIXES = new Set(['co.uk', 'org.uk', 'com.au', 'co.nz', 'co.jp', 'com.br', 'com.mx', 'co.za', 'com.tr', 'co.in', 'gouv.fr']);
+const WINDOW_NAME_MAX = 40;
+
+function siteLabel(host) {
+  const bare = host.replace(/^www\./, '');
+  if (bare === 'localhost' || /^[\d.]+$/.test(bare) || bare.includes(':')) return bare;
+  const parts = bare.split('.');
+  if (parts.length < 2) return bare;
+  return parts[parts.length - (TWO_PART_SUFFIXES.has(parts.slice(-2).join('.')) ? 3 : 2)] || bare;
+}
+
+function hostsOf(tabs) {
+  const hosts = [];
+  for (const t of tabs) {
+    try {
+      const u = new URL(t.url || '');
+      if (u.protocol === 'http:' || u.protocol === 'https:') hosts.push(u.hostname);
+    } catch { /* a browser page */ }
+  }
+  return hosts;
+}
+
+function freeName(base, taken) {
+  let name = base;
+  for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base} ${n}`;
+  return name;
+}
+
+function autoWindowName(hosts, taken, index) {
+  const counts = new Map();
+  for (const host of hosts) counts.set(siteLabel(host), (counts.get(siteLabel(host)) || 0) + 1);
+  // The site with most tabs; the first met wins a tie.
+  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return freeName(best ? best.charAt(0).toUpperCase() + best.slice(1) : `Window ${index}`, taken);
+}
+
+/** Every normal window with its name, naming the ones that have none yet. */
+async function windowNames() {
+  const wins = await chrome.windows.getAll({ windowTypes: ['normal'] });
+  const tabs = await chrome.tabs.query({});
+  const { windowNames: stored = {} } = await chrome.storage.session.get('windowNames');
+  const { namedWindows: saved = [] } = await chrome.storage.local.get('namedWindows');
+  const hosts = new Map(wins.map((w) => [w.id, hostsOf(tabs.filter((t) => t.windowId === w.id))]));
+  const live = {};
+  for (const w of wins) if (stored[w.id]) live[w.id] = stored[w.id];
+  const taken = new Set(Object.values(live).map((x) => x.name.toLowerCase()));
+  let index = 0;
+  for (const w of wins) {
+    index++;
+    if (live[w.id]) continue;
+    const here = new Set(hosts.get(w.id));
+    // After a restart: the name of the window that showed these sites, when at least half of them are back.
+    const back = saved.find((x) => !taken.has(x.name.toLowerCase()) && x.hosts?.length
+      && x.hosts.filter((h) => here.has(h)).length * 2 >= x.hosts.length);
+    live[w.id] = back
+      ? { name: back.name, manual: !!back.manual }
+      : { name: autoWindowName(hosts.get(w.id), taken, index), manual: false };
+    taken.add(live[w.id].name.toLowerCase());
+  }
+  await chrome.storage.session.set({ windowNames: live });
+  await chrome.storage.local.set({
+    namedWindows: wins.map((w) => ({ ...live[w.id], hosts: [...new Set(hosts.get(w.id))].slice(0, 30) })),
+  });
+  return wins.map((w) => ({
+    id: w.id, name: live[w.id].name, manual: live[w.id].manual, focused: !!w.focused,
+    tabs: tabs.filter((t) => t.windowId === w.id).length,
+  }));
+}
+
+/** The window an agent named: its exact name, whatever the case, else the only one starting with it. */
+async function windowByName(wanted) {
+  const all = await windowNames();
+  const asked = String(wanted).trim().toLowerCase();
+  const exact = all.filter((w) => w.name.toLowerCase() === asked);
+  const found = exact.length ? exact : all.filter((w) => asked && w.name.toLowerCase().startsWith(asked));
+  if (found.length === 1) return found[0];
+  const names = all.map((w) => `"${w.name}"`).join(', ');
+  throw new Error(found.length
+    ? `Several windows start with "${wanted}": give the whole name. Windows: ${names}.`
+    : `No window named "${wanted}". Windows: ${names}.`);
+}
+
+async function renameWindow(windowId, wanted) {
+  const name = String(wanted || '').replace(/\s+/g, ' ').trim().slice(0, WINDOW_NAME_MAX);
+  if (!name) throw new Error('A window name cannot be empty.');
+  const all = await windowNames();
+  if (!all.some((w) => w.id === windowId)) throw new Error('That window is closed.');
+  if (all.some((w) => w.id !== windowId && w.name.toLowerCase() === name.toLowerCase())) throw new Error(`Another window is already named "${name}".`);
+  const { windowNames: stored = {} } = await chrome.storage.session.get('windowNames');
+  stored[windowId] = { name, manual: true };
+  await chrome.storage.session.set({ windowNames: stored });
+  await windowNames();
+  return name;
+}
+
 async function agentWindow() {
   const { pickedAgentWindow: id } = await chrome.storage.session.get('pickedAgentWindow');
   if (typeof id === 'number') {
@@ -275,6 +376,15 @@ async function placeTab(p) {
   if (p.newWindow) {
     const win = await chrome.windows.create({ focused: false, url: 'about:blank' });
     return { windowId: win.id, blankTabId: win.tabs?.[0]?.id };
+  }
+  if (typeof p.windowName === 'string') {
+    // Named just now by the agent: that window, or an error naming the windows there are.
+    if (!p.windowKept) return { windowId: (await windowByName(p.windowName)).id };
+    // Only the window the conversation was in: the one the user keeps the agent to comes first, and a window
+    // closed or renamed since is no reason to fail.
+    const { pickedAgentWindow: picked } = await chrome.storage.session.get('pickedAgentWindow');
+    const stays = typeof picked === 'number' ? null : await windowByName(p.windowName).catch(() => null);
+    if (stays) return { windowId: stays.id };
   }
   if (typeof p.windowId === 'number') {
     await chrome.windows.get(p.windowId).catch(() => { throw new Error(`Window ${p.windowId} is closed (list windows with fl_extension tabs:true).`); });
@@ -318,7 +428,8 @@ async function handle(method, p) {
         : await chrome.tabs.create({ windowId, url: 'about:blank', active: false });
       const targetInfo = await attach(tab.id);
       if (p.url && p.url !== 'about:blank') chrome.tabs.update(tab.id, { url: p.url });
-      return { tabId: tab.id, targetInfo };
+      const placed = (await windowNames()).find((w) => w.id === tab.windowId);
+      return { tabId: tab.id, targetInfo, window: placed ? { id: placed.id, name: placed.name } : undefined };
     }
     case 'send':
       if (isProtected(p.params?.url)) throw new Error('Rocketwright never opens browser or extension pages.');
@@ -363,12 +474,15 @@ async function handle(method, p) {
     case 'listTabs': {
       // Site and title only (no path, no query string): enough to find the window where an account is open.
       const all = await chrome.tabs.query({});
+      const named = new Map((await windowNames()).map((w) => [w.id, w.name]));
       return all.map((t) => {
         let origin = '';
         try { origin = t.url ? new URL(t.url).origin : ''; } catch { /* chrome:// and the like */ }
-        return { id: t.id, window: t.windowId, origin: origin === 'null' ? '' : origin, title: t.title || '', attached: attached.has(t.id) };
+        return { id: t.id, window: t.windowId, windowName: named.get(t.windowId) || '', origin: origin === 'null' ? '' : origin, title: t.title || '', attached: attached.has(t.id) };
       });
     }
+    case 'windows':
+      return windowNames();
     default:
       throw new Error(`Unknown method ${method}`);
   }
@@ -701,6 +815,16 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case 'disconnect':
         await disconnect();
         return reply({});
+      case 'windowName': {
+        const found = (await windowNames()).find((w) => w.id === msg.windowId);
+        return reply({ name: found?.name || '', manual: !!found?.manual });
+      }
+      case 'setWindowName':
+        try {
+          return reply({ name: await renameWindow(msg.windowId, msg.name), text: 'Saved.' });
+        } catch (e) {
+          return reply({ text: `Error: ${e.message}` });
+        }
       case 'setLabel':
         // The name agents use to pick this browser (e.g. "Work" becomes brave-work): reconnect to apply it.
         await store.set({ label: String(msg.label || '').trim().slice(0, 60) });

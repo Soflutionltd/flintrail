@@ -84,6 +84,8 @@ interface PageState {
   nextDialog?: { accept: boolean; value?: string };
   /** Browser the tab lives in ("agent", "brave"...) and whether it is driven through the extension. */
   browser: string;
+  /** The window of the user's browser the tab was opened in, by the name its extension gives it. */
+  window?: string;
   viaExtension: boolean;
   /**
    * The agent ran JavaScript in this tab. Kept for the tab's whole life: a window it opened from the page
@@ -282,7 +284,11 @@ function pageNotes(page: Page): string[] {
 
 /** In a user browser: open the tab in this window (id from fl_extension tabs), or in a new window. */
 export interface Placement {
-  window?: number;
+  /** A window's name (given by the extension, see fl_tabs all:true), or its number. */
+  window?: number | string;
+  /** The window is the one this conversation was in, not one just asked for: when the user keeps the agent to
+   * another window, or that window is gone, the tab goes where it would have gone without it. */
+  kept?: boolean;
   newWindow?: boolean;
   /** One more tab of a site already open in the user's browser, on purpose (see openTab). */
   evenIfSiteOpen?: boolean;
@@ -328,13 +334,16 @@ async function openPage(where: Driven, placement: Placement = {}): Promise<Page>
       // so two tabs opened at once never swap windows.
       const params = {
         url: 'about:blank', background: true, ...(browserContextId ? { browserContextId } : {}),
-        ...(placement.window !== undefined ? { flintrailWindowId: placement.window } : {}),
+        ...(typeof placement.window === 'number' ? { flintrailWindowId: placement.window } : {}),
+        ...(typeof placement.window === 'string' ? { rocketwrightWindow: placement.window } : {}),
+        ...(placement.kept ? { rocketwrightWindowKept: true } : {}),
         ...(placement.newWindow ? { flintrailNewWindow: true } : {}),
         ...(placement.near ? { flintrailNear: placement.near } : {}),
       };
-      await cdp.send('Target.createTarget', params);
+      const made = (await cdp.send('Target.createTarget', params)) as { rocketwrightWindow?: string };
       const page = await waitPage;
       await cdp.detach().catch(() => {});
+      if (typeof made.rocketwrightWindow === 'string') stateOf(page).window = made.rocketwrightWindow;
       return page;
     } catch (e) {
       // A tab asked for a given window must not silently land elsewhere.
@@ -373,6 +382,40 @@ function ownTabOn(where: Driven, site: string): { id: string; page: Page } | nul
 }
 
 /**
+ * The window of each user browser this conversation works in, once the agent named one (the user said "work in
+ * Docix"): its next tabs open there without naming it again. Until a window is named, tabs open as they always
+ * did: the user's own tab of the site is taken over wherever it is, and a new one goes next to it.
+ */
+const boundWindows = new Map<string, string>();
+
+/** The window a tab was opened in, by name: '' in the dedicated browser, or with an extension that names none. */
+export function tabWindow(id: string): string {
+  return stateOf(getTab(id)).window || '';
+}
+
+/** The window this conversation was told to work in, while the browser still has it: forgotten once it is closed
+ * or renamed, so the conversation opens its tabs as it did before any window was named. */
+async function keptWindow(where: Driven): Promise<string | undefined> {
+  const kept = boundWindows.get(where.name);
+  if (kept === undefined) return undefined;
+  const listed = await getRelayClient()?.request('tabs', { key: where.name }, 5000).catch(() => null) as { windowName?: string }[] | null | undefined;
+  // No answer is no proof the window is gone: the extension decides when the tab opens.
+  if (!Array.isArray(listed) || listed.some((t) => (t.windowName || '').toLowerCase() === kept.toLowerCase())) return kept;
+  boundWindows.delete(where.name);
+  return undefined;
+}
+
+/** A free tab of this site in the named window of the user's browser, by its number there: null when none. */
+async function freeTabIn(where: Driven, windowName: string, site: string): Promise<number | null> {
+  const listed = await getRelayClient()?.request('tabs', { key: where.name }, 5000).catch(() => null) as
+    { id?: number; windowName?: string; origin?: string; attached?: boolean }[] | null | undefined;
+  if (!Array.isArray(listed)) return null;
+  const wanted = windowName.toLowerCase();
+  const found = listed.find((t) => typeof t.id === 'number' && !t.attached && t.origin === site && (t.windowName || '').toLowerCase() === wanted);
+  return found?.id ?? null;
+}
+
+/**
  * Is this site already open in the user's browser? Asked to the extension, which sees every tab of the
  * profile, driven or not. An extension too old to list its tabs, or a relay that does not answer, leaves only
  * the tabs this process drives: the user's other tabs are then not seen and the new tab is let through.
@@ -389,6 +432,11 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
   if ((placement.window !== undefined || placement.newWindow) && !where.viaExtension) {
     throw new Error('window and newWindow apply to the user\'s browsers only (set browser, see fl_extension).');
   }
+  // A window named by the agent is where this conversation works from now on; without one, it stays in the
+  // window its tabs went to before.
+  if (typeof placement.window === 'string') boundWindows.set(where.name, placement.window);
+  const bound = where.viaExtension && placement.window === undefined && !placement.newWindow ? await keptWindow(where) : undefined;
+  const windowName = typeof placement.window === 'string' ? placement.window : bound;
   // In a user browser, asking for one more tab or window of a site already open there is refused: the user
   // finds their site open several times and has to clean up. The tab already there is the one to use.
   const wanted = url && where.viaExtension ? siteOf(url) : '';
@@ -405,7 +453,26 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
   }
   // In a user browser, a tab already showing this address (or a page under it) is taken over rather than
   // opening one more tab: the user does not end up with the same site open ten times.
-  if (url && reuse && where.viaExtension && placement.window === undefined && !placement.newWindow) {
+  if (url && reuse && where.viaExtension && windowName !== undefined) {
+    assertAllowed(url);
+    // In its window, the conversation takes the tab it already drives on that site, else a free tab of the
+    // site there, and only then opens one more: a tab of the same site in another window is someone else's work.
+    const own = wanted && !placement.evenIfSiteOpen ? ownTabOn(where, wanted) : null;
+    if (own && stateOf(own.page).window?.toLowerCase() === windowName.toLowerCase()) {
+      reusedFrom.set(own.id, own.page.url());
+      await gotoFast(own.page, url);
+      recorder.onOpen(url);
+      return own.id;
+    }
+    const free = wanted && !placement.evenIfSiteOpen ? await freeTabIn(where, windowName, wanted) : null;
+    if (free !== null) {
+      const id = await adoptTabById(free, where.name);
+      stateOf(getTab(id)).window = windowName;
+      await gotoFast(getTab(id), url);
+      recorder.onOpen(url);
+      return id;
+    }
+  } else if (url && reuse && where.viaExtension && placement.window === undefined && !placement.newWindow) {
     assertAllowed(url);
     // The same page (or one under it) as it is; else a tab of the same site, brought to the page asked for.
     const same = await takeOver(where, url.replace(/[?#].*$/, '').replace(/\/+$/, ''), 'prefix').catch(() => null);
@@ -428,7 +495,9 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
       return id;
     }
   }
-  const page = await newPage(where, url && where.viaExtension ? { ...placement, near: url } : placement);
+  // In a named window the tab goes there, not next to the user's tabs of the site in another window.
+  const placed: Placement = windowName !== undefined ? { ...placement, window: windowName, kept: typeof placement.window !== 'string' } : placement;
+  const page = await newPage(where, url && where.viaExtension && windowName === undefined ? { ...placed, near: url } : placed);
   const id = register(page, where);
   stateOf(page).openedByAgent = true;
   if (url) {

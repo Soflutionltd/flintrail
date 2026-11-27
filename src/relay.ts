@@ -70,6 +70,12 @@ const isBrowserSession = (sessionId: string | undefined) => !sessionId || sessio
  * The name each browser got the first time it connected, kept in ~/.rocketwright/browsers.json: a browser keeps
  * its name whatever the order browsers connect in, and keeps its profile name when the profiles cannot be read.
  */
+/** Whether an extension of this version names its windows (2.2.0 on). */
+export function namesWindows(version: string | undefined): boolean {
+  const [major = 0, minor = 0] = String(version || '').split('.').map(Number);
+  return major > 2 || (major === 2 && minor >= 2);
+}
+
 class BrowserNames {
   private file = join(config.home, 'browsers.json');
   private names: Record<string, { key: string; profile?: string }> = {};
@@ -514,10 +520,18 @@ class ExtensionBridge {
         // Window choice sent by Rocketwright along with the command: an existing window, or a new one.
         const placement = {
           ...(typeof params.flintrailWindowId === 'number' ? { windowId: params.flintrailWindowId } : {}),
+          ...(typeof params.rocketwrightWindow === 'string' ? { windowName: params.rocketwrightWindow } : {}),
+          ...(params.rocketwrightWindowKept === true ? { windowKept: true } : {}),
           ...(params.flintrailNewWindow === true ? { newWindow: true } : {}),
         };
         if (Object.keys(placement).length && this.legacy) {
           throw new Error(`${this.key}: extension ${this.info.version} cannot pick a window, reload it in this browser to update it.`);
+        }
+        // An extension from before window names would ignore the name and open the tab anywhere.
+        if ('windowName' in placement && !namesWindows(this.info.version)) {
+          // A window only kept from before is not worth an error: the tab opens as it always did.
+          if ('windowKept' in placement) return this.browserCommand(view, method, { ...params, rocketwrightWindow: undefined, rocketwrightWindowKept: undefined });
+          throw new Error(`${this.key}: extension ${this.info.version || '?'} cannot find a window by its name (2.2.0 can): reload it in this browser to update it, or pass the window's number.`);
         }
         const near = typeof params.flintrailNear === 'string' ? { near: params.flintrailNear } : {};
         const r = await this.request('createTab', { url: params.url || 'about:blank', ...placement, ...near });
@@ -527,7 +541,9 @@ class ExtensionBridge {
           throw new Error('client disconnected');
         }
         const tab = this.addTab(r.tabId, r.targetInfo, view);
-        return { targetId: tab.targetInfo.targetId };
+        // The window the tab went to, by the name the extension gives it (none from an older extension).
+        const window = typeof r.window?.name === 'string' ? { rocketwrightWindow: r.window.name } : {};
+        return { targetId: tab.targetInfo.targetId, ...window };
       }
       case 'Rocketwright.releaseTarget': {
         // fl_release: this conversation stops driving the tab, the user keeps it open. The tab may have moved
