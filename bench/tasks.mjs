@@ -3,7 +3,7 @@
 // Cloudflare-style token with three permission rows, and fill a 30-field form.
 // Each tool does each task the way that suits it best, scripted the way an agent that already knows the page would
 // call it: CSS selectors and one batched form fill for Playwright MCP, one snapshot then one fill_form for Chrome
-// DevTools MCP, one batch of actions for Flintrail. We measure tool-side wall time, tool calls (each one is a model
+// DevTools MCP, one batch of actions for Rocketwright. We measure tool-side wall time, tool calls (each one is a model
 // turn in real use) and whether the page accepted the result. Claude in Chrome cannot be scripted: it is left out.
 import { writeFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -13,10 +13,10 @@ import { testEnv, cli } from '../test/helpers.mjs';
 import { startTaskSite, GH, CF, FORM } from './task-site.mjs';
 
 const RUNS = Number(process.env.RUNS || 5);
-const chrome = process.env.FLINTRAIL_CHROME;
+const chrome = process.env.ROCKETWRIGHT_CHROME;
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
 const fakeOp = new URL('../test/fake-op.mjs', import.meta.url).pathname;
-// The password the competitors are given: with them the agent has to know it. Flintrail fills it from the manager.
+// The password the competitors are given: with them the agent has to know it. Rocketwright fills it from the manager.
 const PASSWORD = 'S3cret pass&"42';
 
 async function client(command, args, env, kind = '') {
@@ -183,7 +183,7 @@ const devtools = {
   },
 };
 
-// ---- Flintrail: one batch of actions per task, the password and code filled from the password manager.
+// ---- Rocketwright: one batch of actions per task, the password and code filled from the password manager.
 const flSteps = (fields) => fields.map((f) => (f.role === 'combobox' ? { do: 'select', selector: f.sel, value: f.value }
   : f.role === 'radio' || f.role === 'checkbox' ? { do: 'check', selector: f.sel } : { do: 'fill', selector: f.sel, value: f.value }));
 const flRun = async (call, url, actions) => {
@@ -193,9 +193,9 @@ const flRun = async (call, url, actions) => {
   if (/FAILED/.test(out)) throw new Error(out.slice(0, 300));
   return out;
 };
-const flintrail = {
-  label: 'Flintrail',
-  start: () => client(process.execPath, [cli], testEnv({ FLINTRAIL_PASSWORDS: `1password:${fakeOp}` })),
+const rocketwright = {
+  label: 'Rocketwright',
+  start: () => client(process.execPath, [cli], testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${fakeOp}` })),
   login: async ({ call }) => {
     const tab = /Tab (t\d+)/.exec(await call('fl_open', { url: U.login, text: 0 }))[1];
     await call('fl_login', { tab });
@@ -212,7 +212,7 @@ const flintrail = {
 
 const TASKS = [['login', 'Sign in (password manager + code)'], ['gh', 'GitHub-style token'], ['cf', 'Cloudflare-style token'], ['form', '30-field form']];
 const results = [];
-for (const tool of [playwright, devtools, flintrail]) {
+for (const tool of [playwright, devtools, rocketwright]) {
   const ctx = await tool.start();
   for (const [key, name] of TASKS) {
     try { await tool[key](ctx); } catch { /* warm-up: browser start, first page */ }

@@ -1,4 +1,4 @@
-// Records what the user does by hand while a demonstration is running, as Flintrail steps.
+// Records what the user does by hand while a demonstration is running, as Rocketwright steps.
 // Element fingerprints come from the same describe function the engine uses (fingerprint.js).
 (() => {
   if (window.__flintrailContent) return;
@@ -71,7 +71,7 @@
     (el instanceof HTMLInputElement && TEXT_TYPES.has(el.type)) ||
     el?.isContentEditable;
   const isToggle = (el) => el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio');
-  // Secrets are never recorded: password fields, one-time code boxes, and any field Flintrail filled with a secret.
+  // Secrets are never recorded: password fields, one-time code boxes, and any field Rocketwright filled with a secret.
   const isPassword = (el) => el instanceof HTMLInputElement && (el.type === 'password' || el.autocomplete === 'one-time-code'
     || el.hasAttribute('data-fl-secret') || /otp|totp|2fa|mfa|one.?time|verification.?code|security.?code/i.test(`${el.name} ${el.id}`)
     || (el.maxLength === 1 && el.inputMode === 'numeric'));

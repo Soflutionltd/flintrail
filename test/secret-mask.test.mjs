@@ -1,4 +1,4 @@
-// Anything that looks like a credential is masked in what Flintrail returns to the agent, even when Flintrail
+// Anything that looks like a credential is masked in what Rocketwright returns to the agent, even when Rocketwright
 // did not fill it: a page showing a new API key in its buttons, a script that reads it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

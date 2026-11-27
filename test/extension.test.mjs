@@ -1,5 +1,5 @@
 // End to end through the real browser extension: the agent drives tabs over chrome.debugger via the
-// relay, and a human demonstration recorded by the extension is replayed by Flintrail.
+// relay, and a human demonstration recorded by the extension is replayed by Rocketwright.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
@@ -17,7 +17,7 @@ const fakeStore = new URL('./fake-store.mjs', import.meta.url).pathname;
 chmodSync(fakeStore, 0o755);
 // A fake vault value, built at run time (no credential-looking string in the repository).
 const vaultValue = 'vault-' + 'Q7'.repeat(12);
-const storeOut = join(mkdtempSync(join(tmpdir(), 'flintrail-store-')), 'stored.jsonl');
+const storeOut = join(mkdtempSync(join(tmpdir(), 'rocketwright-store-')), 'stored.jsonl');
 const stored = () => { try { return readFileSync(storeOut, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const token = 'test-token-' + Math.random().toString(36).slice(2);
 let site, mcp, ctx, sw;
@@ -39,20 +39,20 @@ async function waitFor(fn, ms = 10000) {
 before(async () => {
   site = await startFixture();
   const relayPort = await freePort();
-  // The "user's browser" profile. Flintrail registers its pairing host in it at startup, so the
+  // The "user's browser" profile. Rocketwright registers its pairing host in it at startup, so the
   // extension fetches the token by itself: nobody pastes anything.
-  const userDataDir = mkdtempSync(join(tmpdir(), 'flintrail-ext-'));
+  const userDataDir = mkdtempSync(join(tmpdir(), 'rocketwright-ext-'));
   mcp = await connect(testEnv({
-    FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(relayPort), FLINTRAIL_TOKEN: token,
-    FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir, FLINTRAIL_EXTENSION_WAIT: '1500',
-    FLINTRAIL_PASSWORDS: `1password:${fakeOp}`,
-    FLINTRAIL_MCPHUB: fakeStore, FAKE_STORE_OUT: storeOut, FAKE_VAULT_NAMES: 'EXISTING_TOKEN,OTHER,OLD_FORMAT', FAKE_VAULT_OLD_FORMAT: 'OLD_FORMAT', FAKE_VAULT_VALUE: vaultValue,
+    ROCKETWRIGHT_MODE: 'extension', ROCKETWRIGHT_RELAY_PORT: String(relayPort), ROCKETWRIGHT_TOKEN: token,
+    ROCKETWRIGHT_RELAY: 'on', ROCKETWRIGHT_PAIRING: 'on', ROCKETWRIGHT_PAIRING_DIRS: userDataDir, ROCKETWRIGHT_EXTENSION_WAIT: '1500',
+    ROCKETWRIGHT_PASSWORDS: `1password:${fakeOp}`,
+    ROCKETWRIGHT_MCPHUB: fakeStore, FAKE_STORE_OUT: storeOut, FAKE_VAULT_NAMES: 'EXISTING_TOKEN,OTHER,OLD_FORMAT', FAKE_VAULT_OLD_FORMAT: 'OLD_FORMAT', FAKE_VAULT_VALUE: vaultValue,
   }));
-  // A normal Chromium with the Flintrail extension installed.
+  // A normal Chromium with the Rocketwright extension installed.
   ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: true,
     // Extensions need the full Chromium (new headless), not the headless shell.
-    ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }),
+    ...(process.env.ROCKETWRIGHT_CHROME ? { executablePath: process.env.ROCKETWRIGHT_CHROME } : { channel: 'chromium' }),
     args: [`--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`],
   });
   sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
@@ -70,7 +70,7 @@ test('the extension pairs by itself and is listed by name', async () => {
   const { paired } = await sw.evaluate(() => chrome.storage.local.get('paired'));
   assert.equal(paired, true);
   assert.match(await mcp.call('fl_extension'), /^chromium: Extension connected/m);
-  await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'safari' }), /Browser "safari" is not connected to Flintrail\. Connected: chromium/);
+  await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'safari' }), /Browser "safari" is not connected to Rocketwright\. Connected: chromium/);
   const snap = await mcp.call('fl_open', { url: site.url, browser: 'chromium', text: 0 });
   assert.match(snap, /^Tab t\d+ \[chromium\]/);
   await mcp.call('fl_close', { tab: /Tab (t\d+)/.exec(snap)[1] });
@@ -144,7 +144,7 @@ test('password filling follows the extension settings, and only the user answers
 
   await empty();
   await settings({ enabled: false });
-  await assert.rejects(mcp.call('fl_login', { tab }), /Refused by the Flintrail extension settings in chromium: password filling is turned off/);
+  await assert.rejects(mcp.call('fl_login', { tab }), /Refused by the Rocketwright extension settings in chromium: password filling is turned off/);
   // Vaults the user left out in the extension settings are never searched.
   await settings({ vaultsDeny: ['test'] });
   await assert.rejects(mcp.call('fl_login', { tab }), /never test; 1 matching login\(s\) left out by those settings/);
@@ -207,7 +207,7 @@ test('an agent takes over a tab the user has open, unless the settings say no', 
   await settings({ adoptOpenTabs: false });
   await assert.rejects(mcp.call('fl_adopt', { url: '/details', browser: 'chromium' }), /taking over open tabs is turned off/);
   await settings({ adoptOpenTabs: true, neverAdopt: ['127.0.0.1'] });
-  await assert.rejects(mcp.call('fl_adopt', { url: '/details', browser: 'chromium' }), /127\.0\.0\.1 is in the Flintrail extension's list of sites agents never take over/);
+  await assert.rejects(mcp.call('fl_adopt', { url: '/details', browser: 'chromium' }), /127\.0\.0\.1 is in the Rocketwright extension's list of sites agents never take over/);
   await settings({});
   await again.close();
 });
@@ -308,7 +308,7 @@ test('fl_capture_secret puts a token a page shows once straight into the vault, 
   assert.equal(entry.input, token, 'the value went on standard input only');
   // The tab already driven on that site refuses scripts until it changes page.
   const sealed = await mcp.call('fl_extract', { tab: own, js: 'return document.querySelector("code").textContent' });
-  assert.match(sealed, /Blocked: this page holds a password, code or secret Flintrail filled or captured/);
+  assert.match(sealed, /Blocked: this page holds a password, code or secret Rocketwright filled or captured/);
   assert.ok(!sealed.includes(token));
   await mcp.call('fl_release', { tab: own });
   // A tab of that site the agent takes over afterwards is sealed too, and so is its next page for a few minutes; the value is masked anyway.
@@ -379,7 +379,7 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
   const no = await ask({ ref: key, from: 'mcphub:EXISTING_TOKEN' }, '#deny');
   assert.match(no.title, /paste a secret from your vault/);
   assert.match(no.details, /127\.0\.0\.1.*McpHub vault as EXISTING_TOKEN.*into the password field the page calls "API key"/s);
-  await assert.rejects(no.pending, /Refused by the Flintrail extension in chromium: the user declined/);
+  await assert.rejects(no.pending, /Refused by the Rocketwright extension in chromium: the user declined/);
   assert.equal(await page.evaluate(() => document.querySelector('[name=key]').value), '');
   // Allowed: typed and submitted, and the agent only learns the length.
   const yes = await ask({ ref: key, from: 'mcphub:EXISTING_TOKEN', submit: true }, '#allow');
@@ -399,7 +399,7 @@ test('fl_paste_secret types a vault secret into a field after the user\'s click,
   await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: 'clipboard' }), /from: "mcphub:NAME"/);
   // A 1Password vault the user excluded is not read, even with a click.
   await sw.evaluate(() => chrome.storage.local.set({ fillSettings: { vaultsDeny: ['Clients'] } }));
-  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: '1password:clients/Deploy key' }), /the vault "clients" is not one Flintrail may use/);
+  await assert.rejects(mcp.call('fl_paste_secret', { tab, label: 'API key', from: '1password:clients/Deploy key' }), /the vault "clients" is not one Rocketwright may use/);
   await sw.evaluate(() => chrome.storage.local.set({ fillSettings: {} }));
   // The site stays sealed a few minutes after the paste: the next page may show the secret again.
   assert.match(await mcp.call('fl_extract', { tab, js: 'return 1' }), /Blocked: this page holds a password, code or secret/);

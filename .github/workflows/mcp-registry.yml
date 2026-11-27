@@ -1,5 +1,5 @@
 # Builds the .mcpb bundle, attaches it to the GitHub release and publishes the server
-# to the official MCP Registry (registry.modelcontextprotocol.io) as com.soflution/flintrail (domain soflution.com, verified by DNS).
+# to the official MCP Registry (registry.modelcontextprotocol.io) as com.soflution/rocketwright (domain soflution.com, verified by DNS).
 # Runs on every v* tag, or by hand for an existing tag.
 name: MCP Registry
 
@@ -38,7 +38,7 @@ jobs:
         run: |
           V="${VERSION_OVERRIDE:-${TAG#v}}"
           echo "V=$V" >> "$GITHUB_ENV"
-          code=$(curl -s -m 120 -o /dev/null -w '%{http_code}' "https://registry.modelcontextprotocol.io/v0.1/servers/com.soflution%2Fflintrail/versions/$V" || true)
+          code=$(curl -s -m 120 -o /dev/null -w '%{http_code}' "https://registry.modelcontextprotocol.io/v0.1/servers/com.soflution%2Frocketwright/versions/$V" || true)
           # Published versions are immutable: never rebuild their bundle (its SHA-256 would change).
           if [ "$code" = "200" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "$V is already in the registry"; fi
 
@@ -66,19 +66,19 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: |
           node scripts/build-mcpb.mjs "$TAG"
-          mv flintrail-*.mcpb flintrail.mcpb
-          echo "SHA=$(sha256sum flintrail.mcpb | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          mv rocketwright-*.mcpb rocketwright.mcpb
+          echo "SHA=$(sha256sum rocketwright.mcpb | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       - name: Attach to the release
         if: steps.check.outputs.skip != 'true'
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "flintrail $TAG" --generate-notes
-          gh release upload "$TAG" flintrail.mcpb --clobber
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "rocketwright $TAG" --generate-notes
+          gh release upload "$TAG" rocketwright.mcpb --clobber
 
       - name: Write server.json
         if: steps.check.outputs.skip != 'true'
         run: |
-          jq --arg v "$V" --arg u "https://github.com/${{ github.repository }}/releases/download/$TAG/flintrail.mcpb" --arg s "$SHA" \
+          jq --arg v "$V" --arg u "https://github.com/${{ github.repository }}/releases/download/$TAG/rocketwright.mcpb" --arg s "$SHA" \
             '.version=$v | .packages[0].identifier=$u | .packages[0].fileSha256=$s' .mcp/server.json > server.json
           cat server.json
 
@@ -97,4 +97,4 @@ jobs:
           [ -x ./mcp-publisher ] || curl -fsSL https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz | tar xz mcp-publisher
           ./mcp-publisher logout || true
           ./mcp-publisher login github-oidc
-          yes | ./mcp-publisher status --status deprecated --all-versions --message "Moved to com.soflution/flintrail" io.github.Soflutionltd/flintrail || true
+          yes | ./mcp-publisher status --status deprecated --all-versions --message "Moved to com.soflution/rocketwright" io.github.Soflutionltd/rocketwright || true

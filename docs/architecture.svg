@@ -26,9 +26,9 @@
 
   <path class="w" d="M230 135 H300" marker-end="url(#a)"/>
 
-  <!-- Flintrail core -->
+  <!-- Rocketwright core -->
   <rect x="300" y="30" width="340" height="400" rx="14" fill="none" stroke="url(#g)" stroke-width="2"/>
-  <text x="322" y="60" font-size="18" font-weight="800" fill="#FF6A1A">Flintrail</text>
+  <text x="322" y="60" font-size="18" font-weight="800" fill="#FF6A1A">Rocketwright</text>
 
   <rect class="hot" x="322" y="78" width="306" height="70" rx="10"/>
   <text class="t" x="340" y="104">Live engine</text>
@@ -62,7 +62,7 @@
   <path class="w" d="M640 300 H700" marker-end="url(#a)"/>
   <rect class="box" x="700" y="270" width="170" height="110" rx="12"/>
   <text class="t" x="718" y="300">Flow store</text>
-  <text class="s" x="718" y="326">~/.flintrail/flows</text>
+  <text class="s" x="718" y="326">~/.rocketwright/flows</text>
   <text class="s" x="718" y="346">plain JSON, versionable</text>
   <text class="s" x="718" y="366">no passwords, ever</text>
 

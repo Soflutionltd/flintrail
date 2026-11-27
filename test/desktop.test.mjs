@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url';
 const fake = fileURLToPath(new URL('./fake-agent-desktop.mjs', import.meta.url));
 chmodSync(fake, 0o755);
 const home = mkdtempSync(join(tmpdir(), 'fl-desktop-'));
-process.env.FLINTRAIL_HOME = home;
-process.env.FLINTRAIL_AGENT_DESKTOP = fake;
+process.env.ROCKETWRIGHT_HOME = home;
+process.env.ROCKETWRIGHT_AGENT_DESKTOP = fake;
 process.env.FAKE_AD_LOG = join(home, 'clicks.log');
 
 const d = await import('../dist/desktop.js');

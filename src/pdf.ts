@@ -10,7 +10,7 @@ import { domainProblem } from './domains.js';
 const SIZES = { A4: [8.27, 11.69], Letter: [8.5, 11], A3: [11.69, 16.54], Legal: [8.5, 14] } as const;
 
 export async function savePdf(page: Page, o: { name?: string; landscape?: boolean; format?: keyof typeof SIZES }): Promise<string> {
-  // A password or code Flintrail filled could be printed in clear: same rule as a screenshot.
+  // A password or code Rocketwright filled could be printed in clear: same rule as a screenshot.
   assertNoSecret(page, 'A PDF');
   const [w, h] = SIZES[o.format || 'A4'];
   // Embedded frames of sites outside the user's list are hidden for the print, as for a screenshot.

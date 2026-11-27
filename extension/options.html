@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Flintrail settings</title>
+<title>Rocketwright settings</title>
 <link rel="stylesheet" href="ui.css">
 <style>
   body { font-size: 13px; }
@@ -30,16 +30,16 @@
 <body>
 <main>
   <header class="page">
-    <div class="brand"><img src="icons/48.png" alt="" draggable="false"><h1>Flintrail settings</h1></div>
-    <p>Passwords and one-time codes Flintrail fills from your password manager (1Password, Bitwarden…) in this browser. Only you can change these settings: no agent can, through Flintrail.</p>
+    <div class="brand"><img src="icons/48.png" alt="" draggable="false"><h1>Rocketwright settings</h1></div>
+    <p>Passwords and one-time codes Rocketwright fills from your password manager (1Password, Bitwarden…) in this browser. Only you can change these settings: no agent can, through Rocketwright.</p>
   </header>
 
   <section class="group">
     <h2>Password filling</h2>
     <div class="card">
-      <label class="row"><span class="text"><span class="title">Fill saved passwords</span><small>Off: Flintrail never fills a password in this browser.</small></span><input type="checkbox" class="switch" id="enabled"></label>
-      <label class="row"><span class="text"><span class="title">Ask me before each fill</span><small>A Flintrail window shows the website and the login. Only your click answers; no answer within 2 minutes means no.</small></span><input type="checkbox" class="switch" id="confirm"></label>
-      <label class="row"><span class="text"><span class="title">Fill one-time codes (TOTP)</span><small>Off: Flintrail fills the password, and the agent asks you for the code.</small></span><input type="checkbox" class="switch" id="totp"></label>
+      <label class="row"><span class="text"><span class="title">Fill saved passwords</span><small>Off: Rocketwright never fills a password in this browser.</small></span><input type="checkbox" class="switch" id="enabled"></label>
+      <label class="row"><span class="text"><span class="title">Ask me before each fill</span><small>A Rocketwright window shows the website and the login. Only your click answers; no answer within 2 minutes means no.</small></span><input type="checkbox" class="switch" id="confirm"></label>
+      <label class="row"><span class="text"><span class="title">Fill one-time codes (TOTP)</span><small>Off: Rocketwright fills the password, and the agent asks you for the code.</small></span><input type="checkbox" class="switch" id="totp"></label>
     </div>
   </section>
 
@@ -47,7 +47,7 @@
     <h2>Secrets</h2>
     <div class="card">
       <label class="row"><span class="text"><span class="title">Capture secrets shown on a page</span><small>A token a site shows once (GitHub, Cloudflare…) goes straight into your vault, never to the agent.</small></span><input type="checkbox" class="switch" id="capture"></label>
-      <label class="row"><span class="text"><span class="title">Ask me before capturing or pasting a secret</span><small>On: a Flintrail window asks you for an unknown kind, a 1Password vault, replacing a saved name, and every paste. Off: the agent captures and pastes without asking, each one still listed in the history.</small></span><input type="checkbox" class="switch" id="askSecrets"></label>
+      <label class="row"><span class="text"><span class="title">Ask me before capturing or pasting a secret</span><small>On: a Rocketwright window asks you for an unknown kind, a 1Password vault, replacing a saved name, and every paste. Off: the agent captures and pastes without asking, each one still listed in the history.</small></span><input type="checkbox" class="switch" id="askSecrets"></label>
     </div>
   </section>
 
@@ -79,7 +79,7 @@
   <section class="group">
     <h2>Your open tabs</h2>
     <div class="card">
-      <label class="row"><span class="text"><span class="title">Agents may take over a tab I have open</span><small>An agent asks for a tab by its address and drives it, without you sharing it first. Off: share the tab from the Flintrail popup.</small></span><input type="checkbox" class="switch" id="adoptOpenTabs"></label>
+      <label class="row"><span class="text"><span class="title">Agents may take over a tab I have open</span><small>An agent asks for a tab by its address and drives it, without you sharing it first. Off: share the tab from the Rocketwright popup.</small></span><input type="checkbox" class="switch" id="adoptOpenTabs"></label>
       <div class="block">
         <p class="note">Never these sites, one per line (example.com also covers its subdomains). Add your banks here.</p>
         <textarea id="neverAdopt" aria-label="Sites agents never take over"></textarea>

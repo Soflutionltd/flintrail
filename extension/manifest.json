@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Flintrail",
-  "version": "1.5.15",
-  "description": "Let your AI agent drive this browser through Flintrail, and teach it a task by doing it once yourself.",
-  "homepage_url": "https://github.com/Soflutionltd/flintrail",
+  "name": "Rocketwright",
+  "version": "2.0.0",
+  "description": "Let your AI agent drive this browser through Rocketwright, and teach it a task by doing it once yourself.",
+  "homepage_url": "https://github.com/Soflutionltd/rocketwright",
   "minimum_chrome_version": "125",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0lYCQAYiSV7aWOwTg5uN/TPIXHYK5RlFr/pfV0QwOlPu4xnzBRgvGi4OszBdOoJCBfsmM7EJVivkWePbHWDZ1aF6fzqlizYAeTBfZQqw3BSRNKBetAiHzSO5/SNjx0XIeftJbeoto4nFyA8UnXje2hOz1PG6SijtdT5ImM7IfmnoJ73DUm1KSVdV5rF76HkPnQVZlMLfXEhiAT37O44gKdzjHdrjMZGXLRzlvNS8Ed/OolModbYZDK79QoCZtIpnp3D4v5lYQw2bmqTqKrvnUDo4H8l3ioY4NTNpdPg7HR5PQx9toyBBOdjAvcEHJBV/TjsYVNIq0GPvtrkoHjSBHQIDAQAB",
   "permissions": [
@@ -22,7 +22,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Flintrail",
+    "default_title": "Rocketwright",
     "default_icon": {
       "16": "icons/16.png",
       "32": "icons/32.png"

@@ -24,4 +24,4 @@ jobs:
       - name: Relay logs of the failed run
         if: failure()
         run: |
-          for f in /tmp/flintrail-*/relay.log; do [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done; true
+          for f in /tmp/rocketwright-*/relay.log; do [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done; true

@@ -101,7 +101,7 @@ export function assertNoSecret(page: Page, what: string) {
   const s = stateOf(page);
   if (s.loginRunning) throw new Error(`Blocked: fl_login is filling this tab. ${what} is refused meanwhile.`);
   if (s.secretFilled) {
-    throw new Error(`Blocked: this page holds a password, code or secret Flintrail filled or captured. ${what} is refused until the tab loads another page (after signing in, or with a goto).`);
+    throw new Error(`Blocked: this page holds a password, code or secret Rocketwright filled or captured. ${what} is refused until the tab loads another page (after signing in, or with a goto).`);
   }
 }
 
@@ -133,18 +133,18 @@ export function beforeSecret(page: Page): Promise<void> {
   return secretNear(page);
 }
 
-/** Whether Flintrail is filling, or the tab shows, a password, code or secret (a network rule then stands aside). */
+/** Whether Rocketwright is filling, or the tab shows, a password, code or secret (a network rule then stands aside). */
 export function secretInTab(page: Page): boolean {
   const s = stateOf(page);
   return !!(s.loginRunning || s.secretFilled);
 }
 
-/** Refuses when any tab Flintrail drives in this browser holds a secret: a trace records them all. */
+/** Refuses when any tab Rocketwright drives in this browser holds a secret: a trace records them all. */
 export function assertNoSecretIn(ctx: BrowserContext, what: string) {
   for (const page of tabs.values()) if (!page.isClosed() && page.context() === ctx) assertNoSecret(page, what);
 }
 
-/** How many tabs Flintrail still drives in this browser. */
+/** How many tabs Rocketwright still drives in this browser. */
 export function drivenIn(ctx: BrowserContext): number {
   return [...tabs.values()].filter((p) => !p.isClosed() && p.context() === ctx).length;
 }
@@ -254,7 +254,7 @@ function pageNotes(page: Page): string[] {
   }
   const other = s.viaExtension ? getRelayClient()?.takeWarning(page.url()) : undefined;
   if (other) {
-    notes.push(`Warning: another extension (${other === '1password' || other === 'aeblfdkhhhdcdjpifhhbdiojplfjncoa' ? '1Password' : 'not Flintrail'}) put its own frame in this page. The browser may now stop Flintrail from driving this tab: ask the user to set that extension's "Site access" to "On click" (brave://extensions or chrome://extensions, Details). A secret this page shows can still be stored with fl_capture_secret.`);
+    notes.push(`Warning: another extension (${other === '1password' || other === 'aeblfdkhhhdcdjpifhhbdiojplfjncoa' ? '1Password' : 'not Rocketwright'}) put its own frame in this page. The browser may now stop Rocketwright from driving this tab: ask the user to set that extension's "Site access" to "On click" (brave://extensions or chrome://extensions, Details). A secret this page shows can still be stored with fl_capture_secret.`);
   }
   return notes;
 }
@@ -355,7 +355,7 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
 export async function adoptTab(match: string, browserName?: string): Promise<string> {
   const where = await getDriven(browserName);
   const page = await takeOver(where, match);
-  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' that this conversation may take: it is driven by another conversation, or the extension is older than 1.5 (share the tab from the Flintrail popup then)' : ''}.`);
+  if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' that this conversation may take: it is driven by another conversation, or the extension is older than 1.5 (share the tab from the Rocketwright popup then)' : ''}.`);
   return register(page, where);
 }
 
@@ -389,7 +389,7 @@ export async function releaseTab(id: string) {
   try {
     // A command of the relay only, outside the CDP protocol types: it finds the tab by its address now.
     const send = cdp.send.bind(cdp) as (method: string, params: Record<string, unknown>) => Promise<unknown>;
-    await send('Flintrail.releaseTarget', { url: page.url() });
+    await send('Rocketwright.releaseTarget', { url: page.url() });
   } finally {
     await cdp.detach().catch(() => {});
   }
@@ -397,7 +397,7 @@ export async function releaseTab(id: string) {
   tabs.delete(id);
 }
 
-/** Browser a Flintrail tab lives in. */
+/** Browser a Rocketwright tab lives in. */
 export function tabBrowser(id: string): string {
   return stateOf(getTab(id)).browser;
 }
@@ -408,7 +408,7 @@ export function getTab(id: string): Page {
     const url = p ? p.url() : goneTabs.get(id);
     const why = url ? getRelayClient()?.lostReason(url) : undefined;
     if (why) throw new Error(`Tab ${id} is no longer driven: ${why}.`);
-    throw new Error(`Tab ${id} not found: closed, released by the extension after 5 minutes without use, or debugging cancelled from the browser's bar (the reason is in ~/.flintrail/relay.log). Use fl_open, or fl_adopt to take an open tab back.`);
+    throw new Error(`Tab ${id} not found: closed, released by the extension after 5 minutes without use, or debugging cancelled from the browser's bar (the reason is in ~/.rocketwright/relay.log). Use fl_open, or fl_adopt to take an open tab back.`);
   }
   const why = domainProblem(p.url());
   if (why) throw new Error(`Blocked: tab ${id} went to a site the agent may not work on. ${why} Close it with fl_close.`);
@@ -502,7 +502,7 @@ export async function snapshot(page: Page, opts: { max?: number; text?: number; 
     text: index === 0 ? opts.text ?? SNAP_TEXT : 0,
     prefix: index === 0 ? '' : `f${index}:`,
     within: opts.within,
-    // A secret Flintrail put in this page: no field shows its value, even one the site re-rendered.
+    // A secret Rocketwright put in this page: no field shows its value, even one the site re-rendered.
     hideValues: !!stateOf(page).secretFilled,
   }).catch(() => null)));
   // The page may have moved while it was being read: what a tab or frame now outside the list returned is dropped.
@@ -667,7 +667,7 @@ export function elementByRef(page: Page, ref: string): Locator {
 /** With a list of allowed sites, a selector may not step into an embedded frame: use the frame's refs (f1:e3). */
 export function mainFrameSelector(selector: string): string {
   if (config.allowedDomains.length && /enter-frame|content-frame/i.test(selector)) {
-    throw new Error('Blocked: with FLINTRAIL_ALLOWED_DOMAINS set, a selector cannot enter a frame. Use the refs of that frame from the snapshot.');
+    throw new Error('Blocked: with ROCKETWRIGHT_ALLOWED_DOMAINS set, a selector cannot enter a frame. Use the refs of that frame from the snapshot.');
   }
   return selector;
 }
@@ -753,11 +753,11 @@ export async function performOn(page: Page, loc: Locator, a: Step, vars?: Record
     if (!files.length) throw new Error('upload needs files: absolute paths on this machine.');
     const absent = files.find((f) => !existsSync(f));
     if (absent) throw new Error(`File not found: ${absent}`);
-    // Never Flintrail's own files (saved sessions, its token, the dedicated browser's profile): they would hand a
+    // Never Rocketwright's own files (saved sessions, its token, the dedicated browser's profile): they would hand a
     // site the user's sign-ins.
     const own = [config.home, config.profileDir].map((d) => { try { return realpathSync(d); } catch { return d; } });
     const inside = files.find((f) => { const r = realpathSync(f); return own.some((d) => r === d || r.startsWith(d + sep)); });
-    if (inside) throw new Error(`Refused: ${inside} is one of Flintrail's own files (sessions, token, browser profile), never uploaded.`);
+    if (inside) throw new Error(`Refused: ${inside} is one of Rocketwright's own files (sessions, token, browser profile), never uploaded.`);
     const isFileInput = await loc.evaluate((el) => el instanceof HTMLInputElement && el.type === 'file', undefined, { timeout: TIMEOUT });
     if (isFileInput) {
       await loc.setInputFiles(files, { timeout: TIMEOUT });
@@ -866,7 +866,7 @@ export async function performPage(page: Page, a: Step, vars?: Record<string, str
         manualRedirect: config.allowedDomains.length > 0,
       });
       if (r.redirectedTo !== undefined && config.allowedDomains.length) {
-        throw new Error('Blocked: the site answered with a redirect, which is not followed while FLINTRAIL_ALLOWED_DOMAINS is set. Request the final address directly.');
+        throw new Error('Blocked: the site answered with a redirect, which is not followed while ROCKETWRIGHT_ALLOWED_DOMAINS is set. Request the final address directly.');
       }
       if (r.status >= 400) throw new Error(`HTTP ${r.status}: ${r.body.slice(0, 200)}`);
       return r.contentType.includes('json') ? safeJson(r.body) : r.body;

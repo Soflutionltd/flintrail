@@ -30,14 +30,14 @@ async function waitFor(fn, ms = 20000) {
 
 before(async () => {
   site = await startFixture();
-  const userDataDir = mkdtempSync(join(tmpdir(), 'flintrail-other-'));
+  const userDataDir = mkdtempSync(join(tmpdir(), 'rocketwright-other-'));
   mcp = await connect(testEnv({
-    FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(await freePort()), FLINTRAIL_TOKEN: 'other-' + Math.random().toString(36).slice(2),
-    FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir,
+    ROCKETWRIGHT_MODE: 'extension', ROCKETWRIGHT_RELAY_PORT: String(await freePort()), ROCKETWRIGHT_TOKEN: 'other-' + Math.random().toString(36).slice(2),
+    ROCKETWRIGHT_RELAY: 'on', ROCKETWRIGHT_PAIRING: 'on', ROCKETWRIGHT_PAIRING_DIRS: userDataDir,
   }));
   ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: true,
-    ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }),
+    ...(process.env.ROCKETWRIGHT_CHROME ? { executablePath: process.env.ROCKETWRIGHT_CHROME } : { channel: 'chromium' }),
     args: [`--disable-extensions-except=${extPath},${otherPath}`, `--load-extension=${extPath},${otherPath}`],
   });
   await waitFor(async () => /chromium: Extension connected/.test(await mcp.call('fl_extension')));

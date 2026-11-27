@@ -10,7 +10,7 @@ import { startFixture } from '../test/fixture.mjs';
 import { testEnv, cli } from '../test/helpers.mjs';
 
 const RUNS = Number(process.env.RUNS || 10);
-const chrome = process.env.FLINTRAIL_CHROME;
+const chrome = process.env.ROCKETWRIGHT_CHROME;
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
 
 async function client(command, args, env) {
@@ -64,8 +64,8 @@ results.push(await measure('Playwright MCP (1 action / call)',
 
 const fl = () => client(process.execPath, [cli], testEnv());
 
-// 2. Flintrail driven the same way: one action per call.
-results.push(await measure('Flintrail live (1 action / call)', fl, async ({ call }, i = 0) => {
+// 2. Rocketwright driven the same way: one action per call.
+results.push(await measure('Rocketwright live (1 action / call)', fl, async ({ call }, i = 0) => {
   const tab = /Tab (t\d+)/.exec(await call('fl_open', { url: U }))[1];
   await call('fl_act', { tab, actions: [{ do: 'fill', selector: 'input[name=plate]', value: `FL-${i}` }] });
   await call('fl_act', { tab, actions: [{ do: 'check', selector: 'input[type=checkbox]' }] });
@@ -75,8 +75,8 @@ results.push(await measure('Flintrail live (1 action / call)', fl, async ({ call
   await call('fl_close', { tab });
 }));
 
-// 3. Flintrail batched: the whole task in one fl_act.
-results.push(await measure('Flintrail live, batched', fl, async ({ call }, i = 0) => {
+// 3. Rocketwright batched: the whole task in one fl_act.
+results.push(await measure('Rocketwright live, batched', fl, async ({ call }, i = 0) => {
   const tab = /Tab (t\d+)/.exec(await call('fl_open', { url: U, text: 0 }))[1];
   await call('fl_act', { tab, actions: [
     { do: 'fill', selector: 'input[name=plate]', value: `FB-${i}` },
@@ -88,8 +88,8 @@ results.push(await measure('Flintrail live, batched', fl, async ({ call }, i = 0
   await call('fl_close', { tab });
 }));
 
-// 4. Flintrail replay of a recorded flow (no LLM needed between steps).
-results.push(await measure('Flintrail replay (fl_run)', async () => {
+// 4. Rocketwright replay of a recorded flow (no LLM needed between steps).
+results.push(await measure('Rocketwright replay (fl_run)', async () => {
   const ctx = await fl();
   await ctx.call('fl_record_start', { name: 'bench' });
   const tab = /Tab (t\d+)/.exec(await ctx.call('fl_open', { url: U, text: 0 }))[1];
@@ -109,8 +109,8 @@ results.push(await measure('Flintrail replay (fl_run)', async () => {
   await call('fl_close', { tab });
 }));
 
-// 5. Flintrail API replay: the recorded API call, no UI at all.
-results.push(await measure('Flintrail API replay (fl_run)', async () => {
+// 5. Rocketwright API replay: the recorded API call, no UI at all.
+results.push(await measure('Rocketwright API replay (fl_run)', async () => {
   const ctx = await fl();
   await ctx.call('fl_record_start', { name: 'bench-api' });
   const tab = /Tab (t\d+)/.exec(await ctx.call('fl_open', { url: U, text: 0 }))[1];

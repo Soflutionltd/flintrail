@@ -60,28 +60,28 @@
       "success": "5/5"
     },
     {
-      "tool": "Flintrail",
+      "tool": "Rocketwright",
       "task": "Sign in (password manager + code)",
       "medianMs": 221,
       "calls": 4,
       "success": "5/5"
     },
     {
-      "tool": "Flintrail",
+      "tool": "Rocketwright",
       "task": "GitHub-style token",
       "medianMs": 429,
       "calls": 3,
       "success": "5/5"
     },
     {
-      "tool": "Flintrail",
+      "tool": "Rocketwright",
       "task": "Cloudflare-style token",
       "medianMs": 712,
       "calls": 3,
       "success": "5/5"
     },
     {
-      "tool": "Flintrail",
+      "tool": "Rocketwright",
       "task": "30-field form",
       "medianMs": 1112,
       "calls": 3,

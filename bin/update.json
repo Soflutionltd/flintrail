@@ -1,5 +1,5 @@
 {
-  "package": "flintrail",
+  "package": "rocketwright",
   "server": "dist/cli.js",
   "passthrough": [
     "--http",

@@ -1,4 +1,4 @@
-// Client side of the shared relay: every Flintrail process connects to the relay daemon (src/relay.ts),
+// Client side of the shared relay: every Rocketwright process connects to the relay daemon (src/relay.ts),
 // and starts it when nobody has. Several conversations can then drive the user's browsers at once.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -61,7 +61,7 @@ export class RelayClient {
   /** Notified each time the list of connected browsers changes (a browser left: forget its driver). */
   onBrowsers(fn: (list: BrowserInfo[]) => void) { this.browserListeners.push(fn); }
 
-  /** Connects to the relay daemon, starting it first if no Flintrail did. */
+  /** Connects to the relay daemon, starting it first if no Rocketwright did. */
   ensure(): Promise<void> {
     if (this.connected) return Promise.resolve();
     if (!this.connecting) {
@@ -80,9 +80,9 @@ export class RelayClient {
         await sleep(150);
         welcome = await this.tryConnect();
       }
-      if (!welcome) throw new Error(`The Flintrail relay did not start on 127.0.0.1:${config.relayPort} (see ${join(config.home, 'relay.log')}).`);
+      if (!welcome) throw new Error(`The Rocketwright relay did not start on 127.0.0.1:${config.relayPort} (see ${join(config.home, 'relay.log')}).`);
     }
-    // An older daemon left over from a previous Flintrail version: replace it when nobody else uses it.
+    // An older daemon left over from a previous Rocketwright version: replace it when nobody else uses it.
     const outdated = welcome.protocol !== RELAY_PROTOCOL || compareVersions(welcome.version, this.version) < 0;
     if (outdated && welcome.clients === 1 && !retired) {
       const ok = await this.request('retire', {}).then(() => true, () => false);
@@ -94,7 +94,7 @@ export class RelayClient {
     }
     if (welcome.protocol !== RELAY_PROTOCOL) {
       this.ws?.close();
-      throw new Error(`The running Flintrail relay (${welcome.version}) is incompatible with this Flintrail (${this.version}). It is replaced once the other conversations using it are closed.`);
+      throw new Error(`The running Rocketwright relay (${welcome.version}) is incompatible with this Rocketwright (${this.version}). It is replaced once the other conversations using it are closed.`);
     }
   }
 
@@ -113,18 +113,18 @@ export class RelayClient {
       const cnonce = randomBytes(16).toString('hex');
       let settled = false;
       const fail = (e: Error | null) => { if (!settled) { settled = true; ws.close(); if (e) reject(e); else resolve(null); } };
-      const timer = setTimeout(() => fail(new Error(`The process on 127.0.0.1:${config.relayPort} does not answer like a Flintrail relay.`)), 5000);
+      const timer = setTimeout(() => fail(new Error(`The process on 127.0.0.1:${config.relayPort} does not answer like a Rocketwright relay.`)), 5000);
       ws.on('error', (e: NodeJS.ErrnoException) => {
         clearTimeout(timer);
         if (e.code === 'ECONNREFUSED') { fail(null); return; }
-        // Flintrail 1.3 and older kept the relay inside one conversation, and hang up on /client.
+        // Rocketwright 1.3 and older kept the relay inside one conversation, and hang up on /client.
         fail(e.code === 'ECONNRESET' || /socket hang up|Unexpected server response/.test(e.message)
-          ? new Error(`Port ${config.relayPort} is held by an older Flintrail (1.3 or earlier) running in another conversation, or by another program. Close that conversation, or update its Flintrail, so the shared relay can start.`)
+          ? new Error(`Port ${config.relayPort} is held by an older Rocketwright (1.3 or earlier) running in another conversation, or by another program. Close that conversation, or update its Rocketwright, so the shared relay can start.`)
           : e);
       });
       ws.on('close', (code) => {
         clearTimeout(timer);
-        if (!settled) fail(code === 4401 ? new Error('The Flintrail relay refused the token (different ~/.flintrail/token?).') : null);
+        if (!settled) fail(code === 4401 ? new Error('The Rocketwright relay refused the token (different ~/.rocketwright/token?).') : null);
         else if (this.ws === ws) this.onClose();
       });
       ws.on('message', (raw: RawData) => {
@@ -137,7 +137,7 @@ export class RelayClient {
         if (!settled && m.type === 'welcome') {
           clearTimeout(timer);
           // The daemon proves it knows the token too: a process squatting the port is not trusted.
-          if (!macMatches(this.token, 'relay:' + cnonce, String(m.mac || ''))) { fail(new Error(`The process on 127.0.0.1:${config.relayPort} is not a Flintrail relay.`)); return; }
+          if (!macMatches(this.token, 'relay:' + cnonce, String(m.mac || ''))) { fail(new Error(`The process on 127.0.0.1:${config.relayPort} is not a Rocketwright relay.`)); return; }
           settled = true;
           this.ws = ws;
           this.relayVersion = String(m.version);
@@ -237,8 +237,8 @@ export class RelayClient {
         done = true;
         const names = this.browsers.map((b) => b.key);
         reject(new Error(key
-          ? `Browser "${key}" is not connected to Flintrail.${names.length ? ` Connected: ${names.join(', ')}.` : ''} Open it: the Flintrail extension connects by itself.`
-          : 'No browser is connected to Flintrail. Open a browser where the Flintrail extension is installed: it connects by itself.'));
+          ? `Browser "${key}" is not connected to Rocketwright.${names.length ? ` Connected: ${names.join(', ')}.` : ''} Open it: the Rocketwright extension connects by itself.`
+          : 'No browser is connected to Rocketwright. Open a browser where the Rocketwright extension is installed: it connects by itself.'));
       }, ms);
       const check = () => {
         if (done) return;
@@ -268,9 +268,9 @@ function spawnDaemon() {
 
 let client: RelayClient | null = null;
 
-/** The relay client of this process, or null when the relay is turned off (FLINTRAIL_RELAY=off). */
+/** The relay client of this process, or null when the relay is turned off (ROCKETWRIGHT_RELAY=off). */
 export function relayClient(token: string, version: string): RelayClient | null {
-  if (process.env.FLINTRAIL_RELAY === 'off') return null;
+  if (process.env.ROCKETWRIGHT_RELAY === 'off') return null;
   if (!client) client = new RelayClient(token, version);
   return client;
 }

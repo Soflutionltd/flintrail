@@ -3,7 +3,7 @@
 // files of each Chromium browser, read only:
 //  - Local State, which maps each profile folder (Default, Profile 1 ...) to the name the user gave it;
 //  - the extension's own storage in each profile, where it keeps its instance id (sent in every hello).
-// The same list lets Flintrail open a browser profile that is not running yet.
+// The same list lets Rocketwright open a browser profile that is not running yet.
 import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
@@ -17,7 +17,7 @@ export const EXTENSION_ID = 'hgkglidmccenjlhdcplcpkgbadonplnb';
 export const STORE_EXTENSION_ID = 'amgonogobcfmneginonbkfjlbbnecchp';
 
 export function extensionIds(): string[] {
-  const extra = (process.env.FLINTRAIL_EXTENSION_IDS || '').split(',').map((s) => s.trim()).filter((s) => /^[a-p]{32}$/.test(s));
+  const extra = (process.env.ROCKETWRIGHT_EXTENSION_IDS || '').split(',').map((s) => s.trim()).filter((s) => /^[a-p]{32}$/.test(s));
   return [...new Set([EXTENSION_ID, STORE_EXTENSION_ID, ...extra])];
 }
 
@@ -27,7 +27,7 @@ export interface KnownBrowser {
   brand: string;
   /** User data directory (holds Local State and one folder per profile). */
   dataDir: string;
-  /** macOS application that opens it, null when Flintrail cannot open a given profile of it. */
+  /** macOS application that opens it, null when Rocketwright cannot open a given profile of it. */
   app: string | null;
   /** A browser instance of its own (its own data folder, its own process): opened with --user-data-dir. */
   separate?: boolean;
@@ -59,7 +59,7 @@ export function chosenName(p: LocalProfile | undefined): string {
  * profile in its own instance keeps that bar to its own windows.
  */
 export function separateInstancesDir(): string {
-  return process.env.FLINTRAIL_INSTANCES_DIR || join(homedir(), 'Library/Application Support/Flintrail/Browsers');
+  return process.env.ROCKETWRIGHT_INSTANCES_DIR || join(homedir(), 'Library/Application Support/Rocketwright/Browsers');
 }
 
 /** The separate instances of the brands that have an app: one data folder each. */
@@ -77,9 +77,9 @@ function separateInstances(apps: Map<string, string | null>): KnownBrowser[] {
   return out;
 }
 
-/** The Chromium browsers Flintrail knows, per platform (FLINTRAIL_PAIRING_DIRS replaces the list). */
+/** The Chromium browsers Rocketwright knows, per platform (ROCKETWRIGHT_PAIRING_DIRS replaces the list). */
 export function knownBrowsers(): KnownBrowser[] {
-  const override = process.env.FLINTRAIL_PAIRING_DIRS;
+  const override = process.env.ROCKETWRIGHT_PAIRING_DIRS;
   if (override) return override.split(',').map((d) => d.trim()).filter(Boolean).map((dataDir) => ({ brand: 'chromium', dataDir, app: null }));
   const home = homedir();
   if (platform() === 'darwin') {
@@ -143,7 +143,7 @@ export function localProfiles(): LocalProfile[] {
   return out;
 }
 
-/** The profile whose Flintrail extension stored this instance id, if it can be found. */
+/** The profile whose Rocketwright extension stored this instance id, if it can be found. */
 export function profileOfInstance(instance: string, profiles = localProfiles()): LocalProfile | undefined {
   if (!/^[0-9a-f-]{16,}$/i.test(instance)) return undefined;
   const needle = Buffer.from(instance);
@@ -174,7 +174,7 @@ export function matchProfiles(wanted: string, profiles = localProfiles()): Local
   return profiles.filter((p) => slug(p.name) === w || `${p.brand}-${slug(p.name)}` === w);
 }
 
-/** The command that opens a window of this profile (macOS), or null if Flintrail cannot open it. */
+/** The command that opens a window of this profile (macOS), or null if Rocketwright cannot open it. */
 export function openCommand(p: LocalProfile): [string, string[]] | null {
   if (!p.app || platform() !== 'darwin') return null;
   // A separate instance: its own data folder, so its own process (an instance already open takes the window).
@@ -182,11 +182,11 @@ export function openCommand(p: LocalProfile): [string, string[]] | null {
   return ['open', ['-na', p.app, '--args', `--profile-directory=${p.dir}`]];
 }
 
-/** Opens a window of this profile: the browser starts if needed, its Flintrail extension then connects. */
+/** Opens a window of this profile: the browser starts if needed, its Rocketwright extension then connects. */
 export function openProfile(p: LocalProfile): void {
   const cmd = openCommand(p);
-  if (!cmd) throw new Error(`Flintrail cannot open ${p.brand} profile "${p.name}" by itself on this system: open it, the extension then connects.`);
+  if (!cmd) throw new Error(`Rocketwright cannot open ${p.brand} profile "${p.name}" by itself on this system: open it, the extension then connects.`);
   const child = spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' });
-  child.on('error', (e) => console.error(`flintrail: could not open ${p.brand} profile "${p.name}": ${e.message}`));
+  child.on('error', (e) => console.error(`rocketwright: could not open ${p.brand} profile "${p.name}": ${e.message}`));
   child.unref();
 }

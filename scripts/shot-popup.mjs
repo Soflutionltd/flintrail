@@ -2,7 +2,7 @@
 import { chromium } from 'playwright-core';
 import { mkdtempSync } from 'node:fs'; import { tmpdir } from 'node:os'; import { dirname, join } from 'node:path'; import { fileURLToPath } from 'node:url';
 const ext = join(dirname(fileURLToPath(import.meta.url)), '../extension');
-const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'x-')), { viewport: { width: 320, height: 520 }, deviceScaleFactor: 2, headless: true, ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }), args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`] });
+const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'x-')), { viewport: { width: 320, height: 520 }, deviceScaleFactor: 2, headless: true, ...(process.env.ROCKETWRIGHT_CHROME ? { executablePath: process.env.ROCKETWRIGHT_CHROME } : { channel: 'chromium' }), args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`] });
 const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
 const id = new URL(sw.url()).host;
 await sw.evaluate(() => chrome.storage.local.set({ status: 'connected', token: 'x'.repeat(32), recording: { name: 'paybyphone-renew', tabId: 1, steps: 4 } }));

@@ -133,7 +133,7 @@ test('a session saved from the dedicated browser comes back after its cookies ar
   await assert.rejects(mcp.call('fl_session', { action: 'save', name: 'suffix', site: 'co.uk' }), /not one site/);
   // A session file is never uploaded to a site.
   await mcp.call('fl_act', { tab, actions: [{ do: 'goto', url: site.url + '/upload' }], snapshot: false });
-  assert.match(await mcp.call('fl_act', { tab, actions: [{ do: 'upload', selector: 'input[type=file]', files: [file] }], snapshot: false }), /FAILED upload: Refused: .* is one of Flintrail's own files/);
+  assert.match(await mcp.call('fl_act', { tab, actions: [{ do: 'upload', selector: 'input[type=file]', files: [file] }], snapshot: false }), /FAILED upload: Refused: .* is one of Rocketwright's own files/);
   await assert.rejects(mcp.call('fl_session', { action: 'load', name: 'never-saved' }), /No saved session "never-saved"/);
   await mcp.call('fl_close', { tab });
 });
@@ -185,7 +185,7 @@ test('any network rule counts as the agent\'s own script: no sign-in is filled i
 
 test('a trace of the dedicated browser and a video of a tab are saved where the user finds them', async () => {
   const tab = tabOf(await mcp.call('fl_open', { url: site.url + '/rows' }));
-  assert.match(await mcp.call('fl_trace', { tab, action: 'start', name: 'tokens' }), /Trace started for every tab Flintrail drives in this browser: every action with a picture before and after \(no page copy or network log/);
+  assert.match(await mcp.call('fl_trace', { tab, action: 'start', name: 'tokens' }), /Trace started for every tab Rocketwright drives in this browser: every action with a picture before and after \(no page copy or network log/);
   // The cookies fl_session reads would be in the trace.
   await assert.rejects(mcp.call('fl_session', { action: 'save', name: 'during-trace', site: '127.0.0.1' }), /Refused while a trace records the dedicated browser/);
   await assert.rejects(mcp.call('fl_trace', { tab, action: 'start' }), /A trace is already running/);
@@ -228,7 +228,7 @@ test('a recorded flow exported as a Playwright Test file, variables from the env
   await mcp.call('fl_record_stop', {});
   await mcp.call('fl_close', { tab });
   const spec = await mcp.call('fl_flow_export', { name: 'export-me' });
-  assert.match(spec, /^\/\/ Flow "export-me" recorded with Flintrail/);
+  assert.match(spec, /^\/\/ Flow "export-me" recorded with Rocketwright/);
   assert.match(spec, /import \{ test \} from '@playwright\/test';/);
   assert.match(spec, /FLOW_QUERY \(\{\{query\}\}\)/);
   assert.match(spec, /await page\.goto\("http:\/\/127\.0\.0\.1:\d+\/rows"\);/);

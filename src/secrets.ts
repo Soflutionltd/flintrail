@@ -1,4 +1,4 @@
-// Every password and one-time code Flintrail filled, masked in all it returns to the agent (tool results,
+// Every password and one-time code Rocketwright filled, masked in all it returns to the agent (tool results,
 // console, captured requests), raw or encoded as a form, URL or JSON value would carry it.
 
 /** Secret -> time after which it is no longer masked. One-time codes expire fast and look like ordinary numbers. */
@@ -11,8 +11,8 @@ export function remember(s: string, ttl: number) {
 
 /**
  * Values that look like credentials, wherever they come from (a page showing a freshly created API key in its
- * buttons, a script the agent ran): masked in everything returned to the agent, whether or not Flintrail
- * filled them. Only the user can turn this off, in Flintrail's settings (FLINTRAIL_MASK_SECRETS=off), never a tool.
+ * buttons, a script the agent ran): masked in everything returned to the agent, whether or not Rocketwright
+ * filled them. Only the user can turn this off, in Rocketwright's settings (ROCKETWRIGHT_MASK_SECRETS=off), never a tool.
  */
 const KNOWN_PREFIXES = /(?<![A-Za-z0-9])(?:github_pat_|gh[pousr]_|glpat-|xox[abpors]-|sk_(?:live|test)_|rk_(?:live|test)_|whsec_|cfut_|cfat_|AIza|ya29\.|npm_|pypi-|dop_v1_|shpat_|SG\.)[A-Za-z0-9_\-.]{12,}/g;
 const LONG_PREFIXES = /(?<![A-Za-z0-9])(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9]))/g;
@@ -24,7 +24,7 @@ const MASK = '••• (secret masked)';
 
 /** A guard against secrets shown by accident, not a wall against a hostile agent (a value can be split or encoded). */
 export function maskSecrets(text: string): string {
-  if (process.env.FLINTRAIL_MASK_SECRETS === 'off') return text;
+  if (process.env.ROCKETWRIGHT_MASK_SECRETS === 'off') return text;
   return text.replace(KNOWN_PREFIXES, MASK).replace(LONG_PREFIXES, MASK).replace(JWT, MASK)
     .replace(NEAR_WORD, (all: string, before: string, token: string) => (/[A-Za-z]/.test(token) && /\d/.test(token) ? `${before}${MASK}` : all));
 }
@@ -44,7 +44,7 @@ export function redact(text: string): string {
   return out;
 }
 
-/** Whether a text holds a password, code or secret Flintrail filled, pasted or captured, in any form redact knows. */
+/** Whether a text holds a password, code or secret Rocketwright filled, pasted or captured, in any form redact knows. */
 export function holdsRemembered(text: string): boolean {
   const now = Date.now();
   for (const [s, until] of secrets) {

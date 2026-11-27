@@ -17,7 +17,7 @@ writeFileSync(join(ext, 'fingerprint.js'),
 // Icons are committed; pass --icons to render them again from icons/icon.svg with Chromium.
 if (process.argv.includes('--icons') || !existsSync(join(ext, 'icons/128.png'))) {
   const { chromium } = await import('playwright-core');
-  const browser = await chromium.launch({ executablePath: process.env.FLINTRAIL_CHROME || undefined });
+  const browser = await chromium.launch({ executablePath: process.env.ROCKETWRIGHT_CHROME || undefined });
   const svg = readFileSync(join(ext, 'icons/icon.svg'), 'utf8');
   for (const size of [16, 32, 48, 128]) {
     const page = await browser.newPage({ viewport: { width: size, height: size }, deviceScaleFactor: 1 });
@@ -30,7 +30,7 @@ if (process.argv.includes('--icons') || !existsSync(join(ext, 'icons/128.png')))
 
 if (process.argv.includes('--zip')) {
   const { version } = JSON.parse(readFileSync(join(ext, 'manifest.json'), 'utf8'));
-  const zip = join(root, `flintrail-extension-${version}.zip`);
+  const zip = join(root, `rocketwright-extension-${version}.zip`);
   rmSync(zip, { force: true });
   execFileSync('zip', ['-qr', zip, '.', '-x', 'icons/icon.svg'], { cwd: ext });
   console.log(`extension packed: ${zip}`);
@@ -39,8 +39,8 @@ if (process.argv.includes('--zip')) {
   // unpacked zip needs it to keep the extension ID that native messaging pairing allows.
   // Native messaging is optional there: a new required permission would disable the extension for every
   // user until they accept it, so the store build asks for it when the user clicks Connect.
-  const storeZip = join(root, `flintrail-extension-${version}-store.zip`);
-  const staging = mkdtempSync(join(tmpdir(), 'flintrail-store-'));
+  const storeZip = join(root, `rocketwright-extension-${version}-store.zip`);
+  const staging = mkdtempSync(join(tmpdir(), 'rocketwright-store-'));
   try {
     cpSync(ext, staging, { recursive: true, filter: (src) => !src.endsWith(join('icons', 'icon.svg')) });
     const storeManifest = JSON.parse(readFileSync(join(staging, 'manifest.json'), 'utf8'));

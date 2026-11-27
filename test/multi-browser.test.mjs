@@ -1,4 +1,4 @@
-// One Flintrail drives its dedicated browser and a user browser connected through the extension at the
+// One Rocketwright drives its dedicated browser and a user browser connected through the extension at the
 // same time, each chosen by name.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,15 +29,15 @@ async function waitFor(fn, ms = 20000) {
 
 before(async () => {
   site = await startFixture();
-  userDataDir = mkdtempSync(join(tmpdir(), 'flintrail-multi-'));
-  // Launch mode: Flintrail owns a dedicated headless browser ("agent"), and the relay runs alongside it.
+  userDataDir = mkdtempSync(join(tmpdir(), 'rocketwright-multi-'));
+  // Launch mode: Rocketwright owns a dedicated headless browser ("agent"), and the relay runs alongside it.
   mcp = await connect(testEnv({
-    FLINTRAIL_RELAY_PORT: String(await freePort()), FLINTRAIL_TOKEN: 'multi-' + Math.random().toString(36).slice(2),
-    FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir,
+    ROCKETWRIGHT_RELAY_PORT: String(await freePort()), ROCKETWRIGHT_TOKEN: 'multi-' + Math.random().toString(36).slice(2),
+    ROCKETWRIGHT_RELAY: 'on', ROCKETWRIGHT_PAIRING: 'on', ROCKETWRIGHT_PAIRING_DIRS: userDataDir,
   }));
   ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: true,
-    ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }),
+    ...(process.env.ROCKETWRIGHT_CHROME ? { executablePath: process.env.ROCKETWRIGHT_CHROME } : { channel: 'chromium' }),
     args: [`--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`],
   });
   await waitFor(async () => /chromium: Extension connected/.test(await mcp.call('fl_extension')));
@@ -49,7 +49,7 @@ after(async () => {
   site?.server.close();
 });
 
-test('pairing host is registered only for the Flintrail extension', () => {
+test('pairing host is registered only for the Rocketwright extension', () => {
   const manifest = join(userDataDir, 'NativeMessagingHosts', 'com.soflution.flintrail.json');
   assert.ok(existsSync(manifest));
   const m = JSON.parse(readFileSync(manifest, 'utf8'));

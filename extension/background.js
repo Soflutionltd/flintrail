@@ -1,5 +1,5 @@
-// Flintrail extension service worker.
-// Connects to the local Flintrail relay (ws://127.0.0.1:<port>/extension) and executes CDP commands
+// Rocketwright extension service worker.
+// Connects to the local Rocketwright relay (ws://127.0.0.1:<port>/extension) and executes CDP commands
 // on tabs with chrome.debugger. Only tabs opened by the agent, or shared from the popup, are attached.
 const VERSION = chrome.runtime.getManifest().version;
 // Tabs driven through chrome.debugger. The browser keeps them attached when it restarts this service
@@ -54,7 +54,7 @@ function send(obj) {
 
 const HOST_NAME = 'com.soflution.flintrail';
 
-// Ask the local Flintrail for its token through native messaging. The browser only starts the host
+// Ask the local Rocketwright for its token through native messaging. The browser only starts the host
 // for this extension's ID, so no other extension or web page can read the token this way.
 async function pair() {
   // The Chrome Web Store build declares native messaging as optional, granted when the user clicks
@@ -66,7 +66,7 @@ async function pair() {
     await store.set({ token: r.token, port: Number(r.port) || 8932, paired: true });
     return true;
   } catch {
-    return false; // Flintrail never ran on this computer, or pairing is turned off: manual token still works.
+    return false; // Rocketwright never ran on this computer, or pairing is turned off: manual token still works.
   }
 }
 
@@ -82,7 +82,7 @@ async function profileName(instance) {
   }
 }
 
-// Stable per-browser id, so a reconnecting browser keeps its name on the Flintrail side.
+// Stable per-browser id, so a reconnecting browser keeps its name on the Rocketwright side.
 async function instanceId() {
   const { instance } = await store.get('instance');
   if (instance) return instance;
@@ -112,8 +112,8 @@ async function openConnection() {
   if (!token) {
     const canPair = await chrome.permissions.contains({ permissions: ['nativeMessaging'] });
     await setStatus('idle', canPair
-      ? 'Start Flintrail once on this computer, or paste the token from ~/.flintrail/token'
-      : 'Click Connect to pair with Flintrail, or paste the token from ~/.flintrail/token');
+      ? 'Start Rocketwright once on this computer, or paste the token from ~/.rocketwright/token'
+      : 'Click Connect to pair with Rocketwright, or paste the token from ~/.rocketwright/token');
     return;
   }
   const { port = 8932, label = '' } = await store.get(['port', 'label']);
@@ -137,7 +137,7 @@ async function openConnection() {
       return;
     }
     if (!welcomed && m.type === 'welcome') {
-      if (m.mac !== await hmac(token, 'relay:' + cnonce)) { sock.close(); await setStatus('error', 'The program on the relay port is not Flintrail.'); return; }
+      if (m.mac !== await hmac(token, 'relay:' + cnonce)) { sock.close(); await setStatus('error', 'The program on the relay port is not Rocketwright.'); return; }
       welcomed = true;
       quickRetries = 0;
       await store.set({ name: m.name || '' });
@@ -157,10 +157,10 @@ async function openConnection() {
     const { autoConnect: on = true } = await store.get('autoConnect');
     if (bad || !on) for (const tabId of [...attached]) await detach(tabId, bad ? 'refused' : 'disconnected');
     else if (attached.size && !(await chrome.storage.session.get('relayLostAt')).relayLostAt) await chrome.storage.session.set({ relayLostAt: Date.now() });
-    // The token changed on the Flintrail side (new install, new computer): pair again, then retry.
+    // The token changed on the Rocketwright side (new install, new computer): pair again, then retry.
     if (bad && await pair() && (await store.get('token')).token !== token) { connect(); return; }
     if (!welcomed && (await store.get('status')).status === 'error') return;
-    await setStatus(bad ? 'error' : 'disconnected', bad ? 'Wrong token' : 'Flintrail is not running (it starts with your agent).');
+    await setStatus(bad ? 'error' : 'disconnected', bad ? 'Wrong token' : 'Rocketwright is not running (it starts with your agent).');
     if (!bad) retrySoon();
   };
   sock.onerror = () => {};
@@ -196,13 +196,13 @@ async function onMessage(m) {
 async function targetInfoFor(tabId) {
   try {
     const r = await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo');
-    if (r?.targetInfo) return { ...r.targetInfo, browserContextId: r.targetInfo.browserContextId || 'flintrail-default' };
+    if (r?.targetInfo) return { ...r.targetInfo, browserContextId: r.targetInfo.browserContextId || 'rocketwright-default' };
   } catch { /* fall back below */ }
   const tab = await chrome.tabs.get(tabId);
   const t = (await chrome.debugger.getTargets()).find((x) => x.tabId === tabId);
   return {
     targetId: t?.id || `tab-${tabId}`, type: 'page', title: tab.title || '', url: tab.url || 'about:blank',
-    attached: true, canAccessOpener: false, browserContextId: 'flintrail-default',
+    attached: true, canAccessOpener: false, browserContextId: 'rocketwright-default',
   };
 }
 
@@ -222,7 +222,7 @@ const isProtected = (url) => url !== undefined && url !== '' && !webUrl(url);
 
 async function assertWebTab(tabId) {
   const tab = await chrome.tabs.get(tabId);
-  if (isProtected(tab.url) || isProtected(tab.pendingUrl)) throw new Error('Flintrail never drives browser or extension pages.');
+  if (isProtected(tab.url) || isProtected(tab.pendingUrl)) throw new Error('Rocketwright never drives browser or extension pages.');
 }
 
 // Tabs whose page holds another extension's frame (a password manager), as the page's own script reported.
@@ -309,7 +309,7 @@ async function releaseIdleTabs() {
 async function handle(method, p) {
   switch (method) {
     case 'createTab': {
-      if (isProtected(p.url)) throw new Error('Flintrail never opens browser or extension pages.');
+      if (isProtected(p.url)) throw new Error('Rocketwright never opens browser or extension pages.');
       const { windowId, blankTabId } = await placeTab(p);
       // The new tab is the one shown in its window: a background tab behind about:blank looked empty.
       const tab = blankTabId !== undefined
@@ -320,7 +320,7 @@ async function handle(method, p) {
       return { tabId: tab.id, targetInfo };
     }
     case 'send':
-      if (isProtected(p.params?.url)) throw new Error('Flintrail never opens browser or extension pages.');
+      if (isProtected(p.params?.url)) throw new Error('Rocketwright never opens browser or extension pages.');
       // Checked on every command: the tab may have reached such a page since the last one.
       await assertWebTab(p.tabId);
       lastUsed.set(p.tabId, Date.now());
@@ -444,7 +444,7 @@ async function adoptSettings() {
 async function adoptOpenTab(p) {
   if (!(await storageProtected)) return { refused: 'this browser cannot protect the extension settings from web pages, so taking over open tabs stays off' };
   const settings = await adoptSettings();
-  if (!settings.adoptOpenTabs) return { refused: 'taking over open tabs is turned off in the Flintrail extension settings: share the tab from the extension instead' };
+  if (!settings.adoptOpenTabs) return { refused: 'taking over open tabs is turned off in the Rocketwright extension settings: share the tab from the extension instead' };
   const match = String(p.match || '').trim();
   // An empty or tiny address would match any tab, the last one the user looked at included.
   if (match.length < 3) return { refused: 'give at least 3 characters of the tab address' };
@@ -460,7 +460,7 @@ async function adoptOpenTab(p) {
   const hostOf = (t) => { try { return new URL(t.url).hostname.toLowerCase(); } catch { return ''; } };
   const open = candidates.filter((t) => !hostAllowed(hostOf(t), settings.neverAdopt));
   if (!open.length) {
-    return candidates.length ? { refused: `${hostOf(candidates[0])} is in the Flintrail extension's list of sites agents never take over` } : { tabId: null };
+    return candidates.length ? { refused: `${hostOf(candidates[0])} is in the Rocketwright extension's list of sites agents never take over` } : { tabId: null };
   }
   // The one the user looked at last.
   const tab = open.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
@@ -469,8 +469,8 @@ async function adoptOpenTab(p) {
 }
 
 // ---------- password filling ----------
-// The user's settings for the passwords and codes Flintrail fills from their password manager. Only the
-// options page writes them; Flintrail asks before every fill, and no Flintrail tool can change them.
+// The user's settings for the passwords and codes Rocketwright fills from their password manager. Only the
+// options page writes them; Rocketwright asks before every fill, and no Rocketwright tool can change them.
 const FILL_DEFAULTS = { enabled: true, confirm: false, allDomains: true, domains: [], totp: true, capture: true, askSecrets: true, vaultsAllow: [], vaultsDeny: [] };
 const CONFIRM_MS = 2 * 60 * 1000;
 const HISTORY_MAX = 200;
@@ -500,7 +500,7 @@ async function fillPolicy(p) {
   const host = String(p.host || domain).toLowerCase().replace(/^www\./, '');
   if (!settings.enabled) return { refused: 'password filling is turned off' };
   if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
-  if (!vaultOk(p.vault, settings)) return { refused: `the vault "${p.vault}" is not one Flintrail may use` };
+  if (!vaultOk(p.vault, settings)) return { refused: `the vault "${p.vault}" is not one Rocketwright may use` };
   if (!settings.confirm) return { totp: settings.totp };
   const ok = await askUser({ domain, item: String(p.item || ''), source: String(p.source || ''), fields: (p.fields || []).map(String), totp: settings.totp });
   return ok ? { totp: settings.totp, confirmed: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
@@ -515,11 +515,11 @@ async function pastePolicy(p) {
   const host = String(p.host || domain).toLowerCase().replace(/^www\./, '');
   if (!settings.enabled) return { refused: 'password filling is turned off' };
   if (!settings.allDomains && !hostAllowed(host, settings.domains)) return { refused: `${host} is not one of the allowed domains` };
-  if (!vaultOk(p.vault, settings)) return { refused: `the vault "${p.vault}" is not one Flintrail may use` };
+  if (!vaultOk(p.vault, settings)) return { refused: `the vault "${p.vault}" is not one Rocketwright may use` };
   // The user chose, in these settings only, not to be asked: the paste goes ahead, and is still in the history.
   if (settings.askSecrets === false) return { confirmed: true, asked: false };
   // The full origin is shown (scheme and port), the domain lists are matched on the host alone.
-  const ok = await askUser({ title: 'Flintrail wants to paste a secret from your vault', labels: ['Website', 'Secret', 'Where'], note: 'The agent never sees the secret. No answer within 2 minutes means no.', domain: p.origin ? `${host} (${String(p.origin)})` : host, item: String(p.item || 'secret'), source: 'vault', fields: (p.fields || []).map(String), totp: true });
+  const ok = await askUser({ title: 'Rocketwright wants to paste a secret from your vault', labels: ['Website', 'Secret', 'Where'], note: 'The agent never sees the secret. No answer within 2 minutes means no.', domain: p.origin ? `${host} (${String(p.origin)})` : host, item: String(p.item || 'secret'), source: 'vault', fields: (p.fields || []).map(String), totp: true });
   return ok ? { confirmed: true, asked: true } : { refused: 'the user declined, or did not answer within 2 minutes' };
 }
 
@@ -543,12 +543,12 @@ async function askUser(request) {
 }
 
 // A secret a site shows once (a new API token) is read by this extension's script in the page and handed to
-// Flintrail, which stores it in a vault: the agent never sees it. It works where another extension's frame made
+// Rocketwright, which stores it in a vault: the agent never sees it. It works where another extension's frame made
 // the browser stop debugging the tab.
 async function captureSecret(p) {
   if (!(await storageProtected)) return { refused: 'this browser cannot protect the extension settings from web pages, so capturing secrets stays off' };
   const settings = await fillSettings();
-  if (!settings.capture) return { refused: 'capturing secrets shown on a page is turned off in the Flintrail extension settings' };
+  if (!settings.capture) return { refused: 'capturing secrets shown on a page is turned off in the Rocketwright extension settings' };
   const match = String(p.match || '').trim();
   if (match.length < 3) return { refused: 'give at least 3 characters of the tab address' };
   const sites = (p.sites || []).map(String);
@@ -569,7 +569,7 @@ async function captureSecret(p) {
   // Not asked when the user turned questions about secrets off, in these settings only.
   const ask = (p.confirm || settings.confirm) && settings.askSecrets !== false;
   if (ask) {
-    const ok = await askUser({ title: 'Flintrail wants to capture a secret shown on a page', labels: ['Website', 'Secret', 'Stored'], note: 'The agent never sees the secret. No answer within 2 minutes means no.', domain: host, item: String(p.what || 'secret'), source: 'capture', fields: [`into ${String(p.to || 'a vault')}`], totp: true });
+    const ok = await askUser({ title: 'Rocketwright wants to capture a secret shown on a page', labels: ['Website', 'Secret', 'Stored'], note: 'The agent never sees the secret. No answer within 2 minutes means no.', domain: host, item: String(p.what || 'secret'), source: 'capture', fields: [`into ${String(p.to || 'a vault')}`], totp: true });
     // Read the same as a miss: a refusal must not tell the agent that such a secret was on the page.
     if (!ok) return {};
   }
@@ -595,12 +595,12 @@ function demo(action, extra) {
     const reqId = reqSeq++;
     demoWaiters.set(reqId, resolve);
     send({ type: 'demo', action, reqId, ...extra });
-    setTimeout(() => { if (demoWaiters.delete(reqId)) resolve('Error: Flintrail did not answer.'); }, 5000);
+    setTimeout(() => { if (demoWaiters.delete(reqId)) resolve('Error: Rocketwright did not answer.'); }, 5000);
   });
 }
 
 async function startDemo(name, tab) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return 'Error: connect to Flintrail first.';
+  if (!ws || ws.readyState !== WebSocket.OPEN) return 'Error: connect to Rocketwright first.';
   const text = await demo('start', { name, url: tab.url });
   if (!text.startsWith('Error')) {
     await store.set({ recording: { name, tabId: tab.id, steps: 0 } });
@@ -681,7 +681,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await connect();
         return reply({ text: 'Saved.' });
       case 'share': {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return reply({ text: 'Error: connect to Flintrail first.' });
+        if (!ws || ws.readyState !== WebSocket.OPEN) return reply({ text: 'Error: connect to Rocketwright first.' });
         try {
           const targetInfo = await attach(msg.tabId);
           send({ type: 'shared', tabId: msg.tabId, targetInfo });
@@ -722,19 +722,19 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   return true;
 });
 
-// The relay is a detached daemon that takes a moment to listen when Flintrail starts, or when a newer
-// Flintrail replaces it: retry after 1, 2, 4, 8 and 16 s before leaving it to the 30 s alarm.
+// The relay is a detached daemon that takes a moment to listen when Rocketwright starts, or when a newer
+// Rocketwright replaces it: retry after 1, 2, 4, 8 and 16 s before leaving it to the 30 s alarm.
 let quickRetries = 0;
 function retrySoon() {
   if (quickRetries < 5) setTimeout(autoConnect, 1000 * 2 ** quickRetries++);
 }
 
-// Reconnect automatically: on browser start, on install, and every 30 s while Flintrail is down.
+// Reconnect automatically: on browser start, on install, and every 30 s while Rocketwright is down.
 async function autoConnect() {
   const { autoConnect: on = true } = await store.get('autoConnect');
   if (on) connect();
 }
-const ensureAlarm = () => chrome.alarms.create('flintrail-reconnect', { periodInMinutes: 0.5 });
+const ensureAlarm = () => chrome.alarms.create('rocketwright-reconnect', { periodInMinutes: 0.5 });
 chrome.runtime.onStartup.addListener(() => { ensureAlarm(); autoConnect(); });
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.storage.local.remove('recording');
@@ -742,7 +742,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   autoConnect();
 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name !== 'flintrail-reconnect') return;
+  if (a.name !== 'rocketwright-reconnect') return;
   autoConnect();
   releaseIdleTabs();
 });

@@ -66,7 +66,7 @@ async function handle(page: Page, route: Route) {
   // from what the rules catch.
   const url = redact(req.url());
   const list = rules.get(page) || [];
-  // While Flintrail fills a secret in the tab, or the tab shows one, the page talks to the real network, untouched
+  // While Rocketwright fills a secret in the tab, or the tab shows one, the page talks to the real network, untouched
   // and uncounted. A request to a site outside the user's list goes through too: the agent may not act on that site.
   if (!list.length || secretInTab(page) || (config.allowedDomains.length && domainProblem(req.url()))) return route.fallback().catch(() => {});
   const rule = list.find((r) => (!r.method || r.method === req.method()) && (r.times === undefined || r.hits < r.times) && r.match(url));
@@ -119,7 +119,7 @@ export async function mock(page: Page, o: MockOptions): Promise<string> {
     Object.assign(rule, { status: o.status, body: o.body ?? '', contentType: o.contentType, headers: o.headers });
   }
   // The page runs what a fake answer holds (a script, a page), and a blocked or failed script changes what its
-  // sign-in form does: from now on the tab counts as one the agent ran JavaScript in, where Flintrail never fills a
+  // sign-in form does: from now on the tab counts as one the agent ran JavaScript in, where Rocketwright never fills a
   // password or pastes a secret.
   markAgentJs(page);
   list.push(rule);

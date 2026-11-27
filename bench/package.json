@@ -1,5 +1,5 @@
 {
-  "name": "flintrail-bench",
+  "name": "rocketwright-bench",
   "private": true,
   "type": "module",
   "description": "Benchmark harness, not published.",

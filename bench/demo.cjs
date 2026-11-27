@@ -1,5 +1,5 @@
 // Builds docs/demo.gif: real screenshots of the test site, composed with the tool calls that produced them.
-// Usage: FLINTRAIL_CHROME=/path/to/chrome node bench/demo.cjs (needs ffmpeg).
+// Usage: ROCKETWRIGHT_CHROME=/path/to/chrome node bench/demo.cjs (needs ffmpeg).
 const { chromium } = require('playwright-core');
 const { execFileSync } = require('node:child_process');
 const { mkdtempSync, writeFileSync } = require('node:fs');
@@ -9,7 +9,7 @@ const { join } = require('node:path');
 (async () => {
   const { startFixture } = await import('../test/fixture.mjs');
   const site = await startFixture();
-  const browser = await chromium.launch(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : {});
+  const browser = await chromium.launch(process.env.ROCKETWRIGHT_CHROME ? { executablePath: process.env.ROCKETWRIGHT_CHROME } : {});
   const shotPage = await browser.newPage({ viewport: { width: 620, height: 420 } });
   const shots = {};
   const snap = async (k) => { shots[k] = (await shotPage.screenshot()).toString('base64'); };
@@ -45,7 +45,7 @@ const { join } = require('node:path');
     const html = `<html><body style="margin:0;background:#0E1116;font-family:Inter,-apple-system,Segoe UI,Helvetica,sans-serif">
       <div style="display:flex;gap:22px;padding:26px">
         <div style="width:500px;height:500px;background:#161B22;border:1px solid #2B3340;border-radius:14px;padding:18px 20px;box-sizing:border-box">
-          <div style="display:flex;gap:7px;margin-bottom:16px"><span style="width:12px;height:12px;border-radius:6px;background:#FF5F57"></span><span style="width:12px;height:12px;border-radius:6px;background:#FEBC2E"></span><span style="width:12px;height:12px;border-radius:6px;background:#28C840"></span><span style="margin-left:10px;color:#8B95A7;font-size:13px">agent · flintrail MCP</span></div>
+          <div style="display:flex;gap:7px;margin-bottom:16px"><span style="width:12px;height:12px;border-radius:6px;background:#FF5F57"></span><span style="width:12px;height:12px;border-radius:6px;background:#FEBC2E"></span><span style="width:12px;height:12px;border-radius:6px;background:#28C840"></span><span style="margin-left:10px;color:#8B95A7;font-size:13px">agent · rocketwright MCP</span></div>
           <div style="font:14px/1.75 'DejaVu Sans Mono',Menlo,monospace;white-space:pre;color:${C.txt}">${acc.join('')}</div>
         </div>
         <div style="width:630px;height:500px;background:#161B22;border:1px solid #2B3340;border-radius:14px;overflow:hidden">

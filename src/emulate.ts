@@ -31,13 +31,13 @@ const emulated = new WeakSet<Page>();
 export async function withSender<T>(page: Page, fn: (send: Send) => Promise<T>): Promise<T> {
   const where = pageBrowser(page);
   if (where.viaExtension) {
-    // The relay passes them to this conversation's tab at that address (see Flintrail.tabCommand).
+    // The relay passes them to this conversation's tab at that address (see Rocketwright.tabCommand).
     const driven = await getDriven(where.browser);
     if (!driven.browser) throw new Error('This browser cannot take emulation commands.');
     const cdp = await driven.browser.newBrowserCDPSession();
     const raw = cdp.send.bind(cdp) as (m: string, p: Record<string, unknown>) => Promise<unknown>;
     try {
-      return await fn((method, params = {}) => raw('Flintrail.tabCommand', { url: page.url(), method, params }));
+      return await fn((method, params = {}) => raw('Rocketwright.tabCommand', { url: page.url(), method, params }));
     } finally {
       await cdp.detach().catch(() => {});
     }

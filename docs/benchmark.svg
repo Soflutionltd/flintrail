@@ -18,19 +18,19 @@
   <text x="284" y="152" text-anchor="end" class="sub">7 tool calls (model turns)</text>
   <rect x="300" y="120" width="470.0" height="30" rx="7" fill="#8B95A7" opacity="0.85"/>
   <text x="780" y="141" class="val">2,379 ms<tspan class="gain"></tspan></text>
-  <text x="284" y="192" text-anchor="end" class="lbl">Flintrail live (1 action / call)</text>
+  <text x="284" y="192" text-anchor="end" class="lbl">Rocketwright live (1 action / call)</text>
   <text x="284" y="210" text-anchor="end" class="sub">7 tool calls (model turns)</text>
   <rect x="300" y="178" width="173.9" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
   <text x="483.85456073980663" y="199" class="val">880 ms<tspan class="gain"> · 2.7× faster</tspan></text>
-  <text x="284" y="250" text-anchor="end" class="lbl">Flintrail live, batched</text>
+  <text x="284" y="250" text-anchor="end" class="lbl">Rocketwright live, batched</text>
   <text x="284" y="268" text-anchor="end" class="sub">3 tool calls (model turns)</text>
   <rect x="300" y="236" width="153.5" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
   <text x="463.50567465321564" y="257" class="val">777 ms<tspan class="gain"> · 3.1× faster</tspan></text>
-  <text x="284" y="308" text-anchor="end" class="lbl">Flintrail replay (fl_run)</text>
+  <text x="284" y="308" text-anchor="end" class="lbl">Rocketwright replay (fl_run)</text>
   <text x="284" y="326" text-anchor="end" class="sub">2 tool calls (model turns)</text>
   <rect x="300" y="294" width="134.9" height="30" rx="7" fill="#FF7A2F" opacity="1"/>
   <text x="444.93484657419083" y="315" class="val">683 ms<tspan class="gain"> · 3.5× faster</tspan></text>
-  <text x="284" y="366" text-anchor="end" class="lbl">Flintrail API replay (fl_run)</text>
+  <text x="284" y="366" text-anchor="end" class="lbl">Rocketwright API replay (fl_run)</text>
   <text x="284" y="384" text-anchor="end" class="sub">2 tool calls (model turns)</text>
   <rect x="300" y="352" width="22.5" height="30" rx="7" fill="url(#spark)" opacity="1"/>
   <text x="332.52206809583856" y="373" class="val">114 ms<tspan class="gain"> · 20.9× faster</tspan></text>

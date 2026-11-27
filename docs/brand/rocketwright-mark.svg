@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Rocketwright">
+  <defs>
+    <linearGradient id="rw-body" x1="10%" y1="90%" x2="90%" y2="10%">
+      <stop offset="0" stop-color="#FF7A2F"/><stop offset="0.5" stop-color="#FF2E7E"/><stop offset="1" stop-color="#7A4DFF"/>
+    </linearGradient>
+    <linearGradient id="rw-flame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFB547"/><stop offset="1" stop-color="#FF7A2F" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g transform="rotate(45 64 64)">
+    <path fill="url(#rw-flame)" d="M64 124C55 111 53 100 56 92H72C75 100 73 111 64 124Z"/>
+    <path fill="url(#rw-body)" fill-rule="evenodd" d="M64 4C71 15 94 38 89 69L101 85Q104 91 97 91L84 88H44L31 91Q24 91 27 85L39 69C34 38 57 15 64 4ZM64 38a10 10 0 1 0 .01 0Z"/>
+  </g>
+</svg>

@@ -1,9 +1,9 @@
 // fl_trace and fl_video: what the agent did, kept for a human. A trace is Playwright's own file (every action with a
 // picture before and after), opened with `npx playwright show-trace`. A video films one tab.
-// Both are dropped, files and all, before Flintrail fills a password, a code or a secret where they record, or as soon
+// Both are dropped, files and all, before Rocketwright fills a password, a code or a secret where they record, or as soon
 // as a secret shows there: the file would hold it. A trace never keeps page copies or the network log: they hold the
 // browser's cookies and whatever the user types by hand. Playwright writes its own working copy of each in a
-// temporary folder until the browser closes: Flintrail deletes it as soon as the recording ends, kept or dropped,
+// temporary folder until the browser closes: Rocketwright deletes it as soon as the recording ends, kept or dropped,
 // since an agent with a shell could read it there.
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs';
@@ -44,19 +44,19 @@ const endedVideos = new WeakMap<Page, string>();
 /** A recording stops by itself after this: the file and the temporary folder do not grow without end. */
 const MAX_MS = 30 * 60_000;
 
-const DROPPED = 'deleted: Flintrail filled a password, a code or a secret while it recorded, and the file would hold it';
+const DROPPED = 'deleted: Rocketwright filled a password, a code or a secret while it recorded, and the file would hold it';
 
 /** A trace or video shows every frame of the page, the frames of other sites it embeds included. */
 function assertNoList(what: string) {
   if (config.allowedDomains.length) {
-    throw new Error(`Refused: ${what} would record the frames of other sites the page embeds, which FLINTRAIL_ALLOWED_DOMAINS keeps from the agent. Use fl_screenshot, which hides them.`);
+    throw new Error(`Refused: ${what} would record the frames of other sites the page embeds, which ROCKETWRIGHT_ALLOWED_DOMAINS keeps from the agent. Use fl_screenshot, which hides them.`);
   }
 }
 
 function fileFor(base: string, ext: string): string {
   mkdirSync(config.downloadsDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
-  const clean = base.replace(/[^\p{L}\p{N} _-]+/gu, ' ').trim().slice(0, 60) || 'flintrail';
+  const clean = base.replace(/[^\p{L}\p{N} _-]+/gu, ' ').trim().slice(0, 60) || 'rocketwright';
   let file = join(config.downloadsDir, `${clean} ${stamp}.${ext}`);
   for (let n = 2; existsSync(file); n++) file = join(config.downloadsDir, `${clean} ${stamp} (${n}).${ext}`);
   return file;
@@ -159,13 +159,13 @@ function saveTrace(ctx: BrowserContext, rec: Recording): Promise<string> {
     } finally {
       removeTraceWork(traceNames.get(rec)!);
     }
-    // A value Flintrail masks everywhere (a filled password, a captured token) that reached the file another way, in
+    // A value Rocketwright masks everywhere (a filled password, a captured token) that reached the file another way, in
     // a script's result or a console message: nothing is kept.
     let held = false;
     try { held = traceTexts(rec.file).some(holdsRemembered); } catch { held = true; }
     if (held || rec.dropping) {
       removeFile(rec.file);
-      return `Trace ${held ? 'deleted: it held a password, code or secret Flintrail masks' : DROPPED}.`;
+      return `Trace ${held ? 'deleted: it held a password, code or secret Rocketwright masks' : DROPPED}.`;
     }
     const s = Math.round((Date.now() - rec.started) / 1000);
     return `Trace saved: ${rec.file} (${s} s). The user opens it with: npx playwright show-trace "${rec.file}" (or by dropping it on trace.playwright.dev, which reads it locally).`;
@@ -196,13 +196,13 @@ export async function trace(page: Page, action: 'start' | 'stop', name?: string)
   assertNoList('a trace');
   // A new trace: what an older one said when it stopped by itself is no longer the answer to a stop.
   endedTraces.delete(ctx);
-  // Every tab Flintrail drives in this browser is in the trace, not only this one.
+  // Every tab Rocketwright drives in this browser is in the trace, not only this one.
   assertNoSecretIn(ctx, 'A trace');
-  const work = `flintrail-${randomUUID()}`;
+  const work = `rocketwright-${randomUUID()}`;
   const file = fileFor(name || 'trace', 'zip');
   // Pictures and actions only: page copies and the network log would put the browser's cookies, and whatever is
   // typed by hand, in a file the agent can read.
-  const ready = ctx.tracing.start({ name: work, screenshots: true, snapshots: false, title: name || 'Flintrail' }).then(() => {});
+  const ready = ctx.tracing.start({ name: work, screenshots: true, snapshots: false, title: name || 'Rocketwright' }).then(() => {});
   const rec: Recording = {
     file,
     started: Date.now(),
@@ -231,7 +231,7 @@ export async function trace(page: Page, action: 'start' | 'stop', name?: string)
     void saveTrace(ctx, rec).then((said) => endedTraces.set(ctx, `The trace stopped by itself after ${MAX_MS / 60_000} minutes. ${said}`), () => {});
   }, MAX_MS);
   rec.timer.unref();
-  // The user or the site closes the last tab Flintrail drove there: the trace is saved then, as with fl_close.
+  // The user or the site closes the last tab Rocketwright drove there: the trace is saved then, as with fl_close.
   const onClose = () => setTimeout(() => {
     if (traces.get(ctx) !== rec || drivenIn(ctx) > 0) return;
     void saveTrace(ctx, rec).then((said) => endedTraces.set(ctx, `The trace stopped when its last tab closed. ${said}`), () => {});
@@ -240,10 +240,10 @@ export async function trace(page: Page, action: 'start' | 'stop', name?: string)
   ctx.pages().forEach(watch);
   ctx.on('page', watch);
   rec.unwatch = () => ctx.off('page', watch);
-  return `Trace started for every tab Flintrail drives in this browser: every action with a picture before and after (no page copy or network log: they would hold the browser's cookies). fl_trace stop saves it; it stops by itself after ${MAX_MS / 60_000} minutes or when the last tab is released or closed. It is deleted if Flintrail fills a password or secret meanwhile.`;
+  return `Trace started for every tab Rocketwright drives in this browser: every action with a picture before and after (no page copy or network log: they would hold the browser's cookies). fl_trace stop saves it; it stops by itself after ${MAX_MS / 60_000} minutes or when the last tab is released or closed. It is deleted if Rocketwright fills a password or secret meanwhile.`;
 }
 
-/** The last tab Flintrail drove in this browser was released or closed: its trace is saved. */
+/** The last tab Rocketwright drove in this browser was released or closed: its trace is saved. */
 export async function endTraceIfIdle(ctx: BrowserContext, drivenLeft: number): Promise<string | null> {
   const rec = traces.get(ctx);
   if (!rec || drivenLeft > 0) return null;
@@ -328,7 +328,7 @@ export async function video(page: Page, action: 'start' | 'stop', o: { name?: st
     clearTimeout(own.timer);
     setTimeout(() => removeVideoWork(file), 1000);
   });
-  return `Filming tab: ${size.width}x${size.height}${pointers.has(own) ? ', each action pointed out on screen' : ''}. fl_video stop saves it; it stops by itself after ${MAX_MS / 60_000} minutes. It is deleted if Flintrail fills a password or secret in this tab meanwhile.`;
+  return `Filming tab: ${size.width}x${size.height}${pointers.has(own) ? ', each action pointed out on screen' : ''}. fl_video stop saves it; it stops by itself after ${MAX_MS / 60_000} minutes. It is deleted if Rocketwright fills a password or secret in this tab meanwhile.`;
 }
 
 async function stopFilming(page: Page, rec: Recording) {

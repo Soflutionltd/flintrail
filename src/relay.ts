@@ -1,18 +1,18 @@
-// Shared extension relay (daemon). One small process, started by the first Flintrail that needs it, owns
+// Shared extension relay (daemon). One small process, started by the first Rocketwright that needs it, owns
 // the relay port for every conversation on this computer:
 //
-//   Flintrail A ──/client──┐                          ┌──/extension── Brave "IdéeKdo"  (chrome.debugger)
-//   Flintrail B ──/client──┼──▶ relay daemon ◀───────┼──/extension── Brave "Perso"
+//   Rocketwright A ──/client──┐                          ┌──/extension── Brave "IdéeKdo"  (chrome.debugger)
+//   Rocketwright B ──/client──┼──▶ relay daemon ◀───────┼──/extension── Brave "Perso"
 //   Playwright A ──/cdp/<secret>─┘ (one view per       └──/extension── Chrome
 //   Playwright B ──/cdp/<secret>─┘  client and browser)
 //
-// Each Flintrail process is a client: it gets its own private CDP endpoint per browser, and only sees the
+// Each Rocketwright process is a client: it gets its own private CDP endpoint per browser, and only sees the
 // tabs it opened, or a tab the user shared from the extension and it claimed (fl_adopt). The daemon does
 // not belong to any conversation: closing one never cuts the others off. It exits by itself once no
-// Flintrail has been connected for a while (FLINTRAIL_RELAY_IDLE_MS, 10 minutes by default).
+// Rocketwright has been connected for a while (ROCKETWRIGHT_RELAY_IDLE_MS, 10 minutes by default).
 //
 // Security: it listens on 127.0.0.1 only and refuses requests coming from a web page (Origin header).
-// Clients and extensions prove they know the token in ~/.flintrail/token with an HMAC over a fresh nonce,
+// Clients and extensions prove they know the token in ~/.rocketwright/token with an HMAC over a fresh nonce,
 // and the daemon proves it back, so the token itself never travels and a process squatting the port
 // learns nothing.
 import { randomBytes } from 'node:crypto';
@@ -61,13 +61,13 @@ type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; timer: N
 
 // Browser-level sessions (Playwright opens one per Target.attachToBrowserTarget, several at once when tabs
 // open in parallel): each gets its own id, or answers meant for one reach another and Playwright aborts.
-const BROWSER_SESSION = 'flintrail-browser';
+const BROWSER_SESSION = 'rocketwright-browser';
 let browserSessions = 0;
 const isBrowserSession = (sessionId: string | undefined) => !sessionId || sessionId === BROWSER_SESSION || sessionId.startsWith(BROWSER_SESSION + '-');
 
 /** "Google Chrome" -> chrome, "Microsoft Edge" -> edge, "Brave" -> brave. */
 /**
- * The name each browser got the first time it connected, kept in ~/.flintrail/browsers.json: a browser keeps
+ * The name each browser got the first time it connected, kept in ~/.rocketwright/browsers.json: a browser keeps
  * its name whatever the order browsers connect in, and keeps its profile name when the profiles cannot be read.
  */
 class BrowserNames {
@@ -111,7 +111,7 @@ function fromWebPage(req: IncomingMessage): boolean {
   return /^https?:/i.test(String(req.headers.origin || ''));
 }
 
-/** One Flintrail process connected to the daemon. */
+/** One Rocketwright process connected to the daemon. */
 class ClientConn {
   readonly id = randomBytes(6).toString('hex');
   lastActive = Date.now();
@@ -128,7 +128,7 @@ class ClientConn {
   demo(action: string, extra: Record<string, unknown>): Promise<string> {
     const reqId = this.nextDemo++;
     return new Promise((resolve) => {
-      const timer = setTimeout(() => { this.demoWaiters.delete(reqId); resolve('Error: Flintrail did not answer.'); }, 4000);
+      const timer = setTimeout(() => { this.demoWaiters.delete(reqId); resolve('Error: Rocketwright did not answer.'); }, 4000);
       this.demoWaiters.set(reqId, (text) => { clearTimeout(timer); resolve(text); });
       this.send({ type: 'demo', reqId, action, ...extra });
     });
@@ -312,7 +312,7 @@ class ExtensionBridge {
           this.demoClient = client;
           text = client
             ? await client.demo('start', { name: m.name, url: m.url })
-            : 'Error: no Flintrail conversation is running. Start your agent first.';
+            : 'Error: no Rocketwright conversation is running. Start your agent first.';
           if (text.startsWith('Error')) this.demoClient = null;
         } else {
           const client = this.demoClient;
@@ -329,7 +329,7 @@ class ExtensionBridge {
   private addTab(tabId: number, targetInfo: Tab['targetInfo'], owner: CdpView | null): Tab {
     const existing = this.tabsById.get(tabId);
     if (existing) return existing;
-    const tab: Tab = { tabId, sessionId: `flintrail-tab-${this.nextTab++}`, targetInfo, owner };
+    const tab: Tab = { tabId, sessionId: `rocketwright-tab-${this.nextTab++}`, targetInfo, owner };
     this.tabsBySession.set(tab.sessionId, tab);
     this.tabsById.set(tabId, tab);
     if (owner?.autoAttach) this.announce(tab);
@@ -394,7 +394,7 @@ class ExtensionBridge {
       if (/Unknown method adoptTab/.test((e as Error).message)) return null;
       throw e;
     }
-    if (found.refused) throw new Error(`Refused by the Flintrail extension settings in ${this.key}: ${found.refused}.`);
+    if (found.refused) throw new Error(`Refused by the Rocketwright extension settings in ${this.key}: ${found.refused}.`);
     if (typeof found.tabId !== 'number' || !found.targetInfo) return null;
     const tab = this.addTab(found.tabId, found.targetInfo, view);
     log(`${this.key}: tab ${found.tabId} taken over by a conversation`);
@@ -488,18 +488,18 @@ class ExtensionBridge {
     const own = () => [...this.tabsBySession.values()].filter((t) => t.owner === view);
     switch (method) {
       case 'Browser.getVersion':
-        return { protocolVersion: '1.3', product: 'Chrome/Flintrail-Extension', revision: '', userAgent: this.info.userAgent || '', jsVersion: '' };
+        return { protocolVersion: '1.3', product: 'Chrome/Rocketwright-Extension', revision: '', userAgent: this.info.userAgent || '', jsVersion: '' };
       case 'Target.setAutoAttach':
         view.autoAttach = true;
         return {};
       case 'Target.attachToBrowserTarget':
         return { sessionId: `${BROWSER_SESSION}-${++browserSessions}` };
       case 'Target.getTargetInfo':
-        return { targetInfo: { targetId: 'flintrail-browser', type: 'browser', title: '', url: '', attached: true, canAccessOpener: false } };
+        return { targetInfo: { targetId: 'rocketwright-browser', type: 'browser', title: '', url: '', attached: true, canAccessOpener: false } };
       case 'Target.getTargets':
         return { targetInfos: own().map((t) => ({ ...t.targetInfo, attached: true })) };
       case 'Target.createTarget': {
-        // Window choice sent by Flintrail along with the command: an existing window, or a new one.
+        // Window choice sent by Rocketwright along with the command: an existing window, or a new one.
         const placement = {
           ...(typeof params.flintrailWindowId === 'number' ? { windowId: params.flintrailWindowId } : {}),
           ...(params.flintrailNewWindow === true ? { newWindow: true } : {}),
@@ -517,7 +517,7 @@ class ExtensionBridge {
         const tab = this.addTab(r.tabId, r.targetInfo, view);
         return { targetId: tab.targetInfo.targetId };
       }
-      case 'Flintrail.releaseTarget': {
+      case 'Rocketwright.releaseTarget': {
         // fl_release: this conversation stops driving the tab, the user keeps it open. The tab may have moved
         // since it was taken: the extension says which of this conversation's tabs is at that address now.
         const mine = own();
@@ -529,7 +529,7 @@ class ExtensionBridge {
         if (!this.legacy) await this.request('release', { tabIds: [tab.tabId] }, 5000);
         return {};
       }
-      case 'Flintrail.tabCommand': {
+      case 'Rocketwright.tabCommand': {
         // fl_emulate and fl_pdf on a tab of the user's browser: a few emulation commands and printing, on the tab of this conversation
         // at that address. Nothing else goes through here.
         const allowed = /^(Emulation\.(setDeviceMetricsOverride|clearDeviceMetricsOverride|setTouchEmulationEnabled|setEmitTouchEventsForMouse|setUserAgentOverride|setGeolocationOverride|clearGeolocationOverride|setLocaleOverride|setTimezoneOverride|setEmulatedMedia)|Network\.(enable|emulateNetworkConditions)|Page\.printToPDF)$/;
@@ -629,7 +629,7 @@ export class ExtensionRelay {
     for (const c of this.clients) c.send({ type: 'browsers', browsers });
   }
 
-  // ---------- Flintrail clients ----------
+  // ---------- Rocketwright clients ----------
 
   private onClient(ws: WebSocket) {
     const nonce = randomBytes(16).toString('hex');
@@ -672,7 +672,7 @@ export class ExtensionRelay {
 
   private bridgeFor(key: unknown): ExtensionBridge {
     const bridge = this.get(String(key || ''));
-    if (!bridge) throw new Error(`Browser "${key}" is not connected to Flintrail.`);
+    if (!bridge) throw new Error(`Browser "${key}" is not connected to Rocketwright.`);
     return bridge;
   }
 
@@ -696,7 +696,7 @@ export class ExtensionRelay {
         try {
           return await bridge.request('captureSecret', rest, 125_000);
         } catch (e) {
-          if (/Unknown method captureSecret/.test((e as Error).message)) throw new Error(`${bridge.key}: its Flintrail extension is too old to capture a secret, reload it to update it.`);
+          if (/Unknown method captureSecret/.test((e as Error).message)) throw new Error(`${bridge.key}: its Rocketwright extension is too old to capture a secret, reload it to update it.`);
           throw e;
         }
       }
@@ -715,7 +715,7 @@ export class ExtensionRelay {
       case 'fillPolicy':
       case 'fillAudit': {
         // Asked of the extension only: it holds the user's settings, and only the user can answer a confirmation.
-        // An extension without settings (1.4.0 and older) is said so explicitly: Flintrail then applies the
+        // An extension without settings (1.4.0 and older) is said so explicitly: Rocketwright then applies the
         // defaults, while an error (an older relay, say) is a refusal, never a silent fill.
         const bridge = this.bridgeFor(p.key);
         if (bridge.legacy) return { noSettings: true };
@@ -728,8 +728,8 @@ export class ExtensionRelay {
         }
       }
       case 'retire':
-        // A newer Flintrail replaces this daemon, only when nobody else depends on it.
-        if (this.clients.size > 1) throw new Error('other Flintrail processes still use this relay');
+        // A newer Rocketwright replaces this daemon, only when nobody else depends on it.
+        if (this.clients.size > 1) throw new Error('other Rocketwright processes still use this relay');
         setImmediate(this.onIdle);
         return { ok: true };
       default:
@@ -782,7 +782,7 @@ export class ExtensionRelay {
     const found = chosenName(profileOfInstance(instance)) || String(hello.profile || '').trim().slice(0, 60);
     if (!found && !label) {
       const problems = profileReadProblems();
-      if (problems.length) log(`browser profiles not readable here: ${problems.join(', ')}. Names come from ~/.flintrail/browsers.json or the extension popup.`);
+      if (problems.length) log(`browser profiles not readable here: ${problems.join(', ')}. Names come from ~/.rocketwright/browsers.json or the extension popup.`);
     }
     // The profile found now, else the one found on an earlier connection.
     const profile = found || known?.profile || '';
@@ -809,7 +809,7 @@ export class ExtensionRelay {
     };
     const defaultKey = free(profile ? whole(profile) : known && known.key.startsWith(base) ? known.key : base);
     const key = label ? free(whole(label)) : defaultKey;
-    // Only the name Flintrail gave is kept: clearing the name typed in the popup brings that one back.
+    // Only the name Rocketwright gave is kept: clearing the name typed in the popup brings that one back.
     this.names.set(instance, defaultKey, profile);
     const bridge = new ExtensionBridge(key, instance, { ...hello, label, profile, token: undefined }, ws, legacy, this);
     this.bridges.set(key, bridge);
@@ -819,14 +819,14 @@ export class ExtensionRelay {
 }
 
 /**
- * Runs this process as the relay daemon. Never resolves: the daemon exits by itself once no Flintrail
- * has been connected for FLINTRAIL_RELAY_IDLE_MS (10 minutes by default), or right away when another
+ * Runs this process as the relay daemon. Never resolves: the daemon exits by itself once no Rocketwright
+ * has been connected for ROCKETWRIGHT_RELAY_IDLE_MS (10 minutes by default), or right away when another
  * daemon already owns the port.
  */
 export async function runRelayDaemon(token: string): Promise<never> {
-  const idleMs = Number(process.env.FLINTRAIL_RELAY_IDLE_MS || 10 * 60 * 1000);
+  const idleMs = Number(process.env.ROCKETWRIGHT_RELAY_IDLE_MS || 10 * 60 * 1000);
   const relay = new ExtensionRelay(token, config.relayPort, VERSION, idleMs, () => {
-    console.error(`flintrail relay ${VERSION}: no Flintrail connected, exiting.`);
+    console.error(`rocketwright relay ${VERSION}: no Rocketwright connected, exiting.`);
     relay.close();
     process.exit(0);
   });
@@ -838,7 +838,7 @@ export async function runRelayDaemon(token: string): Promise<never> {
     throw e;
   }
   installNativeHost(config.dedicatedProfile ? [config.dedicatedProfile] : []);
-  console.error(`flintrail relay ${VERSION} (pid ${process.pid}) listening on 127.0.0.1:${config.relayPort}`);
+  console.error(`rocketwright relay ${VERSION} (pid ${process.pid}) listening on 127.0.0.1:${config.relayPort}`);
   const stop = () => { relay.close(); process.exit(0); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);

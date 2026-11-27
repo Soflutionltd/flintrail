@@ -65,11 +65,11 @@ function feed(bin: string, args: string[], input: string): Promise<void> {
 }
 
 /**
- * McpHub's program: FLINTRAIL_MCPHUB, or found where it gets installed. An app opened from the Dock (Claude Desktop)
- * starts Flintrail with a short PATH that leaves out ~/.local/bin, so the name alone is not enough.
+ * McpHub's program: ROCKETWRIGHT_MCPHUB, or found where it gets installed. An app opened from the Dock (Claude Desktop)
+ * starts Rocketwright with a short PATH that leaves out ~/.local/bin, so the name alone is not enough.
  */
 export function mcphub(): string {
-  const set = process.env.FLINTRAIL_MCPHUB;
+  const set = process.env.ROCKETWRIGHT_MCPHUB;
   if (set) return set;
   const dirs = [...(process.env.PATH || '').split(delimiter), join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
   for (const dir of dirs) {
@@ -79,7 +79,7 @@ export function mcphub(): string {
       if (statSync(bin).isFile()) { accessSync(bin, constants.X_OK); return bin; }
     } catch { /* not there */ }
   }
-  throw new Error('McpHub not found (looked in PATH, ~/.local/bin, /opt/homebrew/bin and /usr/local/bin). Set FLINTRAIL_MCPHUB to its full path in the Flintrail configuration.');
+  throw new Error('McpHub not found (looked in PATH, ~/.local/bin, /opt/homebrew/bin and /usr/local/bin). Set ROCKETWRIGHT_MCPHUB to its full path in the Rocketwright configuration.');
 }
 
 /** Whether this McpHub vault already holds that name: replacing it needs the user's click. */
@@ -135,7 +135,7 @@ export async function captureSecret(o: { browser: string; match: string; kind: S
     what: `${o.kind === 'prefix' ? `secret starting with ${o.prefix}` : `${o.kind} secret`}`,
     to: `${replaces ? 'replacing ' : ''}${describe(destination)}`,
   }, 130_000) as { refused?: string; value?: string; host?: string; asked?: boolean };
-  if (found.refused) throw new Error(`Refused by the Flintrail extension in ${o.browser}: ${found.refused}.`);
+  if (found.refused) throw new Error(`Refused by the Rocketwright extension in ${o.browser}: ${found.refused}.`);
   const value = String(found.value || '');
   const host = String(found.host || '');
   // One message for every miss: no tab, no value, several values, a site outside the user's list.
@@ -151,7 +151,7 @@ export async function captureSecret(o: { browser: string; match: string; kind: S
     mkdirSync(config.home, { recursive: true });
     appendFileSync(join(config.home, 'fill-audit.log'), JSON.stringify(entry) + '\n', { mode: 0o600 });
   } catch (e) {
-    console.error(`flintrail: could not write the audit log: ${(e as Error).message}`);
+    console.error(`rocketwright: could not write the audit log: ${(e as Error).message}`);
   }
   const shown = o.kind === 'prefix' ? String(o.prefix) : SECRET_KINDS[o.kind].prefix.exec(value)?.[0] || '';
   return `Captured a ${o.kind === 'prefix' ? 'secret' : `${o.kind} secret`} from ${host} (${value.length} characters${shown ? `, starts with ${shown}` : ''}) into ${describe(destination)}. Its value is never shown to you.`;

@@ -1,4 +1,4 @@
-// Several Flintrail processes (one per conversation) drive the same user browser at once through the
+// Several Rocketwright processes (one per conversation) drive the same user browser at once through the
 // shared relay daemon: each sees only its own tabs, closing one never cuts the others off, browsers are
 // picked by the name the user gave them, and the relay only talks to whoever proves it knows the token.
 import { test, before, after } from 'node:test';
@@ -58,17 +58,17 @@ function rawRelay(path, headers = {}, onChallenge) {
 before(async () => {
   site = await startFixture();
   relayPort = await freePort();
-  const userDataDir = mkdtempSync(join(tmpdir(), 'flintrail-multi-client-'));
-  // Same computer, same token, same relay port: two conversations, each with its own Flintrail.
+  const userDataDir = mkdtempSync(join(tmpdir(), 'rocketwright-multi-client-'));
+  // Same computer, same token, same relay port: two conversations, each with its own Rocketwright.
   env = testEnv({
-    FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(relayPort), FLINTRAIL_TOKEN: token,
-    FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir, FLINTRAIL_EXTENSION_WAIT: '3000',
+    ROCKETWRIGHT_MODE: 'extension', ROCKETWRIGHT_RELAY_PORT: String(relayPort), ROCKETWRIGHT_TOKEN: token,
+    ROCKETWRIGHT_RELAY: 'on', ROCKETWRIGHT_PAIRING: 'on', ROCKETWRIGHT_PAIRING_DIRS: userDataDir, ROCKETWRIGHT_EXTENSION_WAIT: '3000',
   });
   a = await connect(env);
   b = await connect(env);
   ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: true,
-    ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }),
+    ...(process.env.ROCKETWRIGHT_CHROME ? { executablePath: process.env.ROCKETWRIGHT_CHROME } : { channel: 'chromium' }),
     args: [`--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`],
   });
   await waitFor(async () => /chromium: Extension connected/.test(await a.call('fl_extension')));
@@ -166,7 +166,7 @@ test('the relay refuses web pages, wrong tokens and impostors', async () => {
   legacy.ws.close();
 });
 
-test('a relay left over from an older Flintrail is replaced when nobody else uses it', async () => {
+test('a relay left over from an older Rocketwright is replaced when nobody else uses it', async () => {
   const { WebSocketServer } = await import('ws');
   const port = await freePort();
   let retired = false;
@@ -181,21 +181,21 @@ test('a relay left over from an older Flintrail is replaced when nobody else use
       if (m.method === 'retire') { retired = true; ws.send(JSON.stringify({ id: m.id, result: { ok: true } })); old.close(); for (const c of old.clients) c.terminate(); }
     });
   });
-  const fresh = await connect({ ...env, FLINTRAIL_RELAY_PORT: String(port) });
+  const fresh = await connect({ ...env, ROCKETWRIGHT_RELAY_PORT: String(port) });
   await waitFor(async () => retired && /relay 127\.0\.0\.1:\d+, version \d+\.\d+\.\d+\)/.test(await fresh.call('fl_extension')) &&
     !/version 0\.9\.0/.test(await fresh.call('fl_extension')), 10000);
   await fresh.client.close();
 });
 
-test('an older Flintrail holding the port is reported clearly', async () => {
+test('an older Rocketwright holding the port is reported clearly', async () => {
   const { createServer: createHttp } = await import('node:http');
   const port = await freePort();
-  // Flintrail 1.3 kept the relay in one conversation and hangs up on any path but its own.
+  // Rocketwright 1.3 kept the relay in one conversation and hangs up on any path but its own.
   const old = createHttp((_req, res) => res.writeHead(404).end());
   old.on('upgrade', (_req, socket) => socket.destroy());
   await new Promise((r) => old.listen(port, '127.0.0.1', r));
-  const fresh = await connect({ ...env, FLINTRAIL_RELAY_PORT: String(port) });
-  assert.match(await fresh.call('fl_extension'), /held by an older Flintrail \(1\.3 or earlier\)/);
+  const fresh = await connect({ ...env, ROCKETWRIGHT_RELAY_PORT: String(port) });
+  assert.match(await fresh.call('fl_extension'), /held by an older Rocketwright \(1\.3 or earlier\)/);
   await fresh.client.close();
   old.close();
 });

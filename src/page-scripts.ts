@@ -99,7 +99,7 @@ export function snapshotScript(opts: SnapshotOptions): SnapshotResult {
     let line = `[${opts.prefix}${el.dataset.fl}] ${role} "${nameOf(el)}"`;
     if (tag === 'input' || tag === 'textarea') {
       if (input.type === 'checkbox' || input.type === 'radio') line += input.checked ? ' (checked)' : ' (unchecked)';
-      // A field Flintrail filled with a password or code never shows its value, even turned into plain text.
+      // A field Rocketwright filled with a password or code never shows its value, even turned into plain text.
       else if (!opts.hideValues && input.type !== 'password' && input.value && !el.hasAttribute('data-fl-secret')) line += ` = "${clean(input.value).slice(0, 40)}"`;
     }
     const select = el as HTMLSelectElement;

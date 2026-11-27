@@ -87,7 +87,7 @@ export class DesktopError extends Error {
 let bin: string | null = null;
 export function binary(): string {
   if (bin) return bin;
-  const env = process.env.FLINTRAIL_AGENT_DESKTOP;
+  const env = process.env.ROCKETWRIGHT_AGENT_DESKTOP;
   if (env) return (bin = env);
   const ext = process.platform === 'win32' ? '.exe' : '';
   try {
@@ -107,7 +107,7 @@ export function ad<T = any>(args: string[], timeout = 30000): Promise<T> {
       let j: any;
       try { j = JSON.parse(line); } catch {
         const why = (err as NodeJS.ErrnoException | null)?.code === 'ENOENT'
-          ? 'agent-desktop is not installed (npm i agent-desktop, or set FLINTRAIL_AGENT_DESKTOP)'
+          ? 'agent-desktop is not installed (npm i agent-desktop, or set ROCKETWRIGHT_AGENT_DESKTOP)'
           : (stderr || err?.message || 'no output').trim().slice(0, 300);
         return reject(new DesktopError('NO_OUTPUT', `agent-desktop: ${why}`));
       }
@@ -140,7 +140,7 @@ async function runningApps() {
 }
 
 /**
- * Apps an agent never drives here. Browsers: their own windows hold the Flintrail settings and the window
+ * Apps an agent never drives here. Browsers: their own windows hold the Rocketwright settings and the window
  * where the user confirms a password fill (a click through the accessibility tree would answer it for them);
  * web pages are driven through fl_open instead. Password managers, terminals, code editors with a terminal,
  * system settings and scripting tools: each one reads secrets or runs commands.
@@ -150,7 +150,7 @@ const FORBIDDEN_NAMES = /\b(brave|chrome|chromium|edge|arc|vivaldi|opera|safari|
 
 export function assertDesktopAllowed(name: string, bundle?: string) {
   if ((bundle && FORBIDDEN_BUNDLES.test(bundle)) || FORBIDDEN_NAMES.test(name)) {
-    throw new DesktopError('FORBIDDEN_APP', `${name}: Flintrail never drives browsers (use fl_open for web pages), password managers, terminals, code editors or system settings through the desktop.`);
+    throw new DesktopError('FORBIDDEN_APP', `${name}: Rocketwright never drives browsers (use fl_open for web pages), password managers, terminals, code editors or system settings through the desktop.`);
   }
 }
 

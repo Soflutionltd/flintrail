@@ -9,7 +9,7 @@ export interface Credentials { username: string; password: string; totp: string 
 /** Payment and bank items are never filled, whatever the page asks: only plain logins. */
 export function assertLoginItem(source: string, title: string, category: string | undefined) {
   if (category && !/^login$/i.test(category)) {
-    throw new Error(`Refused: ${source} item "${title}" is a ${category.toLowerCase().replace(/_/g, ' ')}. Flintrail only fills logins, never payment cards or bank details.`);
+    throw new Error(`Refused: ${source} item "${title}" is a ${category.toLowerCase().replace(/_/g, ' ')}. Rocketwright only fills logins, never payment cards or bank details.`);
   }
 }
 
@@ -88,7 +88,7 @@ function parseJson<T>(text: string, bin: string): T {
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new Error(`${bin}: unreadable output (not the JSON Flintrail expects).`);
+    throw new Error(`${bin}: unreadable output (not the JSON Rocketwright expects).`);
   }
 }
 
@@ -265,15 +265,15 @@ function protonPass(bin: string): CliSource {
 }
 
 /**
- * KeePassXC CLI (keepassxc-cli) on one database. It is unlocked with FLINTRAIL_KEEPASSXC_KEYFILE, or with the password
- * printed by FLINTRAIL_KEEPASSXC_PASSWORD_COMMAND (e.g. a macOS Keychain lookup), passed on standard input only.
+ * KeePassXC CLI (keepassxc-cli) on one database. It is unlocked with ROCKETWRIGHT_KEEPASSXC_KEYFILE, or with the password
+ * printed by ROCKETWRIGHT_KEEPASSXC_PASSWORD_COMMAND (e.g. a macOS Keychain lookup), passed on standard input only.
  */
 function keepassxc(bin: string, db: string): CliSource {
-  if (!db) throw new Error('FLINTRAIL_PASSWORDS: keepassxc needs the database, e.g. keepassxc:/Users/me/Passwords.kdbx.');
-  const keyfile = process.env.FLINTRAIL_KEEPASSXC_KEYFILE || '';
-  const passwordCommand = process.env.FLINTRAIL_KEEPASSXC_PASSWORD_COMMAND || '';
+  if (!db) throw new Error('ROCKETWRIGHT_PASSWORDS: keepassxc needs the database, e.g. keepassxc:/Users/me/Passwords.kdbx.');
+  const keyfile = process.env.ROCKETWRIGHT_KEEPASSXC_KEYFILE || '';
+  const passwordCommand = process.env.ROCKETWRIGHT_KEEPASSXC_PASSWORD_COMMAND || '';
   if (!keyfile && !passwordCommand) {
-    throw new Error('KeePassXC: set FLINTRAIL_KEEPASSXC_KEYFILE or FLINTRAIL_KEEPASSXC_PASSWORD_COMMAND to unlock the database (never its password in clear).');
+    throw new Error('KeePassXC: set ROCKETWRIGHT_KEEPASSXC_KEYFILE or ROCKETWRIGHT_KEEPASSXC_PASSWORD_COMMAND to unlock the database (never its password in clear).');
   }
   const unlock = async (): Promise<{ args: string[]; input?: string }> => {
     if (!passwordCommand) return { args: ['--no-password', '--key-file', keyfile] };
@@ -339,7 +339,7 @@ function command(bin: string): CliSource {
   };
 }
 
-/** Parses FLINTRAIL_PASSWORDS entries: browser, 1password[:bin], bitwarden[:bin], dashlane[:bin], lastpass[:bin], protonpass[:bin], keepassxc:database, command:bin. */
+/** Parses ROCKETWRIGHT_PASSWORDS entries: browser, 1password[:bin], bitwarden[:bin], dashlane[:bin], lastpass[:bin], protonpass[:bin], keepassxc:database, command:bin. */
 export function parseSources(entries: string[]): SourceSpec[] {
   return entries.map((entry) => {
     const i = entry.indexOf(':');
@@ -351,8 +351,8 @@ export function parseSources(entries: string[]): SourceSpec[] {
     if (kind === 'dashlane') return dashlane(bin || 'dcli');
     if (kind === 'lastpass') return lastpass(bin || 'lpass');
     if (kind === 'protonpass') return protonPass(bin || 'pass-cli');
-    if (kind === 'keepassxc') return keepassxc(process.env.FLINTRAIL_KEEPASSXC_CLI || 'keepassxc-cli', bin);
+    if (kind === 'keepassxc') return keepassxc(process.env.ROCKETWRIGHT_KEEPASSXC_CLI || 'keepassxc-cli', bin);
     if (kind === 'command' && bin) return command(bin);
-    throw new Error(`FLINTRAIL_PASSWORDS: unknown source "${entry}" (use browser, 1password[:path], bitwarden[:path], dashlane[:path], lastpass[:path], protonpass[:path], keepassxc:database or command:path).`);
+    throw new Error(`ROCKETWRIGHT_PASSWORDS: unknown source "${entry}" (use browser, 1password[:path], bitwarden[:path], dashlane[:path], lastpass[:path], protonpass[:path], keepassxc:database or command:path).`);
   });
 }

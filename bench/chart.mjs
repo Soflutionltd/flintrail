@@ -13,8 +13,8 @@ const bars = rows.map((r, i) => {
   const y = top + i * rowH;
   const w = Math.max(6, (r.medianMs / max) * barMax);
   const floor = r.label.startsWith('Browser floor');
-  const ours = r.label.startsWith('Flintrail');
-  const fastest = ours && r.medianMs === Math.min(...rows.filter((x) => x.label.startsWith('Flintrail')).map((x) => x.medianMs));
+  const ours = r.label.startsWith('Rocketwright');
+  const fastest = ours && r.medianMs === Math.min(...rows.filter((x) => x.label.startsWith('Rocketwright')).map((x) => x.medianMs));
   const fill = floor ? 'url(#hatch)' : ours ? (fastest ? 'url(#spark)' : '#FF7A2F') : '#8B95A7';
   const speed = floor ? ' · no MCP, no agent: the limit for UI clicks' : r.medianMs < base ? ` · ${(base / r.medianMs).toFixed(1)}× faster` : '';
   return `

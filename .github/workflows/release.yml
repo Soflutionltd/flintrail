@@ -5,7 +5,7 @@
 # Everyone installed with `npx -y <package>@latest` or with the .mcpb extension then updates on their own.
 #
 # npm authenticates by trusted publishing (OIDC, no stored token): on npmjs.com, package settings >
-# Trusted publisher > GitHub Actions, repository Soflutionltd/flintrail, workflow release.yml.
+# Trusted publisher > GitHub Actions, repository Soflutionltd/rocketwright, workflow release.yml.
 # An NPM_TOKEN secret, if present, is used as a fallback. If npm refuses, step 1 ends with a warning
 # and the rest still runs; run this workflow by hand (Actions > Release > Run workflow) once npm is set up.
 name: Release

@@ -65,7 +65,7 @@ export async function loadSession(o: { name: string }): Promise<string> {
   try {
     saved = JSON.parse(readFileSync(file, 'utf8'));
   } catch {
-    throw new Error(`Session "${o.name}" is not a file Flintrail wrote.`);
+    throw new Error(`Session "${o.name}" is not a file Rocketwright wrote.`);
   }
   const site = siteOk(String(saved.site || ''));
   // Only what belongs to the site it was saved for: a file edited to carry other sites' cookies loads nothing more.
@@ -79,7 +79,7 @@ export async function loadSession(o: { name: string }): Promise<string> {
     // The origin's storage is written from a blank page served locally: the site itself is not contacted.
     const page = await driven.ctx.newPage();
     try {
-      await page.route(`${origin}/**`, (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Flintrail</title>' }));
+      await page.route(`${origin}/**`, (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Rocketwright</title>' }));
       await page.goto(`${origin}/`);
       await page.evaluate((items) => { for (const { name, value } of items) window.localStorage.setItem(name, value); }, localStorage);
     } finally {

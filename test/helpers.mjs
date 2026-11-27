@@ -8,25 +8,25 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 export const cli = new URL('../dist/cli.js', import.meta.url).pathname;
 
 export function testEnv(extra = {}) {
-  const home = mkdtempSync(join(tmpdir(), 'flintrail-'));
+  const home = mkdtempSync(join(tmpdir(), 'rocketwright-'));
   return {
     ...process.env,
-    FLINTRAIL_MODE: 'launch',
-    FLINTRAIL_HOME: home,
-    FLINTRAIL_DOWNLOADS: join(home, 'downloads'),
-    FLINTRAIL_HEADLESS: '1',
+    ROCKETWRIGHT_MODE: 'launch',
+    ROCKETWRIGHT_HOME: home,
+    ROCKETWRIGHT_DOWNLOADS: join(home, 'downloads'),
+    ROCKETWRIGHT_HEADLESS: '1',
     // Never touch the real browsers of the machine running the tests.
-    FLINTRAIL_RELAY: 'off',
-    FLINTRAIL_PAIRING: 'off',
-    // A relay daemon started by a test leaves soon after the test's Flintrail processes.
-    FLINTRAIL_RELAY_IDLE_MS: '1500',
-    ...(process.env.FLINTRAIL_CHROME ? { FLINTRAIL_CHROME: process.env.FLINTRAIL_CHROME } : {}),
+    ROCKETWRIGHT_RELAY: 'off',
+    ROCKETWRIGHT_PAIRING: 'off',
+    // A relay daemon started by a test leaves soon after the test's Rocketwright processes.
+    ROCKETWRIGHT_RELAY_IDLE_MS: '1500',
+    ...(process.env.ROCKETWRIGHT_CHROME ? { ROCKETWRIGHT_CHROME: process.env.ROCKETWRIGHT_CHROME } : {}),
     ...extra,
   };
 }
 
 export async function connect(env = testEnv()) {
-  const client = new Client({ name: 'flintrail-test', version: '1' });
+  const client = new Client({ name: 'rocketwright-test', version: '1' });
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [cli], env, stderr: 'inherit' }));
   const call = async (name, args = {}) => {
     const r = await client.callTool({ name, arguments: args });

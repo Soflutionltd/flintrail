@@ -9,22 +9,22 @@
       "calls": 7
     },
     {
-      "label": "Flintrail live (1 action / call)",
+      "label": "Rocketwright live (1 action / call)",
       "medianMs": 880,
       "calls": 7
     },
     {
-      "label": "Flintrail live, batched",
+      "label": "Rocketwright live, batched",
       "medianMs": 777,
       "calls": 3
     },
     {
-      "label": "Flintrail replay (fl_run)",
+      "label": "Rocketwright replay (fl_run)",
       "medianMs": 683,
       "calls": 2
     },
     {
-      "label": "Flintrail API replay (fl_run)",
+      "label": "Rocketwright API replay (fl_run)",
       "medianMs": 114,
       "calls": 2
     },

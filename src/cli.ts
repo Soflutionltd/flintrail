@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// flintrail            -> MCP over stdio (Claude Desktop, Claude Code, Cursor...)
-// flintrail --http     -> MCP over Streamable HTTP with a bearer token (remote agents, servers)
-// flintrail --relay    -> shared extension relay, started by Flintrail itself (src/relay.ts)
+// rocketwright            -> MCP over stdio (Claude Desktop, Claude Code, Cursor...)
+// rocketwright --http     -> MCP over Streamable HTTP with a bearer token (remote agents, servers)
+// rocketwright --relay    -> shared extension relay, started by Rocketwright itself (src/relay.ts)
+import './legacy-home.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
 import { join } from 'node:path';
@@ -30,19 +31,19 @@ if (flag('version')) {
   process.exit(0);
 }
 if (flag('help')) {
-  console.log(`flintrail ${VERSION}
-  flintrail                 MCP over stdio
-  flintrail --http          MCP over HTTP (default 127.0.0.1:8931, path /mcp)
-  flintrail --relay         shared extension relay (started by Flintrail itself when needed)
-  flintrail --separate-profile <brand> "<profile>"   move a copy of a browser profile into an instance of its own
+  console.log(`rocketwright ${VERSION}
+  rocketwright                 MCP over stdio
+  rocketwright --http          MCP over HTTP (default 127.0.0.1:8931, path /mcp)
+  rocketwright --relay         shared extension relay (started by Rocketwright itself when needed)
+  rocketwright --separate-profile <brand> "<profile>"   move a copy of a browser profile into an instance of its own
                             (macOS): the "is debugging this browser" bar then stays in its windows
     --host <h> --port <p>   listen address
-    --token <t>             bearer token (default: FLINTRAIL_TOKEN or ~/.flintrail/token)
-Environment: FLINTRAIL_MODE=attach|launch|extension, FLINTRAIL_RELAY_PORT, FLINTRAIL_RELAY=off, FLINTRAIL_RELAY_IDLE_MS, FLINTRAIL_PAIRING=off,
-  FLINTRAIL_EXTENSION_IDS, FLINTRAIL_CDP_URL, FLINTRAIL_CHROME, FLINTRAIL_HEADLESS=0,
-  FLINTRAIL_ALLOWED_DOMAINS=example.com,*.example.org   the only sites the agent may open, read and send requests to (default: any),
-  FLINTRAIL_PASSWORDS=browser,1password[:path],bitwarden[:path],command:path   sources for fl_login, in order (default browser, "off" to disable)
-  FLINTRAIL_MASK_SECRETS=off   show values that look like credentials in tool results (masked by default)`);
+    --token <t>             bearer token (default: ROCKETWRIGHT_TOKEN or ~/.rocketwright/token)
+Environment: ROCKETWRIGHT_MODE=attach|launch|extension, ROCKETWRIGHT_RELAY_PORT, ROCKETWRIGHT_RELAY=off, ROCKETWRIGHT_RELAY_IDLE_MS, ROCKETWRIGHT_PAIRING=off,
+  ROCKETWRIGHT_EXTENSION_IDS, ROCKETWRIGHT_CDP_URL, ROCKETWRIGHT_CHROME, ROCKETWRIGHT_HEADLESS=0,
+  ROCKETWRIGHT_ALLOWED_DOMAINS=example.com,*.example.org   the only sites the agent may open, read and send requests to (default: any),
+  ROCKETWRIGHT_PASSWORDS=browser,1password[:path],bitwarden[:path],command:path   sources for fl_login, in order (default browser, "off" to disable)
+  ROCKETWRIGHT_MASK_SECRETS=off   show values that look like credentials in tool results (masked by default)`);
   process.exit(0);
 }
 
@@ -51,7 +52,7 @@ if (flag('separate-profile')) {
   const i = args.indexOf('--separate-profile');
   const [brand, name] = [args[i + 1], args[i + 2]];
   if (!brand || !name) {
-    console.error('Usage: flintrail --separate-profile <brand> "<profile name>"   e.g. flintrail --separate-profile brave Soflution');
+    console.error('Usage: rocketwright --separate-profile <brand> "<profile name>"   e.g. rocketwright --separate-profile brave Soflution');
     process.exit(2);
   }
   try {
@@ -63,21 +64,21 @@ if (flag('separate-profile')) {
   }
 }
 
-// The shared relay daemon (started by Flintrail itself): it never returns, the rest is the MCP server.
+// The shared relay daemon (started by Rocketwright itself): it never returns, the rest is the MCP server.
 if (flag('relay')) await runRelayDaemon(loadToken(opt('token', '')));
 
 const stop = async () => { await shutdown(); process.exit(0); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
-// Join the shared relay right away (starting it if no Flintrail did), so the user's browsers (Brave,
+// Join the shared relay right away (starting it if no Rocketwright did), so the user's browsers (Brave,
 // Chrome...) connect through the extension, and can record by demonstration, before the agent's first call.
 const relay = relayClient(loadToken(opt('token', '')), VERSION);
 // The pairing host is registered here, before the MCP handshake, and again by the daemon: a browser opened
-// right after Flintrail starts must not try to pair before the detached daemon is up, or it waits for the
+// right after Rocketwright starts must not try to pair before the detached daemon is up, or it waits for the
 // extension's next retry, 30 seconds later.
 if (relay) installNativeHost(config.dedicatedProfile ? [config.dedicatedProfile] : []);
-relay?.ensure().catch((e: Error) => console.error(`flintrail: extension relay unavailable: ${e.message}`));
+relay?.ensure().catch((e: Error) => console.error(`rocketwright: extension relay unavailable: ${e.message}`));
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -116,10 +117,10 @@ if (flag('http')) {
     }
   });
   http.listen(port, host, () => {
-    console.error(`flintrail ${VERSION} listening on http://${host}:${port}/mcp (bearer token in ${join(config.home, 'token')})`);
+    console.error(`rocketwright ${VERSION} listening on http://${host}:${port}/mcp (bearer token in ${join(config.home, 'token')})`);
   });
 } else {
-  startUpdateCheck('flintrail', VERSION, 'https://github.com/Soflutionltd/flintrail');
+  startUpdateCheck('rocketwright', VERSION, 'https://github.com/Soflutionltd/rocketwright');
   await buildServer().connect(attachUpdateNotice(new StdioServerTransport()));
   // An attached browser keeps the event loop alive: leave when the client goes away, or the process lingers.
   process.stdin.on('end', stop);

@@ -38,14 +38,14 @@ const windowsOf = (url) => sw.evaluate(async (u) => (await chrome.tabs.query({ u
 
 before(async () => {
   site = await startFixture();
-  userDataDir = mkdtempSync(join(tmpdir(), 'flintrail-profiles-'));
+  userDataDir = mkdtempSync(join(tmpdir(), 'rocketwright-profiles-'));
   mcp = await connect(testEnv({
-    FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(await freePort()), FLINTRAIL_TOKEN: 'profiles-' + Math.random().toString(36).slice(2),
-    FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: userDataDir, FLINTRAIL_EXTENSION_WAIT: '2000',
+    ROCKETWRIGHT_MODE: 'extension', ROCKETWRIGHT_RELAY_PORT: String(await freePort()), ROCKETWRIGHT_TOKEN: 'profiles-' + Math.random().toString(36).slice(2),
+    ROCKETWRIGHT_RELAY: 'on', ROCKETWRIGHT_PAIRING: 'on', ROCKETWRIGHT_PAIRING_DIRS: userDataDir, ROCKETWRIGHT_EXTENSION_WAIT: '2000',
   }));
   ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: true,
-    ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }),
+    ...(process.env.ROCKETWRIGHT_CHROME ? { executablePath: process.env.ROCKETWRIGHT_CHROME } : { channel: 'chromium' }),
     args: [`--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`],
   });
   await waitFor(async () => /chromium: Extension connected/.test(await mcp.call('fl_extension')));
@@ -105,7 +105,7 @@ test('a tab opens in the window the agent names, or in a new window', async () =
 
 test('a profile that is not open is listed, and fl_open says how to open it', async () => {
   assert.match(await mcp.call('fl_extension'), /Not open \(fl_open with browser "<profile name>" opens it\): chromium "Compta"/);
-  // Test browsers have no application to launch: Flintrail says so instead of waiting forever.
+  // Test browsers have no application to launch: Rocketwright says so instead of waiting forever.
   await assert.rejects(mcp.call('fl_open', { url: site.url, browser: 'Compta' }), /cannot open chromium profile "Compta" by itself/);
 });
 

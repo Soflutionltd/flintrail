@@ -5,7 +5,7 @@ const vault = { id: 'v1', name: 'Test' };
 const items = [
   { id: 'fixture1', title: 'Fixture shop', category: 'LOGIN', vault, additional_information: 'ann@example.com', urls: [{ href: 'http://127.0.0.1/login' }] },
   { id: 'other1', title: 'Elsewhere', category: 'LOGIN', vault, additional_information: 'bob@example.com', urls: [{ href: 'https://elsewhere.example/login' }] },
-  // 1Password lists only logins when asked (--categories Login); this one checks Flintrail filters anyway.
+  // 1Password lists only logins when asked (--categories Login); this one checks Rocketwright filters anyway.
   { id: 'card1', title: 'Company card', category: 'CREDIT_CARD', vault, additional_information: '4242', urls: [{ href: 'http://127.0.0.1/login' }] },
 ];
 // FAKE_OP_SECOND=1: a second account on the fixture site, saved under its exact host like a duplicate login would be.

@@ -1,4 +1,4 @@
-// What the relay daemon, its Flintrail clients and the browser extension agree on.
+// What the relay daemon, its Rocketwright clients and the browser extension agree on.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /** Bumped on any incompatible change of the /client protocol. */

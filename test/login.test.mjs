@@ -24,8 +24,8 @@ after(() => site.server.close());
 describe('1Password CLI source', () => {
   let mcp, env;
   // A temporary folder of its own: the test sees every working copy Playwright leaves there.
-  const work = mkdtempSync(join(tmpdir(), 'flintrail-work-'));
-  before(async () => { env = testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, TMPDIR: work }); mcp = await connect(env); });
+  const work = mkdtempSync(join(tmpdir(), 'rocketwright-work-'));
+  before(async () => { env = testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${bin('fake-op.mjs')}`, TMPDIR: work }); mcp = await connect(env); });
   after(() => mcp.client.close());
 
   test('signs in and never returns the password or the code', async () => {
@@ -42,7 +42,7 @@ describe('1Password CLI source', () => {
 
     // Scripts and screenshots are refused on the page that holds the filled secrets: base64 or a picture would slip past masking.
     const read = await mcp.call('fl_extract', { tab, js: 'return btoa(f.password.value + f.otp.value)' });
-    assert.match(read, /Blocked: this page holds a password, code or secret Flintrail filled/);
+    assert.match(read, /Blocked: this page holds a password, code or secret Rocketwright filled/);
     assert.ok(!read.includes(Buffer.from('S3cret').toString('base64').slice(0, 6)));
     await assert.rejects(mcp.call('fl_screenshot', { tab }), /Blocked: this page holds a password/);
     // The code box shows no value in snapshots, even if the page turned it into plain text.
@@ -51,7 +51,7 @@ describe('1Password CLI source', () => {
     assert.match(logs, /signing in with/);
     assert.ok(!leaks(logs), 'console messages must be masked');
     // Audit log: which login, where, how approved, never a value.
-    const audit = readFileSync(join(env.FLINTRAIL_HOME, 'fill-audit.log'), 'utf8');
+    const audit = readFileSync(join(env.ROCKETWRIGHT_HOME, 'fill-audit.log'), 'utf8');
     assert.match(audit, /"domain":"127\.0\.0\.1","item":"Fixture shop","ref":"fixture1","source":"1password","filled":\["username","password","one-time code"\],"approval":"dedicated browser"/);
     assert.ok(!leaks(audit), 'the audit log holds no value');
     await mcp.call('fl_close', { tab });
@@ -80,11 +80,11 @@ describe('1Password CLI source', () => {
     await mcp.call('fl_trace', { tab, action: 'start', name: 'with-login' });
     await mcp.call('fl_video', { tab, action: 'start', name: 'with-login' });
     await mcp.call('fl_login', { tab });
-    assert.match(await mcp.call('fl_trace', { tab, action: 'stop' }), /Trace deleted: Flintrail filled a password, a code or a secret while it recorded/);
-    assert.match(await mcp.call('fl_video', { tab, action: 'stop' }), /Video deleted: Flintrail filled a password/);
+    assert.match(await mcp.call('fl_trace', { tab, action: 'stop' }), /Trace deleted: Rocketwright filled a password, a code or a secret while it recorded/);
+    assert.match(await mcp.call('fl_video', { tab, action: 'stop' }), /Video deleted: Rocketwright filled a password/);
     // Nothing left on disk, under any name.
     await new Promise((r) => setTimeout(r, 500));
-    const left = existsSync(env.FLINTRAIL_DOWNLOADS) ? readdirSync(env.FLINTRAIL_DOWNLOADS).filter((f) => /with-login/.test(f)) : [];
+    const left = existsSync(env.ROCKETWRIGHT_DOWNLOADS) ? readdirSync(env.ROCKETWRIGHT_DOWNLOADS).filter((f) => /with-login/.test(f)) : [];
     assert.deepEqual(left, []);
     // Nor in Playwright's own working folders, where it keeps a copy until the browser closes: no trace file, picture
     // or video is left there.
@@ -163,7 +163,7 @@ describe('1Password CLI source', () => {
 
 for (const [kind, file] of [['bitwarden', 'fake-bw.mjs'], ['command', 'fake-command.mjs'], ['dashlane', 'fake-dcli.mjs'], ['protonpass', 'fake-pass-cli.mjs']]) {
   test(`${kind} source signs in with username, password and one-time code`, async () => {
-    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `${kind}:${bin(file)}` }));
+    const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `${kind}:${bin(file)}` }));
     try {
       const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
       const out = await mcp.call('fl_login', { tab });
@@ -178,7 +178,7 @@ for (const [kind, file] of [['bitwarden', 'fake-bw.mjs'], ['command', 'fake-comm
 }
 
 test('lastpass source signs in with username and password (its CLI gives no one-time codes)', async () => {
-  const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `lastpass:${bin('fake-lpass.mjs')}` }));
+  const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `lastpass:${bin('fake-lpass.mjs')}` }));
   try {
     const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
     const out = await mcp.call('fl_login', { tab });
@@ -191,9 +191,9 @@ test('lastpass source signs in with username and password (its CLI gives no one-
 });
 
 test('keepassxc source opens its database with a key file, or with a password a command prints, never one in clear', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'flintrail-kp-'));
+  const dir = mkdtempSync(join(tmpdir(), 'rocketwright-kp-'));
   const db = join(dir, 'Passwords.kdbx');
-  const env = (extra) => testEnv({ FLINTRAIL_PASSWORDS: `keepassxc:${db}`, FLINTRAIL_KEEPASSXC_CLI: bin('fake-keepassxc.mjs'), FAKE_KP_DB: db, ...extra });
+  const env = (extra) => testEnv({ ROCKETWRIGHT_PASSWORDS: `keepassxc:${db}`, ROCKETWRIGHT_KEEPASSXC_CLI: bin('fake-keepassxc.mjs'), FAKE_KP_DB: db, ...extra });
   const signIn = async (extra) => {
     const mcp = await connect(env(extra));
     try {
@@ -206,17 +206,17 @@ test('keepassxc source opens its database with a key file, or with a password a 
       await mcp.client.close();
     }
   };
-  await signIn({ FLINTRAIL_KEEPASSXC_KEYFILE: join(dir, 'key.keyx') });
+  await signIn({ ROCKETWRIGHT_KEEPASSXC_KEYFILE: join(dir, 'key.keyx') });
   // The password comes from a command (here a stand-in for a Keychain lookup) and goes on standard input only.
   const printer = join(dir, 'print-password.mjs');
   writeFileSync(printer, "#!/usr/bin/env node\nprocess.stdout.write('kp master\\n');\n");
   chmodSync(printer, 0o755);
-  await signIn({ FLINTRAIL_KEEPASSXC_PASSWORD_COMMAND: printer });
+  await signIn({ ROCKETWRIGHT_KEEPASSXC_PASSWORD_COMMAND: printer });
   // Neither: refused at start, the database is never opened without what unlocks it.
   const none = await connect(env({}));
   try {
     const tab = tabOf(await none.call('fl_open', { url: `${site.url}/login` }));
-    await assert.rejects(none.call('fl_login', { tab }), /set FLINTRAIL_KEEPASSXC_KEYFILE or FLINTRAIL_KEEPASSXC_PASSWORD_COMMAND/);
+    await assert.rejects(none.call('fl_login', { tab }), /set ROCKETWRIGHT_KEEPASSXC_KEYFILE or ROCKETWRIGHT_KEEPASSXC_PASSWORD_COMMAND/);
   } finally {
     await none.client.close();
   }
@@ -224,7 +224,7 @@ test('keepassxc source opens its database with a key file, or with a password a 
 
 test('1Password vaults: every vault by default, only the ones the user lists, never the ones they exclude', async () => {
   const run = async (extra, check) => {
-    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, ...extra }));
+    const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${bin('fake-op.mjs')}`, ...extra }));
     try {
       const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
       await check(mcp, tab);
@@ -233,28 +233,28 @@ test('1Password vaults: every vault by default, only the ones the user lists, ne
       await mcp.client.close();
     }
   };
-  // Excluded: the only matching login is left out, and the message says where Flintrail looked and why.
-  await run({ FLINTRAIL_EXCLUDE_VAULTS: 'test' }, async (mcp, tab) => {
+  // Excluded: the only matching login is left out, and the message says where Rocketwright looked and why.
+  await run({ ROCKETWRIGHT_EXCLUDE_VAULTS: 'test' }, async (mcp, tab) => {
     // The excluded vault is not even named, nor what it holds: only how many logins the settings left out.
     await assert.rejects(mcp.call('fl_login', { tab }), (e) => /1Password vaults searched: none the settings allow; the user's vault settings: every vault, never test; 1 matching login\(s\) left out by those settings/.test(e.message) && !/Fixture shop|ann@example/.test(e.message));
     assert.match(await mcp.call('fl_extract', { tab, js: 'return f.password.value === ""' }), /true/);
   });
   // Only other vaults allowed: the same.
-  await run({ FLINTRAIL_VAULTS: 'Clients, Work' }, async (mcp, tab) => {
+  await run({ ROCKETWRIGHT_VAULTS: 'Clients, Work' }, async (mcp, tab) => {
     await assert.rejects(mcp.call('fl_login', { tab }), /only Clients, Work.*1 matching login\(s\) left out by those settings/);
   });
   // Listed (any case): used.
-  await run({ FLINTRAIL_VAULTS: 'clients,TEST' }, async (mcp, tab) => {
+  await run({ ROCKETWRIGHT_VAULTS: 'clients,TEST' }, async (mcp, tab) => {
     assert.match(await mcp.call('fl_login', { tab }), /1password login "Fixture shop"/);
   });
   // A service account is told apart: it only opens the vaults it was given.
-  await run({ FLINTRAIL_EXCLUDE_VAULTS: 'Test', OP_SERVICE_ACCOUNT_TOKEN: 'not-a-real-token' }, async (mcp, tab) => {
+  await run({ ROCKETWRIGHT_EXCLUDE_VAULTS: 'Test', OP_SERVICE_ACCOUNT_TOKEN: 'not-a-real-token' }, async (mcp, tab) => {
     await assert.rejects(mcp.call('fl_login', { tab }), /service account only opens the shared vaults it was given \(never Private/);
   });
 });
 
-test('FLINTRAIL_PASSWORDS=off removes fl_login', async () => {
-  const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: 'off' }));
+test('ROCKETWRIGHT_PASSWORDS=off removes fl_login', async () => {
+  const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: 'off' }));
   try {
     const { tools } = await mcp.client.listTools();
     assert.ok(!tools.some((t) => t.name === 'fl_login'));
@@ -265,7 +265,7 @@ test('FLINTRAIL_PASSWORDS=off removes fl_login', async () => {
 
 const chromeBin = chromium.executablePath();
 test('browser source: the browser\'s own saved password, confirmed by a real click', { skip: !existsSync(chromeBin) && 'Chromium not installed' }, async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'flintrail-pm-'));
+  const profile = mkdtempSync(join(tmpdir(), 'rocketwright-pm-'));
   // Linux CI runners forbid the unprivileged user namespaces Chrome's sandbox needs (Playwright passes the same flag).
   const chrome = spawn(chromeBin, ['--headless=new', '--use-mock-keychain', '--password-store=basic', '--remote-debugging-port=0',
     ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
@@ -284,7 +284,7 @@ test('browser source: the browser\'s own saved password, confirmed by a real cli
     await pm.close();
     await seed.close();
 
-    mcp = await connect(testEnv({ FLINTRAIL_MODE: 'attach', FLINTRAIL_CDP_URL: cdpUrl, FLINTRAIL_ALLOW_ANY_BROWSER: '1', FLINTRAIL_PASSWORDS: 'browser' }));
+    mcp = await connect(testEnv({ ROCKETWRIGHT_MODE: 'attach', ROCKETWRIGHT_CDP_URL: cdpUrl, ROCKETWRIGHT_ALLOW_ANY_BROWSER: '1', ROCKETWRIGHT_PASSWORDS: 'browser' }));
     const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login?otp=0` }));
     const out = await mcp.call('fl_login', { tab });
     assert.match(out, /Browser password manager: filled username, password, submitted/);
@@ -337,7 +337,7 @@ describe('a sign-in step that already names the account', () => {
   const step = (email) => `${site.url}/login-step?as=${encodeURIComponent(email)}`;
 
   test('with two saved logins for the site, the one the page names is used', async () => {
-    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_SECOND: '1' }));
+    const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_SECOND: '1' }));
     try {
       // The other login is the one saved under this exact address: the page's account still wins.
       for (const [email, password] of [['ann@example.com', SECRET], ['bob@example.com', 'Second pass 77']]) {
@@ -362,7 +362,7 @@ describe('a sign-in step that already names the account', () => {
   });
 
   test('look-alike, hidden and labelled account names are told apart', async () => {
-    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
+    const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
     const attempt = async (query) => {
       const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login-step?${query}` }));
       const before = site.attempts.length;
@@ -420,7 +420,7 @@ describe('a sign-in step that already names the account', () => {
 
   test('a name the page shows by chance does not pick a saved login', async () => {
     const run = async (username, query) => {
-      const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_USERNAME: username }));
+      const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_USERNAME: username }));
       try {
         const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login-step?${query}` }));
         const before = site.attempts.length;
@@ -446,7 +446,7 @@ describe('a sign-in step that already names the account', () => {
 
   test('asked for one account, a saved login for another is never used', async () => {
     const posts = () => site.hits.filter((h) => h.endsWith('/api/login')).length + site.attempts.length;
-    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
+    const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
     try {
       // A plain sign-in form that names nobody, and the only saved login is ann's.
       const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
@@ -468,7 +468,7 @@ describe('a sign-in step that already names the account', () => {
     } finally { await mcp.client.close(); }
 
     // Two saved logins: asking for bob on a step that names ann fills nothing.
-    const two = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_SECOND: '1' }));
+    const two = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${bin('fake-op.mjs')}`, FAKE_OP_SECOND: '1' }));
     try {
       const tab = tabOf(await two.call('fl_open', { url: `${site.url}/login-step?as=${encodeURIComponent('ann@example.com')}` }));
       const before = posts();
@@ -484,7 +484,7 @@ describe('a sign-in step that already names the account', () => {
   });
 
   test('a single saved login is not used for another account the page names', async () => {
-    const mcp = await connect(testEnv({ FLINTRAIL_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
+    const mcp = await connect(testEnv({ ROCKETWRIGHT_PASSWORDS: `1password:${bin('fake-op.mjs')}` }));
     try {
       const tab = tabOf(await mcp.call('fl_open', { url: step('carol@example.com') }));
       const before = site.attempts.length;

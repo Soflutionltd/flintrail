@@ -1,6 +1,6 @@
 // fl_flow_export: a recorded flow as a Playwright Test file (@playwright/test), to run in a project's own test suite
 // with `npx playwright test`, in Chromium, Firefox or WebKit. Variables come from environment variables; a sign-in
-// step reads its username and password from LOGIN_USERNAME and LOGIN_PASSWORD. No value Flintrail kept out of the
+// step reads its username and password from LOGIN_USERNAME and LOGIN_PASSWORD. No value Rocketwright kept out of the
 // flow (a password) is in it.
 import type { Step } from './engine.js';
 import type { TargetDescriptor } from './page-scripts.js';
@@ -17,7 +17,7 @@ const val = (s: string | undefined) => (s === undefined ? 'undefined' : /\{\{\w+
 const css = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 const unstableId = (id: string) => /\d{3,}|[a-f0-9]{8,}|:/.test(id);
 
-/** The most stable locator for a recorded element, in the order Flintrail itself tries them. */
+/** The most stable locator for a recorded element, in the order Rocketwright itself tries them. */
 function locator(d: TargetDescriptor): string {
   const root = d.frameUrl ? `frame(page, ${q(d.frameUrl)})` : 'page';
   if (d.testid) return `${root}.locator(${q(`[data-testid="${css(d.testid)}"],[data-test="${css(d.testid)}"],[data-qa="${css(d.testid)}"]`)})`;
@@ -109,7 +109,7 @@ export function exportFlow(name: string): string {
   const vars = flow.vars.filter((v) => v !== 'password');
   const env = (v: string) => `FLOW_${v.replace(/\W/g, '_').toUpperCase()}`;
   const head = [
-    `// Flow ${comment(q(flow.name))} recorded with Flintrail ${VERSION}, exported ${new Date().toISOString().slice(0, 10)}.`,
+    `// Flow ${comment(q(flow.name))} recorded with Rocketwright ${VERSION}, exported ${new Date().toISOString().slice(0, 10)}.`,
     ...(flow.description ? [`// ${comment(flow.description)}`] : []),
     '// Run it with: npx playwright test <this file>   (any browser: --project=chromium, firefox or webkit)',
     ...(vars.length ? [`// Variables, from the environment: ${vars.map((v) => `${env(v)} ({{${v}}})`).join(', ')}.`] : []),
@@ -174,7 +174,7 @@ export function exportFlow(name: string): string {
   }
   if (uses('request(page')) {
     helpers.push(
-      '/** A request sent from the page, with its cookies, as Flintrail sends it. */',
+      '/** A request sent from the page, with its cookies, as Rocketwright sends it. */',
       'async function request(page: Page, method: string, url: string, body?: string, headers?: Record<string, string>) {',
       '  const status = await page.evaluate(async ([method, url, body, headers]) => {',
       "    const r = await fetch(url as string, { method: method as string, body: body as string | undefined, headers: headers as Record<string, string> | undefined, credentials: 'include' });",

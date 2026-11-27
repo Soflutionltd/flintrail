@@ -7,10 +7,10 @@ async function render() {
   const s = await chrome.storage.local.get(['status', 'statusDetail', 'token', 'port', 'recording', 'label', 'name']);
   const connected = s.status === 'connected';
   $('dot').className = s.status || '';
-  $('status').textContent = connected ? 'Connected to Flintrail.' : (s.statusDetail || 'Not connected.');
+  $('status').textContent = connected ? 'Connected to Rocketwright.' : (s.statusDetail || 'Not connected.');
   if (!$('token').value && s.token) $('token').value = s.token;
   if (!$('port').value) $('port').value = s.port || 8932;
-  // The name agents use for this browser, shown ready to change: the one the user gave, else the one Flintrail gave.
+  // The name agents use for this browser, shown ready to change: the one the user gave, else the one Rocketwright gave.
   if (!labelLoaded && (s.label || s.name)) { $('label').value = s.label || s.name; labelLoaded = true; }
   $('nameInfo').textContent = connected && s.name
     ? `Agents pick this browser profile as "${s.name}", whatever the window. Change it above if you like.`

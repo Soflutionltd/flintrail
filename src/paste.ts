@@ -1,6 +1,6 @@
 // fl_paste_secret: the other half of fl_capture_secret. A secret kept in a vault is typed into one field of a page
 // (a new token into a deploy setting, an API key into a dashboard) without ever reaching the agent. The user
-// clicks to allow each one in the Flintrail extension, which shows the site and the secret's name: a hostile page
+// clicks to allow each one in the Rocketwright extension, which shows the site and the secret's name: a hostile page
 // or a misled agent cannot send a secret anywhere without that click.
 import { execFile } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
@@ -42,7 +42,7 @@ async function reveal(d: Destination, host: string): Promise<string> {
   try {
     item = JSON.parse(raw) as Item;
   } catch {
-    throw new Error('1Password: unreadable output (not the JSON Flintrail expects).');
+    throw new Error('1Password: unreadable output (not the JSON Rocketwright expects).');
   }
   // An API credential or a password item, or a login of this very site: never a card, a bank account, or the
   // login of another site (fl_login would not fill it here either).
@@ -64,9 +64,9 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
     throw new Error('from: "mcphub:NAME", "mcphub:tenant/NAME" or "1password:Vault/Item title".');
   }
   const where = pageBrowser(page);
-  if (!where.viaExtension) throw new Error('Refused: fl_paste_secret asks the user in the Flintrail extension, so it only works in one of the user\'s own browsers.');
+  if (!where.viaExtension) throw new Error('Refused: fl_paste_secret asks the user in the Rocketwright extension, so it only works in one of the user\'s own browsers.');
   // A 1Password vault the user excluded in the settings is not read, even with their click.
-  if (source.kind === '1password' && !vaultAllowed(source.vault, await vaultRules(where))) throw new Error(`Refused: the vault "${source.vault}" is not one Flintrail may use (extension settings).`);
+  if (source.kind === '1password' && !vaultAllowed(source.vault, await vaultRules(where))) throw new Error(`Refused: the vault "${source.vault}" is not one Rocketwright may use (extension settings).`);
   // A script the agent ran in this page could catch the value as it is typed.
   if (agentRanJs(page)) throw new Error('Refused: you ran JavaScript in this tab (eval, extract or request), which could catch the secret. Open the page in a new tab (fl_open) and paste there before running any script.');
   const url = page.url();
@@ -114,10 +114,10 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
     try {
       answer = await relay.request('pastePolicy', { key: where.browser, domain: siteOf(host), host, origin, item: describe(source), source: 'vault', ...(source.kind === '1password' ? { vault: source.vault } : {}), fields: [`into the ${kind} field the page calls "${name}"`] }, 130_000);
     } catch (e) {
-      if (/Unknown method pastePolicy/.test((e as Error).message)) throw new Error(`Refused: the Flintrail extension in ${where.browser} is too old to ask before pasting a secret. Reload it to update it.`);
+      if (/Unknown method pastePolicy/.test((e as Error).message)) throw new Error(`Refused: the Rocketwright extension in ${where.browser} is too old to ask before pasting a secret. Reload it to update it.`);
       throw e;
     }
-    if (answer.refused || !answer.confirmed) throw new Error(`Refused by the Flintrail extension in ${where.browser}: ${answer.refused || 'not confirmed by the user'}.`);
+    if (answer.refused || !answer.confirmed) throw new Error(`Refused by the Rocketwright extension in ${where.browser}: ${answer.refused || 'not confirmed by the user'}.`);
     if (answer.asked === false) approval = 'not asked (the user turned questions off)';
     value = await reveal(source, host);
     if (!value) throw new Error(`Nothing pasted: ${describe(source)} is empty or missing.`);
@@ -139,7 +139,7 @@ export async function pasteSecret(page: Page, o: { ref?: string; selector?: stri
     mkdirSync(config.home, { recursive: true });
     appendFileSync(join(config.home, 'fill-audit.log'), JSON.stringify(entry) + '\n', { mode: 0o600 });
   } catch (e) {
-    console.error(`flintrail: could not write the audit log: ${(e as Error).message}`);
+    console.error(`rocketwright: could not write the audit log: ${(e as Error).message}`);
   }
   return `Pasted the secret from ${describe(source)} into "${name}" on ${host} (${value.length} characters), ${approval}. Its value is never shown to you; scripts and screenshots of this page are refused until it loads another page.`;
 }

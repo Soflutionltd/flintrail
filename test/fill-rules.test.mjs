@@ -53,7 +53,7 @@ test('a login is for its own site only, public suffixes included', () => {
 
 test('payment cards and bank accounts are refused', () => {
   assert.doesNotThrow(() => assertLoginItem('1Password', 'GitHub', 'LOGIN'));
-  assert.throws(() => assertLoginItem('1Password', 'Company card', 'CREDIT_CARD'), /credit card\. Flintrail only fills logins/);
+  assert.throws(() => assertLoginItem('1Password', 'Company card', 'CREDIT_CARD'), /credit card\. Rocketwright only fills logins/);
   assert.throws(() => assertLoginItem('1Password', 'Bank', 'BANK_ACCOUNT'), /bank account/);
 });
 

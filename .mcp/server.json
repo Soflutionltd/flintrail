@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "com.soflution/flintrail",
-  "title": "Flintrail",
+  "name": "com.soflution/rocketwright",
+  "title": "Rocketwright",
   "description": "Drive a real Chrome live, record a flow once, replay it in milliseconds without an LLM.",
   "version": "0.0.0",
-  "websiteUrl": "https://github.com/Soflutionltd/flintrail",
+  "websiteUrl": "https://github.com/Soflutionltd/rocketwright",
   "repository": {
-    "url": "https://github.com/Soflutionltd/flintrail",
+    "url": "https://github.com/Soflutionltd/rocketwright",
     "source": "github"
   },
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/Soflutionltd/flintrail/releases/download/TAG/flintrail.mcpb",
+      "identifier": "https://github.com/Soflutionltd/rocketwright/releases/download/TAG/rocketwright.mcpb",
       "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "transport": {
         "type": "stdio"

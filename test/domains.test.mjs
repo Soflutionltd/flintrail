@@ -10,7 +10,7 @@ let site, other, mcp;
 before(async () => {
   site = await startFixture();
   other = site.url.replace('127.0.0.1', 'localhost');
-  mcp = await connect(testEnv({ FLINTRAIL_ALLOWED_DOMAINS: '127.0.0.1' }));
+  mcp = await connect(testEnv({ ROCKETWRIGHT_ALLOWED_DOMAINS: '127.0.0.1' }));
 });
 after(async () => {
   await mcp.client.close();
@@ -173,7 +173,7 @@ test('fl_login never fills a sign-in form embedded from another site', async () 
   // Roles swapped: only localhost is allowed, the saved login belongs to 127.0.0.1.
   const bin = new URL('./fake-op.mjs', import.meta.url).pathname;
   chmodSync(bin, 0o755);
-  const strict = await connect(testEnv({ FLINTRAIL_ALLOWED_DOMAINS: 'localhost', FLINTRAIL_PASSWORDS: `1password:${bin}` }));
+  const strict = await connect(testEnv({ ROCKETWRIGHT_ALLOWED_DOMAINS: 'localhost', ROCKETWRIGHT_PASSWORDS: `1password:${bin}` }));
   try {
     const tab = tabOf(await strict.call('fl_open', { url: `${other}/embed?to=${enc(site.url + '/login?otp=0')}` }));
     await strict.call('fl_act', { tab, snapshot: false, actions: [{ do: 'wait', ms: 800 }] });
@@ -185,11 +185,11 @@ test('fl_login never fills a sign-in form embedded from another site', async () 
   } finally { await strict.client.close(); }
 });
 
-test('a list that cannot be read stops Flintrail instead of opening every site', () => {
+test('a list that cannot be read stops Rocketwright instead of opening every site', () => {
   for (const list of ['::1', 'https://', ' , ', 'exemple', '*', 'example.com, *.']) {
-    const r = spawnSync(process.execPath, [cli], { env: testEnv({ FLINTRAIL_ALLOWED_DOMAINS: list }), input: '', encoding: 'utf8', timeout: 20000 });
+    const r = spawnSync(process.execPath, [cli], { env: testEnv({ ROCKETWRIGHT_ALLOWED_DOMAINS: list }), input: '', encoding: 'utf8', timeout: 20000 });
     assert.notEqual(r.status, 0, `"${list}" must not start`);
-    assert.match(r.stderr, /FLINTRAIL_ALLOWED_DOMAINS/);
+    assert.match(r.stderr, /ROCKETWRIGHT_ALLOWED_DOMAINS/);
   }
 });
 
@@ -207,7 +207,7 @@ test('a flow recorded without the list cannot act in a frame the list now exclud
     await free.call('fl_record_stop');
   } finally { await free.client.close(); }
 
-  const strict = await connect({ ...env, FLINTRAIL_ALLOWED_DOMAINS: '127.0.0.1' });
+  const strict = await connect({ ...env, ROCKETWRIGHT_ALLOWED_DOMAINS: '127.0.0.1' });
   try {
     const before = site.hits.length;
     const run = await strict.call('fl_run', { name: 'inframe' }).catch((e) => e.message);

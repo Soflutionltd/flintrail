@@ -1,11 +1,11 @@
 // Browser connections. The dedicated browser ("agent") depends on the mode:
 //  - attach (default): connect over CDP to a dedicated Chrome for Testing that keeps your logged-in sessions.
-//    On macOS Flintrail finds it, starts it with a local debugging port, and refuses any other browser.
+//    On macOS Rocketwright finds it, starts it with a local debugging port, and refuses any other browser.
 //  - launch: start its own Chromium with a persistent profile (servers, CI, headless).
 //  - extension: no dedicated browser, only the browsers below.
-// In every mode, the user's own browsers where the Flintrail extension is installed are reachable by
+// In every mode, the user's own browsers where the Rocketwright extension is installed are reachable by
 // name ("brave", "brave-ideekdo", "chrome"...) through the shared relay daemon, several at once, and from
-// several Flintrail processes (one per conversation) at the same time.
+// several Rocketwright processes (one per conversation) at the same time.
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -60,7 +60,7 @@ function assertDedicatedBrowser(version: Record<string, string>) {
       const cmd = pid ? execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }) : '';
       const ownsDedicatedProfile = !!config.dedicatedProfile && cmd.includes(`--user-data-dir=${config.dedicatedProfile}`);
       if (!cmd.includes('Google Chrome for Testing') && !ownsDedicatedProfile) {
-        throw new Error(`Refusing to attach: port ${config.port} is not owned by Chrome for Testing or by FLINTRAIL_DEDICATED_PROFILE (set FLINTRAIL_ALLOW_ANY_BROWSER=1 to override).`);
+        throw new Error(`Refusing to attach: port ${config.port} is not owned by Chrome for Testing or by ROCKETWRIGHT_DEDICATED_PROFILE (set ROCKETWRIGHT_ALLOW_ANY_BROWSER=1 to override).`);
       }
     } catch (e) {
       if (e instanceof Error && e.message.startsWith('Refusing')) throw e;
@@ -79,7 +79,7 @@ function cftRunning(): boolean {
 
 async function startChromeForTesting() {
   const bin = chromeForTestingPath();
-  if (!bin) throw new Error('No browser reachable on the debugging port and Chrome for Testing not found (set FLINTRAIL_CHROME or FLINTRAIL_CDP_URL).');
+  if (!bin) throw new Error('No browser reachable on the debugging port and Chrome for Testing not found (set ROCKETWRIGHT_CHROME or ROCKETWRIGHT_CDP_URL).');
   if (platform() === 'darwin' && cftRunning()) {
     // Already open without a debugging port: restart it gracefully, tabs are restored.
     try {
@@ -102,7 +102,7 @@ async function startChromeForTesting() {
   throw new Error('Chrome for Testing did not open its debugging port in time.');
 }
 
-/** A browser Flintrail drives: the dedicated one ("agent") or a user browser through the extension. */
+/** A browser Rocketwright drives: the dedicated one ("agent") or a user browser through the extension. */
 export interface Driven {
   name: string;
   ctx: BrowserContext;
@@ -121,7 +121,7 @@ let filter: CdpFilter | null = null;
 
 async function connectExtension(name: string | undefined): Promise<Driven> {
   const relay = relayClient(loadToken(), VERSION);
-  if (!relay) throw new Error('The extension relay is turned off (FLINTRAIL_RELAY=off).');
+  if (!relay) throw new Error('The extension relay is turned off (ROCKETWRIGHT_RELAY=off).');
   const found = await findOrOpen(relay, name);
   const { key, cdpUrl } = await relay.open(found.key);
   const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 15000 });
@@ -133,7 +133,7 @@ async function connectExtension(name: string | undefined): Promise<Driven> {
 
 /**
  * A connected browser by name. When the name is a browser profile of this computer that is not open
- * ("Soflution", "brave-soflution"), Flintrail opens a window of it and waits for its extension.
+ * ("Soflution", "brave-soflution"), Rocketwright opens a window of it and waits for its extension.
  */
 async function findOrOpen(relay: RelayClient, name: string | undefined) {
   await relay.ensure();
@@ -156,9 +156,9 @@ async function findOrOpen(relay: RelayClient, name: string | undefined) {
   } catch {
     const others = relay.connectedNames();
     throw new Error(
-      `Opened ${profile.brand} profile "${profile.name}", but its Flintrail extension did not connect. ` +
-        `Ask the user to open that profile, check the Flintrail extension is installed and enabled (${profile.brand}://extensions), ` +
-        `then open its popup: it must show "Connected to Flintrail" with a green dot (click Connect otherwise). ` +
+      `Opened ${profile.brand} profile "${profile.name}", but its Rocketwright extension did not connect. ` +
+        `Ask the user to open that profile, check the Rocketwright extension is installed and enabled (${profile.brand}://extensions), ` +
+        `then open its popup: it must show "Connected to Rocketwright" with a green dot (click Connect otherwise). ` +
         (others.length
           ? `Browsers connected right now: ${others.join(', ')}. Use one of them only if the user agrees.`
           : 'No user browser is connected right now; the dedicated "agent" browser is available.')

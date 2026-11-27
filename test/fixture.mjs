@@ -141,7 +141,7 @@ export function startFixture(port = 0) {
       <script>
         f.onsubmit = async (e) => {
           e.preventDefault();
-          // A careless site logs what was typed: the console Flintrail returns must still mask it.
+          // A careless site logs what was typed: the console Rocketwright returns must still mask it.
           console.log('signing in with', f.password.value, f.otp ? f.otp.value : '');
           const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ email: f.email.value, password: f.password.value, ...(f.otp ? { otp: f.otp.value } : {}) }) });

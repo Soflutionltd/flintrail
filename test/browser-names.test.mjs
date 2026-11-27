@@ -23,23 +23,23 @@ async function waitFor(fn, ms = 20000) {
   }
 }
 
-const dirs = [mkdtempSync(join(tmpdir(), 'flintrail-name-a-')), mkdtempSync(join(tmpdir(), 'flintrail-name-b-'))];
+const dirs = [mkdtempSync(join(tmpdir(), 'rocketwright-name-a-')), mkdtempSync(join(tmpdir(), 'rocketwright-name-b-'))];
 const env = testEnv({
-  FLINTRAIL_MODE: 'extension', FLINTRAIL_RELAY_PORT: String(await freePort()), FLINTRAIL_TOKEN: 'names-' + Math.random().toString(36).slice(2),
-  FLINTRAIL_RELAY: 'on', FLINTRAIL_PAIRING: 'on', FLINTRAIL_PAIRING_DIRS: dirs.join(','),
+  ROCKETWRIGHT_MODE: 'extension', ROCKETWRIGHT_RELAY_PORT: String(await freePort()), ROCKETWRIGHT_TOKEN: 'names-' + Math.random().toString(36).slice(2),
+  ROCKETWRIGHT_RELAY: 'on', ROCKETWRIGHT_PAIRING: 'on', ROCKETWRIGHT_PAIRING_DIRS: dirs.join(','),
 });
 const open = (dir) => chromium.launchPersistentContext(dir, {
   headless: true,
-  ...(process.env.FLINTRAIL_CHROME ? { executablePath: process.env.FLINTRAIL_CHROME } : { channel: 'chromium' }),
+  ...(process.env.ROCKETWRIGHT_CHROME ? { executablePath: process.env.ROCKETWRIGHT_CHROME } : { channel: 'chromium' }),
   args: [`--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`],
 });
 const instanceOf = async (ctx) => {
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
   return waitFor(async () => (await sw.evaluate(() => chrome.storage.local.get('instance'))).instance);
 };
-const names = () => JSON.parse(readFileSync(join(env.FLINTRAIL_HOME, 'browsers.json'), 'utf8'));
+const names = () => JSON.parse(readFileSync(join(env.ROCKETWRIGHT_HOME, 'browsers.json'), 'utf8'));
 const portFree = () => new Promise((resolve) => {
-  const s = createServer().once('error', () => resolve(false)).listen(Number(env.FLINTRAIL_RELAY_PORT), '127.0.0.1', () => s.close(() => resolve(true)));
+  const s = createServer().once('error', () => resolve(false)).listen(Number(env.ROCKETWRIGHT_RELAY_PORT), '127.0.0.1', () => s.close(() => resolve(true)));
 });
 
 // One "day": a relay starts, the browsers connect in this order, each is named, everything closes.

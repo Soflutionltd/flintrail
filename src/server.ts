@@ -1,3 +1,4 @@
+import './legacy.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from 'playwright-core';
 import { z } from 'zod';
@@ -80,7 +81,7 @@ const desktopActionSchema = z.object({
   amount: z.number().int().optional().describe('scroll: units (default 3).'),
 });
 
-const browserOpt = z.string().optional().describe('Which browser: "agent" (dedicated browser, default) or one of the user\'s browsers through the Flintrail extension: a name from fl_extension ("brave-soflution"), a browser profile name ("Soflution") or a brand ("brave", "chrome", "edge").');
+const browserOpt = z.string().optional().describe('Which browser: "agent" (dedicated browser, default) or one of the user\'s browsers through the Rocketwright extension: a name from fl_extension ("brave-soflution"), a browser profile name ("Soflution") or a brand ("brave", "chrome", "edge").');
 
 const snapOpts = {
   text: z.number().optional().describe('Characters of page text to include (default 400, 0 for none).'),
@@ -92,21 +93,21 @@ const snapOpts = {
  * Sent to every MCP client at connection (initialize result): the agent reads it before its first
  * browser task, whatever the client (Claude, Cursor, Codex...), with or without a hub in between.
  */
-/** The Flintrail extension in the Chrome Web Store: what the agent hands the user to connect their own browser. */
-export const EXTENSION_URL = 'https://chromewebstore.google.com/detail/flintrail/amgonogobcfmneginonbkfjlbbnecchp';
+/** The Rocketwright extension in the Chrome Web Store: what the agent hands the user to connect their own browser. */
+export const EXTENSION_URL = 'https://chromewebstore.google.com/detail/rocketwright/amgonogobcfmneginonbkfjlbbnecchp';
 
 export const SERVER_INSTRUCTIONS = [
-  'Flintrail drives a dedicated browser ("agent") or the user\'s own browsers through the Flintrail extension.',
+  'Rocketwright drives a dedicated browser ("agent") or the user\'s own browsers through the Rocketwright extension.',
   'Before the first browser task of a conversation, call fl_extension to see which user browsers are connected and which profiles are installed but not open.',
   '- Several user browsers connected: ask the user which one to work in (each is named after its profile or the name set in the extension, e.g. "brave-soflution"), unless they already named it. Remember the answer for the rest of the conversation.',
   '- Exactly one connected: use it, and say which one in one line.',
-  '- None connected: right away, tell the user to install the Flintrail extension in the browser and profile they use, and give them its link: ' + EXTENSION_URL + ' (Chrome, Edge, Brave, Arc; or Load unpacked from the release zip in <brand>://extensions with Developer mode on). Then they open its popup, check it shows "Connected to Flintrail" with a green dot (otherwise click Connect), and optionally give the browser a name. Until one is connected, a task that needs their sessions (an account they are signed in to) waits for it; any other task runs in the dedicated "agent" browser.',
+  '- None connected: right away, tell the user to install the Rocketwright extension in the browser and profile they use, and give them its link: ' + EXTENSION_URL + ' (Chrome, Edge, Brave, Arc; or Load unpacked from the release zip in <brand>://extensions with Developer mode on). Then they open its popup, check it shows "Connected to Rocketwright" with a green dot (otherwise click Connect), and optionally give the browser a name. Until one is connected, a task that needs their sessions (an account they are signed in to) waits for it; any other task runs in the dedicated "agent" browser.',
   'Never switch to another profile of the user than the one agreed, and never sign in for them by typing a password: use fl_login (their password manager) or let them sign in by hand.',
   'Prefer fl_adopt on a tab the user already opened, then fl_open; batch steps in fl_act; read with fl_snapshot rather than screenshots.',
 ].join('\n');
 
 export function buildServer(): McpServer {
-  const s = new McpServer({ name: 'flintrail', version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
+  const s = new McpServer({ name: 'rocketwright', version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
   s.registerTool('fl_open', {
     description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab is the one shown in its window, so the user sees it. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open is opened first. In a user browser, a tab already showing this address (or a page under it) is taken over instead of opening another one (newTab:true forces a new tab), window picks one of its windows (ids from fl_extension tabs:true) and newWindow opens a new window. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
@@ -136,7 +137,7 @@ export function buildServer(): McpServer {
   }, guard(async ({ tab, actions, snapshot: snap, diff, text: t, max, within }) => act(getTab(tab), actions as Action[], { snapshot: snap, diff, text: t, max, within })));
 
   if (config.passwordSources.length) s.registerTool('fl_login', {
-    description: 'Sign in on the open sign-in form with the user\'s saved password: from the browser\'s own password manager, or from a password manager CLI the user configured (1Password, Bitwarden, Dashlane, LastPass, Proton Pass, KeePassXC, custom command). Flintrail fills username, password and one-time code itself; the secrets never reach you. A CLI login is only filled over HTTPS (or on this computer: localhost, *.localhost, a *.test name pointing here), when the page domain matches its website (on a local address, the address with its port must be saved in the login), never in a payment or bank field, and never from a payment card or bank item. In the user\'s own browsers, the Flintrail extension settings (set by the user only) may turn filling off, limit it to some domains, or ask the user to confirm each fill: a refusal is final, do not try another way. On a multi-step sign-in (e-mail page, then password page), call it on each step. While recording, the flow stores the source and login ID, never a secret.',
+    description: 'Sign in on the open sign-in form with the user\'s saved password: from the browser\'s own password manager, or from a password manager CLI the user configured (1Password, Bitwarden, Dashlane, LastPass, Proton Pass, KeePassXC, custom command). Rocketwright fills username, password and one-time code itself; the secrets never reach you. A CLI login is only filled over HTTPS (or on this computer: localhost, *.localhost, a *.test name pointing here), when the page domain matches its website (on a local address, the address with its port must be saved in the login), never in a payment or bank field, and never from a payment card or bank item. In the user\'s own browsers, the Rocketwright extension settings (set by the user only) may turn filling off, limit it to some domains, or ask the user to confirm each fill: a refusal is final, do not try another way. On a multi-step sign-in (e-mail page, then password page), call it on each step. While recording, the flow stores the source and login ID, never a secret.',
     inputSchema: {
       tab: z.string(),
       item: z.string().optional().describe('Login ID, title or username in a password manager CLI, when several match the site.'),
@@ -200,10 +201,10 @@ export function buildServer(): McpServer {
     }
   });
 
-  s.registerTool('fl_tabs', { description: 'List tabs opened by Flintrail.', inputSchema: {} },
+  s.registerTool('fl_tabs', { description: 'List tabs opened by Rocketwright.', inputSchema: {} },
     guard(async () => listTabs().join('\n') || 'No tabs.'));
 
-  s.registerTool('fl_close', { description: 'Close a Flintrail tab.', inputSchema: { tab: z.string() } },
+  s.registerTool('fl_close', { description: 'Close a Rocketwright tab.', inputSchema: { tab: z.string() } },
     guard(async ({ tab }) => {
       // A tab of the user's browser keeps living if closing fails: its own look comes back first. A tab that left
       // the allowed sites is closed all the same.
@@ -269,7 +270,7 @@ export function buildServer(): McpServer {
   }, guard(async ({ tab, ...o }) => mock(getTab(tab), o)));
 
   s.registerTool('fl_trace', {
-    description: 'Record a Playwright trace of what you do in a browser (every tab Flintrail drives there): each action with a picture before and after (no page copy or network log, they would hold cookies). stop, or releasing or closing the last tab, saves a .zip the user opens with `npx playwright show-trace`. Stops by itself after 30 minutes. Deleted, not saved, if Flintrail fills a password or secret meanwhile. Refused while FLINTRAIL_ALLOWED_DOMAINS is set.',
+    description: 'Record a Playwright trace of what you do in a browser (every tab Rocketwright drives there): each action with a picture before and after (no page copy or network log, they would hold cookies). stop, or releasing or closing the last tab, saves a .zip the user opens with `npx playwright show-trace`. Stops by itself after 30 minutes. Deleted, not saved, if Rocketwright fills a password or secret meanwhile. Refused while ROCKETWRIGHT_ALLOWED_DOMAINS is set.',
     inputSchema: {
       tab: z.string().describe('A tab of the browser to trace.'),
       action: z.enum(['start', 'stop']),
@@ -278,7 +279,7 @@ export function buildServer(): McpServer {
   }, guard(async ({ tab, action, name }) => trace(getTab(tab), action, name)));
 
   s.registerTool('fl_video', {
-    description: 'Film one tab (WebM), with each action pointed out on screen unless actions is false, to show a person what was done. stop, fl_release or fl_close saves it. Deleted, not saved, if Flintrail fills a password or secret in the tab meanwhile. Refused while FLINTRAIL_ALLOWED_DOMAINS is set.',
+    description: 'Film one tab (WebM), with each action pointed out on screen unless actions is false, to show a person what was done. stop, fl_release or fl_close saves it. Deleted, not saved, if Rocketwright fills a password or secret in the tab meanwhile. Refused while ROCKETWRIGHT_ALLOWED_DOMAINS is set.',
     inputSchema: {
       tab: z.string(),
       action: z.enum(['start', 'stop']),
@@ -299,7 +300,7 @@ export function buildServer(): McpServer {
   }, guard(async ({ browser, url, kind, prefix, to }) => captureSecret({ browser, match: url, kind, prefix, to })));
 
   s.registerTool('fl_paste_secret', {
-    description: 'Type a secret from the user\'s vault (a token stored with fl_capture_secret, an API key) into one field of a tab, without the value ever reaching you. The user clicks to allow each paste in the Flintrail extension, which shows the site and the secret\'s name, unless they turned these questions off there: a refusal is final, do not try another way. Only in the user\'s own browsers, over HTTPS, in a visible text or password field of the page itself, and not in a tab where you ran JavaScript. Afterwards the page refuses scripts and screenshots until it loads another page.',
+    description: 'Type a secret from the user\'s vault (a token stored with fl_capture_secret, an API key) into one field of a tab, without the value ever reaching you. The user clicks to allow each paste in the Rocketwright extension, which shows the site and the secret\'s name, unless they turned these questions off there: a refusal is final, do not try another way. Only in the user\'s own browsers, over HTTPS, in a visible text or password field of the page itself, and not in a tab where you ran JavaScript. Afterwards the page refuses scripts and screenshots until it loads another page.',
     inputSchema: {
       tab: z.string(),
       ref: z.string().optional().describe('The field, from the snapshot (eN).'),
@@ -452,7 +453,7 @@ export function buildServer(): McpServer {
   }));
 
   s.registerTool('fl_extension', {
-    description: 'Browsers Flintrail can drive: the dedicated one ("agent") and every user browser where the Flintrail extension is connected ("brave-soflution", "chrome"...), named after the browser profile or the label the user gave it in the extension, plus the profiles of this computer that are not open (fl_open opens them). Several conversations can drive them at once, each sees only its own tabs. Pass the name as browser to fl_open. tabs: true also lists the tabs open in each browser (site and title), to find the window where an account is signed in.',
+    description: 'Browsers Rocketwright can drive: the dedicated one ("agent") and every user browser where the Rocketwright extension is connected ("brave-soflution", "chrome"...), named after the browser profile or the label the user gave it in the extension, plus the profiles of this computer that are not open (fl_open opens them). Several conversations can drive them at once, each sees only its own tabs. Pass the name as browser to fl_open. tabs: true also lists the tabs open in each browser (site and title), to find the window where an account is signed in.',
     inputSchema: {
       tabs: z.boolean().optional().describe('Also list the open tabs of each user browser (origin and title).'),
       browser: z.string().optional().describe('Only this browser.'),
@@ -460,7 +461,7 @@ export function buildServer(): McpServer {
   }, guard(async ({ tabs, browser }) => {
     const lines = [config.mode === 'extension' ? 'agent: none (extension mode)' : `agent: dedicated browser (${config.mode} mode)`];
     const relay = getRelayClient();
-    if (!relay) lines.push('Extension relay turned off (FLINTRAIL_RELAY=off).');
+    if (!relay) lines.push('Extension relay turned off (ROCKETWRIGHT_RELAY=off).');
     else {
       try {
         await relay.ensure();
@@ -487,7 +488,7 @@ export function buildServer(): McpServer {
         const open = new Set(relay.browsers.map((b) => `${b.key.split('-')[0]}/${slug(b.profile)}`));
         const closed = localProfiles().filter((p) => !open.has(`${p.brand}/${slug(p.name)}`) && (!browser || matchProfiles(browser, [p]).length));
         if (closed.length) lines.push(`Not open (fl_open with browser "<profile name>" opens it): ${closed.map((p) => `${p.brand} "${p.name}"`).join(', ')}.`);
-        if (!relay.browsers.length) lines.push(`No user browser connected. The Flintrail extension pairs and connects by itself once installed (relay 127.0.0.1:${config.relayPort}, version ${relay.relayVersion}).`);
+        if (!relay.browsers.length) lines.push(`No user browser connected. The Rocketwright extension pairs and connects by itself once installed (relay 127.0.0.1:${config.relayPort}, version ${relay.relayVersion}).`);
         else if (browser && !list.length) lines.push(`Browser "${browser}" is not connected.`);
       }
     }

@@ -1,5 +1,5 @@
-// Signs in on the open sign-in form. Either the browser's own password manager has filled it (Flintrail only
-// confirms with a real click), or Flintrail reads a password manager CLI and fills the form itself. Either way
+// Signs in on the open sign-in form. Either the browser's own password manager has filled it (Rocketwright only
+// confirms with a real click), or Rocketwright reads a password manager CLI and fills the form itself. Either way
 // the agent only gets the list of fields filled: passwords and one-time codes are masked in every tool result.
 import { lookup } from 'node:dns/promises';
 import { getDomain } from 'tldts';
@@ -318,7 +318,7 @@ async function findAccount(page: Page, source: CliSource, wanted?: string, expec
   const pageSites = new Set(liveFrames(page).flatMap((f) => [...keysOf(f.url())]));
   const w = wanted?.toLowerCase();
   const matchOf = (all: Account[]) => {
-    // Only the vaults the user lets Flintrail use are named: an excluded vault says nothing of what it holds.
+    // Only the vaults the user lets Rocketwright use are named: an excluded vault says nothing of what it holds.
     for (const a of all) if (a.vault && vaultAllowed(a.vault, rules)) searched?.vaults.add(a.vault);
     const hits = w
       ? all.filter((a) => a.ref === wanted || a.title.toLowerCase() === w || a.username.toLowerCase() === w)
@@ -394,7 +394,7 @@ async function useAccount(page: Page, account: Account, token: string, ref?: str
     const loc = elementByRef(page, ref);
     await assertStillOn(loc, sites);
     const kind = await loc.evaluate(secretKind, undefined, { timeout: TIMEOUT });
-    if (!kind) throw new Error(`Refused: field ${ref} is not a password or one-time code field. Flintrail only fills secrets there, never in a free text field.`);
+    if (!kind) throw new Error(`Refused: field ${ref} is not a password or one-time code field. Rocketwright only fills secrets there, never in a free text field.`);
     targets = [{ frame: null, m: { user: false, pass: kind === 'pass', otp: kind === 'otp' ? 'one' : null, autofilled: false }, field: loc, kind }];
   } else {
     const marks = await markAll(frames, token);
@@ -454,7 +454,7 @@ async function useAccount(page: Page, account: Account, token: string, ref?: str
   }
   if (!last) {
     throw new Error(codeWanted
-      ? `The page asks for a code that ${account.source} does not hold for ${label(account)}${decision.totp ? '' : ' (one-time codes are turned off in the Flintrail extension settings)'}: ask the user for it.`
+      ? `The page asks for a code that ${account.source} does not hold for ${label(account)}${decision.totp ? '' : ' (one-time codes are turned off in the Rocketwright extension settings)'}: ask the user for it.`
       : `Nothing to fill: login ${label(account)} has no username for this field.`);
   }
   const how = decision.approval === 'confirmed by the user' ? ', confirmed by the user' : '';
@@ -470,12 +470,12 @@ export async function signIn(page: Page, opts: { item?: string; source?: string;
   if (opts.account !== undefined && !expected) throw new Error('account is empty: give the username or e-mail of the account the user asked for, or leave it out.');
   const all = getSources().filter((s) => !opts.source || s.kind === opts.source).filter((s) => !opts.field || s.kind !== 'browser');
   if (!all.length) {
-    throw new Error(opts.source ? `Password source "${opts.source}" is not configured in FLINTRAIL_PASSWORDS${opts.field ? ', or cannot fill a named field (browser)' : ''}.`
-      : opts.field ? 'Filling a named field needs a password manager CLI in FLINTRAIL_PASSWORDS (1password, bitwarden, command).' : 'fl_login is off (FLINTRAIL_PASSWORDS=off).');
+    throw new Error(opts.source ? `Password source "${opts.source}" is not configured in ROCKETWRIGHT_PASSWORDS${opts.field ? ', or cannot fill a named field (browser)' : ''}.`
+      : opts.field ? 'Filling a named field needs a password manager CLI in ROCKETWRIGHT_PASSWORDS (1password, bitwarden, command).' : 'fl_login is off (ROCKETWRIGHT_PASSWORDS=off).');
   }
   await checkLocalNames(page.frames().map((f) => f.url()));
   const unsafe = fillProblem(page.url());
-  if (unsafe) throw new Error(`Refused: ${unsafe}. Flintrail fills passwords and codes over HTTPS only, or on this computer (localhost, *.localhost, a *.test name pointing here).`);
+  if (unsafe) throw new Error(`Refused: ${unsafe}. Rocketwright fills passwords and codes over HTTPS only, or on this computer (localhost, *.localhost, a *.test name pointing here).`);
   if (agentRanJs(page)) {
     throw new Error('Refused: you ran JavaScript in this tab (eval, extract or request), which could catch what gets filled. Open the sign-in page in a new tab (fl_open) and call fl_login there before running any script.');
   }
@@ -536,7 +536,7 @@ async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean
     }
     throw new Error(opts.item
       ? `No saved login "${opts.item}" in ${tried}.`
-      : `No saved login for ${sites} (tried ${tried}), or no sign-in field visible yet.${local} Open the sign-in form first; for the browser source, sign in by hand once and let the browser save the password; or add a password manager to FLINTRAIL_PASSWORDS (1password, bitwarden, command).`);
+      : `No saved login for ${sites} (tried ${tried}), or no sign-in field visible yet.${local} Open the sign-in form first; for the browser source, sign in by hand once and let the browser save the password; or add a password manager to ROCKETWRIGHT_PASSWORDS (1password, bitwarden, command).`);
   }
   // A form marked to send by GET would put the password in the address, where the history, the server logs and the
   // site's own scripts keep it: it is filled, not sent. (A form with no method is usually sent by the site's script.)

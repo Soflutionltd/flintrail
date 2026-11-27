@@ -15,10 +15,10 @@ test('the server sends its instructions at connection', async () => {
   assert.equal(instructions, SERVER_INSTRUCTIONS);
   assert.match(instructions, /fl_extension/);
   assert.match(instructions, /ask the user which one/);
-  assert.match(instructions, /Connected to Flintrail/);
+  assert.match(instructions, /Connected to Rocketwright/);
   // With no browser connected, the user is given the extension's own link right away.
   assert.ok(instructions.includes(`give them its link: ${EXTENSION_URL}`));
-  assert.match(EXTENSION_URL, /^https:\/\/chromewebstore\.google\.com\/detail\/flintrail\//);
+  assert.match(EXTENSION_URL, /^https:\/\/chromewebstore\.google\.com\/detail\/rocketwright\//);
   await client.close();
   await server.close();
 });
