@@ -178,7 +178,7 @@ test('any network rule counts as the agent\'s own script: no sign-in is filled i
   for (const rule of [{ action: 'respond', url: '/api/stock', body: '<script>1</script>', contentType: 'text/html' }, { action: 'block', url: '.js' }]) {
     const tab = tabOf(await mcp.call('fl_open', { url: site.url + '/stock' }));
     await mcp.call('fl_mock', { tab, ...rule });
-    await assert.rejects(mcp.call('fl_login', { tab }), /Refused: you ran JavaScript in this tab/);
+    await assert.rejects(mcp.call('fl_login', { tab, reopen: false }), /Refused: you ran JavaScript in this tab/);
     await mcp.call('fl_close', { tab });
   }
 });

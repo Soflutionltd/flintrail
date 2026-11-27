@@ -54,6 +54,11 @@ test('a frame of another extension: the agent is told why the tab is no longer d
   // The agent's next call on that tab gets the reason (the extension finds it out within a moment).
   const err = await waitFor(() => mcp.call('fl_snapshot', { tab }).then(() => null, (e) => (/no longer driven/.test(e.message) ? e.message : null)));
   assert.match(err, /no longer driven: another extension \(a password manager\?\) put its own frame in this page.*"Site access" to "On click"/);
+  assert.match(err, new RegExp(`fl_reopen \\{tab:"${tab}"\\} opens its page again in a fresh tab`));
+  // Opened again in a fresh tab of the same browser, with what the user has to change if it is cut off again.
+  const again = await mcp.call('fl_reopen', { tab, text: 0 });
+  assert.match(again, new RegExp(`^Tab (t\\d+) \\[chromium\\]: the page of tab ${tab} opened again \\(${tab}: another extension \\(a password manager\\?\\) put its own frame in this page.*\\)\\. If it gets cut off again.*"Site access" to "On click"`));
+  assert.match(again, /URL: .*\/login/);
   // A page without a password field is not touched by that extension and stays driven.
   const plain = /Tab (t\d+)/.exec(await mcp.call('fl_open', { url: site.url, browser: 'chromium', text: 0 }))[1];
   await new Promise((r) => setTimeout(r, 1500));

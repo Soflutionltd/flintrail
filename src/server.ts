@@ -2,7 +2,7 @@ import './legacy.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from 'playwright-core';
 import { z } from 'zod';
-import { act, adoptTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
+import { act, adoptTab, agentRanJs, reopenTab, retireTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { getDriven } from './browser.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
@@ -151,14 +151,43 @@ export function buildServer(): McpServer {
       source: z.string().optional().describe('Only this source: browser, 1password, bitwarden, dashlane, lastpass, protonpass, keepassxc or command.'),
       submit: z.boolean().optional().describe('Press Enter after filling (default true).'),
       field: z.string().optional().describe('Ref (eN) of the one password or one-time code field to fill, e.g. a "Confirm access" password prompt. Any other kind of field is refused.'),
+      reopen: z.boolean().optional().describe('Default true: when this tab ran your JavaScript, or was cut off by another extension (a password manager\'s frame), its page is opened again in a fresh tab and filled there; the answer gives the new tab id. false: refuse instead.'),
       ...snapOpts,
     },
-  }, guard(async ({ tab, item, account, source, submit, field, text: t, max, within }) => {
-    const page = getTab(tab);
+  }, guard(async ({ tab, item, account, source, submit, field, reopen, text: t, max, within }) => {
+    let id = tab;
+    let moved = '';
+    let page;
+    try {
+      page = getTab(tab);
+    } catch (e) {
+      if (reopen === false || !/no longer driven/.test((e as Error).message)) throw e;
+      id = await reopenTab(tab);
+      page = getTab(id);
+      moved = `Tab ${tab} was no longer driven (${(e as Error).message.replace(/^Tab \S+ is no longer driven: /, '').split('. ')[0]}): its page was opened again in tab ${id} and filled there. If another extension cut it off, ask the user to set that extension's "Site access" to "On click".`;
+    }
+    if (agentRanJs(page) && reopen !== false) {
+      id = await reopenTab(tab);
+      page = getTab(id);
+      const old = await retireTab(tab);
+      moved = `Tab ${tab} had run your JavaScript, which could catch what gets filled: its page was opened again in tab ${id} and filled there (tab ${tab} ${old}). Use tab ${id} from now on.`;
+    }
     const r = await signIn(page, { item, source, submit, account, field });
     recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(account ? { account } : {}), ...(submit === false ? { submit } : {}) } as Step);
     await domQuiet(page);
-    return `${r.text}\n\n${await snapshot(page, { text: t, max, within })}`;
+    return `${moved ? `${moved}\nTab ${id} [${tabBrowser(id)}]\n` : ''}${r.text}\n\n${await snapshot(page, { text: t, max, within })}`;
+  }));
+
+  s.registerTool('fl_reopen', {
+    description: 'Open the page of a tab again in a fresh tab of the same browser: a tab another extension cut off (a password manager put its frame in the page), one released or closed, or one where you ran JavaScript (fl_login, fl_paste_secret and fl_mail_code refuse those). The old tab is closed if Rocketwright opened it, else given back to the user. Returns the new tab and its snapshot.',
+    inputSchema: { tab: z.string(), ...snapOpts },
+  }, guard(async ({ tab, text: t, max, within }) => {
+    let why = '';
+    try { getTab(tab); } catch (e) { why = (e as Error).message.replace(/^Tab \S+ (is no longer driven: |not found: )/, '').split('. ')[0]!; }
+    const id = await reopenTab(tab);
+    const old = why ? '' : ` (tab ${tab} ${await retireTab(tab)})`;
+    const cut = /another extension/.test(why) ? ' If it gets cut off again, the other extension is still allowed on this site: ask the user to set its "Site access" to "On click" (brave://extensions or chrome://extensions, Details), then fl_reopen again.' : '';
+    return `Tab ${id} [${tabBrowser(id)}]: the page of tab ${tab} opened again${why ? ` (${tab}: ${why})` : old}.${cut}\n${await snapshot(getTab(id), { text: t, max, within })}`;
   }));
 
   const mailOpts = {

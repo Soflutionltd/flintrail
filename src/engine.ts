@@ -70,8 +70,8 @@ export interface Step extends Omit<Action, 'ref'> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const tabs = new Map<string, Page>();
-/** Last address of tabs no longer driven, to tell the agent why when it calls them again. */
-const goneTabs = new Map<string, string>();
+/** Last address and browser of tabs no longer driven, to tell the agent why when it calls them again, or open the page again. */
+const goneTabs = new Map<string, { url: string; browser: string }>();
 let nextTab = 1;
 
 interface ConsoleEntry { level: 'error' | 'warning' | 'info' | 'pageerror'; text: string; at: string }
@@ -91,6 +91,8 @@ interface PageState {
   /** fl_login is filling this tab, or filled a password or code in its current document. */
   loginRunning?: boolean;
   secretFilled?: boolean;
+  /** Rocketwright opened this tab itself (not a tab of the user it took over): closing it takes nothing from the user. */
+  openedByAgent?: boolean;
   /** Requests of the page still waiting for an answer, and when the last one started or ended (wait network). */
   inflight?: number;
   netAt?: number;
@@ -211,7 +213,7 @@ function register(page: Page, where: Driven): string {
   Object.assign(stateOf(page), { browser: where.name, viaExtension: where.viaExtension });
   sealIfCaptured(page);
   page.on('close', () => {
-    goneTabs.set(id, page.url());
+    goneTabs.set(id, { url: page.url(), browser: stateOf(page).browser });
     tabs.delete(id);
   });
   // A new document: the secrets filled in the previous one are gone (the agent's scripts may not be, see agentJs),
@@ -254,7 +256,7 @@ function pageNotes(page: Page): string[] {
   }
   const other = s.viaExtension ? getRelayClient()?.takeWarning(page.url()) : undefined;
   if (other) {
-    notes.push(`Warning: another extension (${other === '1password' || other === 'aeblfdkhhhdcdjpifhhbdiojplfjncoa' ? '1Password' : 'not Rocketwright'}) put its own frame in this page. The browser may now stop Rocketwright from driving this tab: ask the user to set that extension's "Site access" to "On click" (brave://extensions or chrome://extensions, Details). A secret this page shows can still be stored with fl_capture_secret.`);
+    notes.push(`Warning: another extension (${other === '1password' || other === 'aeblfdkhhhdcdjpifhhbdiojplfjncoa' ? '1Password' : 'not Rocketwright'}) put its own frame in this page. The browser may now stop Rocketwright from driving this tab: ask the user to set that extension's "Site access" to "On click" (brave://extensions or chrome://extensions, Details), then fl_reopen opens the page again in a fresh tab. A secret this page shows can still be stored with fl_capture_secret.`);
   }
   return notes;
 }
@@ -409,6 +411,7 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
   }
   const page = await newPage(where, url && where.viaExtension ? { ...placement, near: url } : placement);
   const id = register(page, where);
+  stateOf(page).openedByAgent = true;
   if (url) {
     await gotoFast(page, url);
     recorder.onOpen(url);
@@ -492,6 +495,31 @@ export async function letGo(id: string) {
   else tabs.delete(id);
 }
 
+/**
+ * Opens the page of a tab again in a fresh tab of the same browser: a tab another extension cut off, one released or
+ * closed, or one where the agent ran JavaScript (fl_login and secrets refuse those). Returns the new tab id.
+ */
+export async function reopenTab(id: string): Promise<string> {
+  const live = tabs.get(id);
+  const was = live && !live.isClosed() ? { url: live.url(), browser: stateOf(live).browser } : goneTabs.get(id);
+  if (!was) throw new Error(`Tab ${id} was never driven by this conversation: use fl_open with the address.`);
+  if (!/^https?:/.test(was.url)) throw new Error(`Tab ${id} was on ${was.url.slice(0, 80) || 'a blank page'}, which cannot be opened again: use fl_open with the address.`);
+  assertAllowed(was.url);
+  return openTab(was.url, was.browser, { evenIfSiteOpen: true }, false);
+}
+
+/** Done with a tab replaced by a fresh one: closed when Rocketwright opened it, else given back to the user (released). */
+export async function retireTab(id: string): Promise<'closed' | 'released'> {
+  const page = tabs.get(id);
+  if (!page || page.isClosed()) return 'closed';
+  if (stateOf(page).openedByAgent) {
+    await page.close();
+    return 'closed';
+  }
+  await letGo(id);
+  return 'released';
+}
+
 /** Browser a Rocketwright tab lives in. */
 export function tabBrowser(id: string): string {
   return stateOf(getTab(id)).browser;
@@ -500,10 +528,10 @@ export function tabBrowser(id: string): string {
 export function getTab(id: string): Page {
   const p = tabs.get(id);
   if (!p || p.isClosed()) {
-    const url = p ? p.url() : goneTabs.get(id);
+    const url = p ? p.url() : goneTabs.get(id)?.url;
     const why = url ? getRelayClient()?.lostReason(url) : undefined;
-    if (why) throw new Error(`Tab ${id} is no longer driven: ${why}.`);
-    throw new Error(`Tab ${id} not found: closed, released by the extension after 5 minutes without use, or debugging cancelled from the browser's bar (the reason is in ~/.rocketwright/relay.log). Use fl_open, or fl_adopt to take an open tab back.`);
+    if (why) throw new Error(`Tab ${id} is no longer driven: ${why}. fl_reopen {tab:"${id}"} opens its page again in a fresh tab.`);
+    throw new Error(`Tab ${id} not found: closed, released by the extension after 5 minutes without use, or debugging cancelled from the browser's bar (the reason is in ~/.rocketwright/relay.log). Use fl_reopen to open its page again in a fresh tab, fl_open, or fl_adopt to take an open tab back.`);
   }
   const why = domainProblem(p.url());
   if (why) throw new Error(`Blocked: tab ${id} went to a site the agent may not work on. ${why} Close it with fl_close.`);

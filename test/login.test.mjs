@@ -116,11 +116,19 @@ describe('1Password CLI source', () => {
   test('refuses a page where the agent ran JavaScript: it could catch the value as it is filled', async () => {
     const tab = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
     await mcp.call('fl_extract', { tab, js: 'f.password.addEventListener("input", (e) => { window.caught = e.target.value; }); return "listening"' });
-    await assert.rejects(mcp.call('fl_login', { tab }), /Refused: you ran JavaScript in this tab/);
+    await assert.rejects(mcp.call('fl_login', { tab, reopen: false }), /Refused: you ran JavaScript in this tab/);
     // Even after a reload: a window the script opened would outlive it. A new tab is clean.
     await mcp.call('fl_act', { tab, actions: [{ do: 'goto', url: `${site.url}/login` }] });
-    await assert.rejects(mcp.call('fl_login', { tab }), /Refused: you ran JavaScript in this tab/);
-    await mcp.call('fl_close', { tab });
+    await assert.rejects(mcp.call('fl_login', { tab, reopen: false }), /Refused: you ran JavaScript in this tab/);
+    // By default the page is opened again in a fresh tab and filled there; the tab with the script is closed.
+    const out = await mcp.call('fl_login', { tab, submit: false });
+    assert.match(out, new RegExp(`^Tab ${tab} had run your JavaScript, which could catch what gets filled: its page was opened again in tab (t\\d+) and filled there \\(tab ${tab} closed\\)`));
+    assert.match(out, /filled username, password, one-time code\./);
+    const moved = /opened again in tab (t\d+)/.exec(out)[1];
+    assert.notEqual(moved, tab);
+    assert.doesNotMatch(await mcp.call('fl_tabs'), new RegExp(`^${tab} `, 'm'));
+    assert.ok(!leaks(out));
+    await mcp.call('fl_close', { tab: moved });
     const fresh = tabOf(await mcp.call('fl_open', { url: `${site.url}/login` }));
     assert.match(await mcp.call('fl_login', { tab: fresh, submit: false }), /filled username, password, one-time code\./);
     await mcp.call('fl_close', { tab: fresh });
