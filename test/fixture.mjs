@@ -14,6 +14,10 @@ export function startFixture(port = 0) {
   const hits = [];
   /** Tests flip this to make /switch lead to another site. */
   const state = { away: '' };
+  /** E-mails the fake webmails show, newest first once sorted: { id, from, name, subject, at (ms), html }. */
+  const mails = [];
+  /** Codes posted to the verification form. */
+  const codes = [];
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     const html = (t, b) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page(t, b)); };
@@ -330,7 +334,93 @@ export function startFixture(port = 0) {
       res.writeHead(204);
       return res.end();
     }
+    // Fake webmails (served on gmail.localhost and outlook.localhost by the mail tests), built like the real ones.
+    if (url.pathname === '/api/mails') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify([...mails].sort((a, b) => b.at - a.at)));
+    }
+    const mailHelpers = `
+      const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const sameDay = (d) => d.toDateString() === new Date().toDateString();
+      const shortTime = (d) => sameDay(d) ? d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const load = async () => (await fetch('/api/mails')).json();`;
+    if (url.pathname === '/mail/u/0/') return html('Inbox - Gmail', `<div role="main"><table><tbody id="list"></tbody></table></div>
+      <div id="view" hidden><h2 class="hP"></h2><div class="gs"><span class="gD"></span> <span class="g2" email="you@acme.localhost">to me</span> <span class="g3"></span><div class="a3s"></div></div></div>
+      <script>${mailHelpers}
+        const list = document.getElementById('list'), view = document.getElementById('view');
+        async function render() {
+          const all = await load();
+          const h = decodeURIComponent(location.hash.replace(/\\+/g, ' '));
+          const m = /^#search\\/(.*?)(?:\\/(m\\d+))?$/.exec(h) || /^#inbox(?:\\/(m\\d+))?$/.exec(h);
+          const q = h.startsWith('#search/') ? m[1] : '';
+          const open = h.startsWith('#search/') ? m && m[2] : m && m[1];
+          const from = (/from:\\(([^)]+)\\)/.exec(q) || [])[1];
+          const shown = all.filter((x) => !from || x.from === from || x.from.endsWith('.' + from) || x.from.endsWith('@' + from));
+          list.innerHTML = shown.map((x) => '<tr class="zA" data-id="' + x.id + '"><td class="yX"><span class="yP" email="' + esc(x.from) + '" name="' + esc(x.name) + '">' + esc(x.name) + '</span></td>'
+            + '<td><span class="bog">' + esc(x.subject) + '</span> <span class="y2">' + esc(x.preview || '') + '</span></td>'
+            + '<td class="xW"><span title="' + esc(new Date(x.at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })) + '">' + esc(shortTime(new Date(x.at))) + '</span></td></tr>').join('');
+          const mail = open && all.find((x) => x.id === open);
+          list.parentElement.hidden = !!mail;
+          view.hidden = !mail;
+          if (mail) {
+            view.querySelector('.hP').textContent = mail.subject;
+            const who = view.querySelector('.gD');
+            who.setAttribute('email', mail.from);
+            who.textContent = mail.name;
+            const when = view.querySelector('.g3');
+            when.setAttribute('title', new Date(mail.at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }));
+            when.textContent = shortTime(new Date(mail.at));
+            view.querySelector('.a3s').innerHTML = mail.html;
+          }
+        }
+        list.onclick = (e) => { const row = e.target.closest('tr.zA'); if (row) location.hash = (location.hash || '#inbox') + '/' + row.dataset.id; };
+        addEventListener('hashchange', render);
+        if (!location.hash) history.replaceState(null, '', '#inbox');
+        render();
+      </script>`);
+    if (url.pathname.startsWith('/mail/') && !url.pathname.startsWith('/mail/u/')) return html('Mail - Outlook', `<div role="banner"><button aria-label="Account manager for you@acme.localhost">Y</button></div>
+      <div role="navigation"><a href="#">Inbox</a></div>
+      <div role="main"><div role="listbox" aria-label="Message list" id="list"></div><div id="pane"></div></div>
+      <script>${mailHelpers}
+        const list = document.getElementById('list'), pane = document.getElementById('pane');
+        let all = [];
+        async function refresh() {
+          all = await load();
+          list.innerHTML = all.map((x) => '<div role="option" data-id="' + x.id + '" aria-label="' + esc(x.name + ' ' + x.subject) + '"><span>' + esc(x.name) + '</span> <span>' + esc(x.subject) + '</span> '
+            + '<span title="' + esc(new Date(x.at).toLocaleString('en-US', { weekday: 'short', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })) + '">' + esc(shortTime(new Date(x.at))) + '</span> <span>' + esc(x.preview || '') + '</span></div>').join('');
+          show();
+        }
+        function show() {
+          const id = (/\\/id\\/(m\\d+)/.exec(location.pathname) || [])[1];
+          const mail = all.find((x) => x.id === id);
+          pane.innerHTML = mail ? '<div role="heading">' + esc(mail.subject) + '</div><div><span>' + esc(mail.name) + '</span> <span>&lt;' + esc(mail.from) + '&gt;</span></div>'
+            + '<div>To: <span>you@acme.localhost</span></div><div data-testid="SentReceivedSavedTime">' + esc(new Date(mail.at).toLocaleString('en-US', { weekday: 'short', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })) + '</div>'
+            + '<div aria-label="Message body">' + mail.html + '</div>' : '';
+        }
+        list.onclick = (e) => { const row = e.target.closest('[role=option]'); if (row) { history.pushState(null, '', '/mail/inbox/id/' + row.dataset.id); show(); } };
+        addEventListener('popstate', show);
+        refresh();
+        setInterval(refresh, 1000);
+      </script>`);
+    // A form waiting for the code sent by e-mail.
+    if (url.pathname === '/code') return html('Verify', `<h1>Check your e-mail</h1>
+      <form id="f"><label>Verification code <input name="code" autocomplete="one-time-code" inputmode="numeric"></label><button>Verify</button></form>
+      <p id="out"></p>
+      <script>
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          await fetch('/api/code', { method: 'POST', body: f.code.value });
+          out.textContent = 'Verified';
+        };
+      </script>`);
+    if (url.pathname === '/api/code' && req.method === 'POST') {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => { codes.push(b); res.writeHead(204); res.end(); });
+      return;
+    }
+    if (url.pathname === '/verify') return html('Verified', `<h1>Your e-mail is verified</h1><p>Welcome aboard.</p>`);
     res.writeHead(404).end();
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, hits, state, attempts, url: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, orders, visits, hits, state, attempts, mails, codes, url: `http://127.0.0.1:${server.address().port}` })));
 }

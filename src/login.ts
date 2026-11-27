@@ -19,6 +19,8 @@ interface Marked { user: boolean; pass: boolean; otp: 'one' | 'split' | null; au
 const TIMEOUT = 8000;
 const BROWSER_FILL_WAIT = 1500;
 const CODE_MASK_MS = 3 * 60_000;
+/** A code read from an e-mail stays on screen in the mailbox: masked for longer. */
+const MAIL_CODE_MASK_MS = 60 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -552,4 +554,62 @@ async function fillAndSubmit(page: Page, opts: { item?: string; submit?: boolean
   const extra = done.codeWanted && source === 'browser' ? ' The page also asks for a one-time code: ask the user for it.'
     : done.codeWanted ? ' The page also asks for a code the password manager does not hold: ask the user for it.' : '';
   return { text: `${done.text}${submit ? ', submitted' : ''}.${extra}`, source, item };
+}
+
+/**
+ * Types a one-time code Rocketwright read itself (fl_mail_code) into the code field of a form: the named field (a
+ * one-time code field only) or the one code field the page shows. Same guards as a code from a password manager: over
+ * HTTPS or on this computer, not in a tab the agent ran JavaScript in, only on the form's own site, the user's
+ * extension settings asked first, then the value masked everywhere and the page closed to scripts and screenshots.
+ */
+export async function fillCode(page: Page, code: string, o: { field?: string; submit?: boolean; item: string }): Promise<{ text: string; submitted: boolean }> {
+  await checkLocalNames(page.frames().map((f) => f.url()));
+  const unsafe = fillProblem(page.url());
+  if (unsafe) throw new Error(`Refused: ${unsafe}. Rocketwright types codes over HTTPS only, or on this computer.`);
+  if (agentRanJs(page)) throw new Error('Refused: you ran JavaScript in this tab (eval, extract or request), which could catch the code. Open the form in a new tab (fl_open) and call this there before running any script.');
+  const host = hostOf(page.url());
+  const sites = [siteOf(host)];
+  loginRunning(page, true);
+  try {
+    await beforeSecret(page);
+    let target: Locator;
+    let split = false;
+    if (o.field) {
+      target = elementByRef(page, o.field);
+      await assertStillOn(target, sites);
+      if ((await target.evaluate(secretKind, undefined, { timeout: TIMEOUT })) !== 'otp') {
+        throw new Error(`Refused: field ${o.field} is not a one-time code field. Rocketwright only types a code there, never in another field.`);
+      }
+    } else {
+      const token = randomBytes(8).toString('hex');
+      const frames = liveFrames(page).filter((f) => fits(sites, f.url()));
+      const marks = await markAll(frames, token);
+      const withCode = frames.map((frame, i) => ({ frame, m: marks[i] })).filter((x) => x.m?.otp);
+      if (!withCode.length) throw new Error(`No one-time code field visible on ${host}: pass field with the ref of the code box.`);
+      if (withCode.length > 1) throw new Error('Several frames of the page show a code field: pass field with the ref of the right one.');
+      target = field(withCode[0]!.frame, token, 'otp');
+      split = withCode[0]!.m!.otp === 'split';
+    }
+    const request = { ...pageBrowser(page), domain: sites[0]!, host, item: o.item, ref: '', source: 'mail', fields: ['one-time code'] };
+    const decision = await askFill(request);
+    if (!decision.totp) throw new Error(`Refused: one-time codes are turned off in the Rocketwright extension settings of ${request.browser}. Nothing was typed.`);
+    remember(code, MAIL_CODE_MASK_MS);
+    await assertStillOn(target, sites);
+    if (split) {
+      await target.click({ timeout: TIMEOUT });
+      await page.keyboard.type(code, { delay: 40 });
+    } else await target.fill(code, { timeout: TIMEOUT });
+    recordFill(request, decision, ['one-time code']);
+    await sealSecret(page, target, split);
+    const byGet = await target.evaluate((el) => {
+      const form = (el as HTMLInputElement).form;
+      return !!form && (form.getAttribute('method') || '').trim().toLowerCase() === 'get';
+    }, undefined, { timeout: TIMEOUT }).catch(() => false);
+    if (o.submit === false) return { text: 'typed, not submitted', submitted: false };
+    if (byGet) return { text: 'typed, NOT submitted: this form sends what it holds in the page address (GET). Ask the user before sending it', submitted: false };
+    await withNavigation(page, () => target.press('Enter', { timeout: TIMEOUT }));
+    return { text: 'typed and submitted', submitted: true };
+  } finally {
+    loginRunning(page, false);
+  }
 }

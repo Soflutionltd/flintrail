@@ -417,9 +417,9 @@ export async function openTab(url?: string, browserName?: string, placement: Pla
 }
 
 /** Take over a tab the user already has open, for example one where they just signed in by hand. */
-export async function adoptTab(match: string, browserName?: string): Promise<string> {
+export async function adoptTab(match: string, browserName?: string, mode: MatchMode = 'contains'): Promise<string> {
   const where = await getDriven(browserName);
-  const page = await takeOver(where, match);
+  const page = await takeOver(where, match, mode);
   if (!page) throw new Error(`No open tab in ${where.name} whose URL contains "${match}"${where.viaExtension ? ' that this conversation may take: it is driven by another conversation, or the extension is older than 1.5 (share the tab from the Rocketwright popup then)' : ''}.`);
   return register(page, where);
 }
@@ -460,6 +460,36 @@ export async function releaseTab(id: string) {
   }
   for (let i = 0; i < 50 && !page.isClosed(); i++) await new Promise((r) => setTimeout(r, 100));
   tabs.delete(id);
+}
+
+/** The id this conversation drives a page under, if it does. */
+export function idOf(page: Page): string | undefined {
+  for (const [id, p] of tabs) if (p === page && !p.isClosed()) return id;
+  return undefined;
+}
+
+/** The pages this conversation drives in one browser. */
+export function drivenPages(browserName: string): { id: string; page: Page }[] {
+  return [...tabs].filter(([, p]) => !p.isClosed() && stateOf(p).browser === browserName).map(([id, page]) => ({ id, page }));
+}
+
+/**
+ * The addresses of the tabs open in a browser, driven or not, as far as Rocketwright may know them: every page of the
+ * dedicated browser, and the site (origin) of each tab of a user browser (its extension never says more).
+ */
+export async function openOrigins(browserName: string): Promise<string[]> {
+  const where = await getDriven(browserName);
+  if (!where.viaExtension) return where.ctx.pages().filter((p) => !p.isClosed()).map((p) => siteOf(p.url())).filter(Boolean);
+  const listed = await getRelayClient()?.request('tabs', { key: where.name }, 5000) as { origin?: string }[] | undefined;
+  return (listed || []).map((t) => String(t.origin || '')).filter(Boolean);
+}
+
+/** Stops driving a tab without closing it: released in a user browser, simply forgotten in the dedicated one. */
+export async function letGo(id: string) {
+  const page = tabs.get(id);
+  if (!page || page.isClosed()) return;
+  if (stateOf(page).viaExtension) await releaseTab(id);
+  else tabs.delete(id);
 }
 
 /** Browser a Rocketwright tab lives in. */

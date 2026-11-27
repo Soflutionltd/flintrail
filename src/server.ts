@@ -4,6 +4,7 @@ import type { BrowserContext } from 'playwright-core';
 import { z } from 'zod';
 import { act, adoptTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
+import { getDriven } from './browser.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
 import { captureSecret } from './capture.js';
 import { pasteSecret } from './paste.js';
@@ -13,7 +14,8 @@ import { savePdf } from './pdf.js';
 import { clearMocks, mock } from './mock.js';
 import { endTraceIfIdle, stopVideo, trace, video } from './evidence.js';
 import { exportFlow } from './export.js';
-import { redact, signIn } from './login.js';
+import { fillCode, redact, signIn } from './login.js';
+import { mailCode, mailLink } from './mail.js';
 import { recorder } from './recorder.js';
 import { config } from './config.js';
 import { domainProblem } from './domains.js';
@@ -157,6 +159,49 @@ export function buildServer(): McpServer {
     recorder.addStep(page, { do: 'login', source: r.source, ...(r.item ? { item: r.item } : {}), ...(account ? { account } : {}), ...(submit === false ? { submit } : {}) } as Step);
     await domQuiet(page);
     return `${r.text}\n\n${await snapshot(page, { text: t, max, within })}`;
+  }));
+
+  const mailOpts = {
+    from: z.string().describe('The sender: its whole address ("noreply@notify.cloudflare.com") or its domain ("cloudflare.com"). Never a display name.'),
+    maxAgeMinutes: z.number().int().min(1).max(1440).optional().describe('Only an e-mail received within this many minutes (default 10).'),
+    waitSeconds: z.number().int().min(0).max(180).optional().describe('How long to wait for the e-mail to arrive (default 30, 0: look once).'),
+    site: z.string().optional().describe('Only when the user confirmed that this sender serves another site: the registrable domain of the form or link (e.g. "bitbucket.org" for codes sent by atlassian.com). Never for payment or bank sites.'),
+  };
+
+  s.registerTool('fl_mail_code', {
+    description: 'Type a verification code sent by e-mail into the form of a tab, when the user\'s mailbox is open in the same browser (Gmail, or Outlook on the web: outlook.cloud.microsoft, outlook.office.com, outlook.live.com). Use it instead of asking the user to copy a code. Rocketwright opens the newest e-mail from the sender received within maxAgeMinutes, reads the code (the 4 to 8 digit number shown on its own, or pattern) and types it: you get its length, the sender, the subject and the time, never the code. Refused when no such e-mail arrived, when the sender\'s organisation is not the form\'s (see site), on payment, bank and crypto sites or e-mails about a payment, and in a tab where you ran JavaScript. A mailbox tab you did not drive is taken for the search only and given back.',
+    inputSchema: {
+      tab: z.string().describe('The tab of the form waiting for the code.'),
+      field: z.string().optional().describe('Ref (eN) of the code field, when the page shows more than one obvious code box.'),
+      ...mailOpts,
+      pattern: z.string().optional().describe('Regular expression for a code that is not 4 to 8 digits; its first capture group (or whole match) is typed.'),
+      submit: z.boolean().optional().describe('Press Enter after typing (default true).'),
+      ...snapOpts,
+    },
+  }, guard(async ({ tab, field, from, maxAgeMinutes, waitSeconds, site, pattern, submit, text: t, max, within }) => {
+    const page = getTab(tab);
+    const said = await mailCode(page, { from, maxAgeMinutes, waitSeconds, site, pattern, field, submit },
+      (code, item) => fillCode(page, code, { field, submit, item }));
+    await domQuiet(page);
+    return `${said}\n\n${await snapshot(page, { text: t, max, within })}`;
+  }));
+
+  s.registerTool('fl_mail_link', {
+    description: 'Open the verification or sign-in link of an e-mail in a new driven tab, when the user\'s mailbox is open in that browser (Gmail, Outlook on the web). Use it instead of asking the user to click a link sent by e-mail. Rocketwright opens the newest e-mail from the sender received within maxAgeMinutes and follows the link given by its text (link) or part of its address (urlContains), or else the one verification link to the sender\'s site; only to the sender\'s organisation (see site), over HTTPS. Returns the new tab id and its snapshot; the one-time parts of its address are masked. Refused on payment, bank and crypto sites.',
+    inputSchema: {
+      browser: browserOpt,
+      ...mailOpts,
+      link: z.string().optional().describe('Part of the text of the link, e.g. "Verify email".'),
+      urlContains: z.string().optional().describe('Part of the address of the link, e.g. "/verify".'),
+      ...snapOpts,
+    },
+  }, guard(async ({ browser, from, maxAgeMinutes, waitSeconds, site, link, urlContains, text: t, max, within }) => {
+    const browserName = (await getDriven(browser)).name;
+    const r = await mailLink(browserName, { from, maxAgeMinutes, waitSeconds, site, link, urlContains }, async (url) => {
+      const id = await openTab(url, browserName, { evenIfSiteOpen: true }, false);
+      return { id, page: getTab(id) };
+    });
+    return `${r.text}\nTab ${r.id} [${tabBrowser(r.id)}]\n${await snapshot(getTab(r.id), { text: t, max, within })}`;
   }));
 
   s.registerTool('fl_snapshot', {
