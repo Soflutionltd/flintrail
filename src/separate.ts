@@ -42,6 +42,9 @@ export function separateProfile(brand: string, name: string, o: { launcher?: boo
   if (inUse(src.dataDir)) throw new Error(`${src.app} is open: quit it completely (Cmd+Q), then run this again. Its profile files cannot be copied while it writes them.`);
   const target = join(separateInstancesDir(), brand, src.name.replace(/[/\\:]/g, '-'));
   if (existsSync(target)) throw new Error(`${target} already exists: Rocketwright never writes over a separate instance.`);
+  // One made by Flintrail before the rename, under its own folder: a second one of the same name could not be told apart.
+  const older = all.find((p) => p.separate && p.brand === brand && slug(p.name) === slug(src.name));
+  if (older) throw new Error(`${older.dataDir} is already a separate instance of "${src.name}": Rocketwright never makes a second one.`);
   const said: string[] = [];
 
   // The profile, without the caches the browser rebuilds.

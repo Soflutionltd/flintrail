@@ -62,16 +62,30 @@ export function separateInstancesDir(): string {
   return process.env.ROCKETWRIGHT_INSTANCES_DIR || join(homedir(), 'Library/Application Support/Rocketwright/Browsers');
 }
 
-/** The separate instances of the brands that have an app: one data folder each. */
+/**
+ * Where separate instances are looked for: the folder above, then the one Flintrail (1.x) made them in before the
+ * rename, still in use by the browsers it holds (each instance's launcher points there). Nothing is moved.
+ */
+export function separateInstancesDirs(): string[] {
+  if (process.env.ROCKETWRIGHT_INSTANCES_DIR) return [process.env.ROCKETWRIGHT_INSTANCES_DIR];
+  return [separateInstancesDir(), join(homedir(), 'Library/Application Support/Flintrail/Browsers')];
+}
+
+/** The separate instances of the brands that have an app: one data folder each, the first found for a name. */
 function separateInstances(apps: Map<string, string | null>): KnownBrowser[] {
   const out: KnownBrowser[] = [];
-  for (const [brand, app] of apps) {
-    if (!app) continue;
-    let names: string[];
-    try { names = readdirSync(join(separateInstancesDir(), brand)); } catch { continue; }
-    for (const n of names) {
-      const dataDir = join(separateInstancesDir(), brand, n);
-      if (existsSync(join(dataDir, 'Local State'))) out.push({ brand, dataDir, app, separate: true });
+  const seen = new Set<string>();
+  for (const root of separateInstancesDirs()) {
+    for (const [brand, app] of apps) {
+      if (!app) continue;
+      let names: string[];
+      try { names = readdirSync(join(root, brand)); } catch { continue; }
+      for (const n of names) {
+        const dataDir = join(root, brand, n);
+        if (seen.has(`${brand}/${n}`) || !existsSync(join(dataDir, 'Local State'))) continue;
+        seen.add(`${brand}/${n}`);
+        out.push({ brand, dataDir, app, separate: true });
+      }
     }
   }
   return out;

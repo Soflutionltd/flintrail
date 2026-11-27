@@ -79,3 +79,35 @@ test('a profile is copied into an instance of its own, the original kept and ren
     process.env.HOME = saved;
   }
 });
+
+test('an instance Flintrail made before the rename is still found and opened, and never made twice', { skip: platform() !== 'darwin' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'rocketwright-sep-old-'));
+  const brave = join(home, 'Library/Application Support/BraveSoftware/Brave-Browser');
+  mkdirSync(join(brave, 'Profile 1'), { recursive: true });
+  writeFileSync(join(brave, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 1': { name: 'Soflution' } } } }));
+  // What `flintrail --separate-profile brave Soflution` left: the instance under Flintrail's folder.
+  const old = join(home, 'Library/Application Support/Flintrail/Browsers/brave/Soflution');
+  mkdirSync(join(old, 'Default'), { recursive: true });
+  writeFileSync(join(old, 'Local State'), JSON.stringify({ profile: { info_cache: { Default: { name: 'Soflution' } } } }));
+  const saved = process.env.HOME;
+  const savedDir = process.env.ROCKETWRIGHT_INSTANCES_DIR;
+  process.env.HOME = home;
+  delete process.env.ROCKETWRIGHT_INSTANCES_DIR;
+  try {
+    const { localProfiles, openCommand, separateInstancesDirs } = await import('../dist/profiles.js');
+    assert.ok(separateInstancesDirs().includes(join(home, 'Library/Application Support/Flintrail/Browsers')));
+    const found = localProfiles().filter((p) => p.separate && p.name === 'Soflution');
+    assert.equal(found.length, 1);
+    assert.deepEqual(openCommand(found[0]), ['open', ['-na', 'Brave Browser', '--args', `--user-data-dir=${old}`, '--profile-directory=Default']]);
+  } finally {
+    process.env.HOME = saved;
+    if (savedDir !== undefined) process.env.ROCKETWRIGHT_INSTANCES_DIR = savedDir;
+  }
+  // A second instance of the same profile is refused: the two could not be told apart.
+  const env = { ...process.env, HOME: home, ROCKETWRIGHT_HOME: join(home, '.rocketwright') };
+  delete env.ROCKETWRIGHT_INSTANCES_DIR;
+  delete env.ROCKETWRIGHT_PAIRING_DIRS;
+  const again = spawnSync(process.execPath, [cli, '--separate-profile', 'brave', 'Soflution'], { env, encoding: 'utf8' });
+  assert.equal(again.status, 1);
+  assert.match(again.stderr, /is already a separate instance of "Soflution"/);
+});
