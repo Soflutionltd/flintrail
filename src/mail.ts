@@ -311,20 +311,33 @@ function readMail(a: { provider: MailProvider }): ReadMail & { lang: string } {
     if (!body) return none;
     const found = body;
     const pane = body.closest('[role="main"]') || body.parentElement?.parentElement?.parentElement || document.body;
-    // The header is what comes before the body: the sender is the first address there (the recipients follow it).
+    // The header is what comes before the body. The sender's real address is the first one written between angle
+    // brackets ("Acme <noreply@acme.com>") or held by a data-email attribute: never an address merely shown as text or
+    // in a title, which a display name can imitate.
     const before = (el: Element) => !found.contains(el) && !!(el.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_FOLLOWING);
     // Never the message list (its rows name other senders), the top bar (the user's own account) or the folder list.
     const elsewhere = '[role="listbox"], [role="option"], [data-convid], [role="banner"], [role="navigation"], header';
+    const ANGLED = /<\s*([\w.+-]+@[\w-]+(?:\.[\w-]+)+)\s*>/;
+    const ALL = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
+    let senderLine: Element | null = null;
     for (const el of pane.querySelectorAll('*')) {
       if (!before(el) || !visible(el) || el.closest(elsewhere)) continue;
       const own = el.childElementCount === 0 ? (el.textContent || '').trim() : '';
-      if (!sender) {
-        const m = EMAIL.exec(el.getAttribute('title') || '') || EMAIL.exec(own);
-        if (m) sender = m[0].toLowerCase();
+      if (!senderLine) {
+        const real = ANGLED.exec(own)?.[1] || (el.getAttribute('data-email') || '').trim();
+        if (real && EMAIL.test(real)) {
+          sender = real.toLowerCase();
+          senderLine = el.parentElement || el;
+        }
       }
       if (!subject && el.getAttribute('role') === 'heading') subject = (el.textContent || '').trim();
       if (el.getAttribute('data-testid') === 'SentReceivedSavedTime') times.push((el.textContent || '').trim());
       else if (own && own.length <= 40 && !own.includes('@') && timeLike.test(own)) times.push(own);
+    }
+    // The display name next to it holding another address ("noreply@bank.com" <x@evil.com>): not read at all.
+    if (senderLine) {
+      const shown = [senderLine.textContent || '', ...[...senderLine.querySelectorAll('[title],[aria-label]')].map((e) => `${e.getAttribute('title') || ''} ${e.getAttribute('aria-label') || ''}`)].join(' ');
+      if ((shown.match(ALL) || []).some((x) => x.toLowerCase() !== sender)) sender = '';
     }
   }
   const text = ((body as HTMLElement).innerText || '').slice(0, 20000);

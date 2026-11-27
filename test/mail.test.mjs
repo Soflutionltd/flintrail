@@ -170,6 +170,17 @@ describe('fl_mail_code', () => {
     await mcp.call('fl_close', { tab: outlook });
   });
 
+  test('Outlook: a display name written as an address is never taken for the sender', async () => {
+    // The display name imitates the expected sender; the real address, between angle brackets, is another one.
+    setMails({ id: 'm1', from: 'noreply@evil.localhost', name: 'noreply@notify.acme.localhost', subject: 'Your Acme code', at: minutesAgo(1), html: '<p>Code <b>6655443</b></p>' });
+    const outlook = tabOf(await mcp.call('fl_open', { url: at('outlook.localhost', '/mail/'), text: 0 }));
+    const tab = tabOf(await mcp.call('fl_open', { url: at('dash.acme.localhost', '/code') }));
+    await assert.rejects(mcp.call('fl_mail_code', { tab, from: 'notify.acme.localhost', waitSeconds: 0 }), /No e-mail from notify\.acme\.localhost received in the last 10 min .*could not be read/);
+    assert.deepEqual(site.codes, [], 'nothing typed');
+    await mcp.call('fl_close', { tab });
+    await mcp.call('fl_close', { tab: outlook });
+  });
+
   test('no webmail open in the browser: the agent is told what to do', async () => {
     const tab = tabOf(await mcp.call('fl_open', { url: at('dash.acme.localhost', '/code') }));
     await assert.rejects(mcp.call('fl_mail_code', { tab, from: 'acme.localhost', waitSeconds: 0 }), /No webmail tab Rocketwright can read is open in agent .*Ask the user to open their mailbox/);
