@@ -573,6 +573,12 @@ export interface MailLinkOptions extends MailQuery {
 
 /** The link to open in the e-mail: by its text, by part of its address, or the one verification link to the sender's site. */
 export function pickLink(links: { text: string; href: string }[], allowedOrg: string, o: { link?: string; urlContains?: string }): { text: string; href: string } {
+  // Before anything can be said about them: every address the links carry, and every address written as their text,
+  // is masked from now on (an error listing the links must not hand a token over).
+  for (const l of links) {
+    rememberUrlTokens(l.href);
+    for (const u of l.text.match(URL_IN_TEXT) || []) rememberUrlTokens(u);
+  }
   const own = links.filter((l) => { try { return siteOf(new URL(l.href).hostname) === allowedOrg; } catch { return false; } });
   let hits: { text: string; href: string }[];
   if (o.link !== undefined || o.urlContains !== undefined) {
@@ -589,10 +595,17 @@ export function pickLink(links: { text: string; href: string }[], allowedOrg: st
   return distinct[0]!;
 }
 
+const URL_IN_TEXT = /\bhttps?:\/\/[^\s"'<>]+/gi;
+
+/** A link's text as it may be shown: an address written as text is masked like any address. */
+export function linkLabel(text: string): string {
+  return (text || '(no text)').replace(URL_IN_TEXT, (u) => maskUrl(u));
+}
+
 /** Links for a message: their text and site only, never the address (it may hold a token). */
 function describeLinks(links: { text: string; href: string }[]): string {
   if (!links.length) return 'none';
-  return links.slice(0, 8).map((l) => { let host = ''; try { host = new URL(l.href).hostname; } catch { /* listed without */ } return `"${l.text || '(no text)'}" -> ${host}`; }).join('; ') + (links.length > 8 ? `; ${links.length - 8} more` : '');
+  return links.slice(0, 8).map((l) => { let host = ''; try { host = new URL(l.href).hostname; } catch { /* listed without */ } return `"${linkLabel(l.text)}" -> ${host}`; }).join('; ') + (links.length > 8 ? `; ${links.length - 8} more` : '');
 }
 
 /** fl_mail_link: the verification link of the newest e-mail from the sender, opened in a new tab of the same browser. */
@@ -621,7 +634,7 @@ export async function mailLink(browserName: string, o: MailLinkOptions, open: (u
       await tab.page.close().catch(() => {});
       throw new Error(`Refused: the link led to ${landedOrg || 'another kind of page'}, not ${allowedOrg}. The tab was closed.`);
     }
-    return { id: tab.id, text: `Link "${link.text || '(no text)'}" from ${mail.sender} ("${mail.subject || 'no subject'}", received ${describeTime(mail.receivedAt)}) opened in tab ${tab.id}: ${maskUrl(landed)} (one-time parts of the address masked).` };
+    return { id: tab.id, text: `Link "${linkLabel(link.text)}" from ${mail.sender} ("${mail.subject || 'no subject'}", received ${describeTime(mail.receivedAt)}) opened in tab ${tab.id}: ${maskUrl(landed)} (one-time parts of the address masked).` };
   } finally {
     await doneWithMailbox(mail);
   }

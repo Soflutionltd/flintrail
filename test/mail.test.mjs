@@ -205,6 +205,13 @@ describe('fl_mail_link', () => {
     await assert.rejects(mcp.call('fl_mail_link', { from: 'acme.localhost', waitSeconds: 0 }), /the link led to evil\.localhost, not acme\.localhost\. The tab was closed/);
     setMails(codeMail({ subject: 'Verify', html: `<a href="${at('app.acme.localhost', '/verify?a=1')}">Verify here</a> <a href="${at('app.acme.localhost', '/verify?a=2')}">Or verify there</a>` }));
     await assert.rejects(mcp.call('fl_mail_link', { from: 'acme.localhost', waitSeconds: 0 }), /2 different links match: "Verify here" -> app\.acme\.localhost; "Or verify there" -> app\.acme\.localhost/);
+    // A link whose text is its own address, token included: listed in the refusal, masked.
+    const leaky = at('app.acme.localhost', '/confirm?token=Zk39sdf8Qw2');
+    setMails(codeMail({ subject: 'Verify', html: `<a href="${at('app.acme.localhost', '/verify?a=1')}">Verify email</a> <a href="${leaky}">${leaky}</a>` }));
+    const listed = await mcp.call('fl_mail_link', { from: 'acme.localhost', waitSeconds: 0 }).then(() => '', (e) => e.message);
+    assert.match(listed, /2 different links match: "Verify email" -> app\.acme\.localhost; "http:\/\/app\.acme\.localhost:\d+\/confirm\?token=•••" -> app\.acme\.localhost/);
+    assert.ok(!listed.includes('Zk39sdf8Qw2'), 'the token never reaches the agent');
+    setMails(codeMail({ subject: 'Verify', html: `<a href="${at('app.acme.localhost', '/verify?a=1')}">Verify here</a> <a href="${at('app.acme.localhost', '/verify?a=2')}">Or verify there</a>` }));
     const ok = await mcp.call('fl_mail_link', { from: 'acme.localhost', link: 'there', waitSeconds: 0 });
     assert.match(ok, /Link "Or verify there"/);
     await mcp.call('fl_close', { tab: /opened in tab (t\d+)/.exec(ok)[1] });
