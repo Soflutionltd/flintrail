@@ -313,8 +313,10 @@ function readMail(a: { provider: MailProvider }): ReadMail & { lang: string } {
     const pane = body.closest('[role="main"]') || body.parentElement?.parentElement?.parentElement || document.body;
     // The header is what comes before the body: the sender is the first address there (the recipients follow it).
     const before = (el: Element) => !found.contains(el) && !!(el.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_FOLLOWING);
+    // Never the message list (its rows name other senders), the top bar (the user's own account) or the folder list.
+    const elsewhere = '[role="listbox"], [role="option"], [data-convid], [role="banner"], [role="navigation"], header';
     for (const el of pane.querySelectorAll('*')) {
-      if (!before(el) || !visible(el)) continue;
+      if (!before(el) || !visible(el) || el.closest(elsewhere)) continue;
       const own = el.childElementCount === 0 ? (el.textContent || '').trim() : '';
       if (!sender) {
         const m = EMAIL.exec(el.getAttribute('title') || '') || EMAIL.exec(own);

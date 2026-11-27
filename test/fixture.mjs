@@ -389,7 +389,9 @@ export function startFixture(port = 0) {
         let all = [];
         async function refresh() {
           all = await load();
-          list.innerHTML = all.map((x) => '<div role="option" data-id="' + x.id + '" aria-label="' + esc(x.name + ' ' + x.subject) + '"><span>' + esc(x.name) + '</span> <span>' + esc(x.subject) + '</span> '
+          // ?titles=old: like Outlook for some rows, the sender's address in a title, here for e-mails older than 5 minutes.
+          const titled = (x) => new URLSearchParams(location.search).get('titles') === 'old' && Date.now() - x.at > 5 * 60000;
+          list.innerHTML = all.map((x) => '<div role="option" data-id="' + x.id + '" aria-label="' + esc(x.name + ' ' + x.subject) + '"><span' + (titled(x) ? ' title="' + esc(x.from) + '"' : '') + '>' + esc(x.name) + '</span> <span>' + esc(x.subject) + '</span> '
             + '<span title="' + esc(new Date(x.at).toLocaleString('en-US', { weekday: 'short', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })) + '">' + esc(shortTime(new Date(x.at))) + '</span> <span>' + esc(x.preview || '') + '</span></div>').join('');
           show();
         }

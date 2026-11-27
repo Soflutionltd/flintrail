@@ -158,6 +158,18 @@ describe('fl_mail_code', () => {
     await mcp.call('fl_close', { tab: outlook });
   });
 
+  test('Outlook: the address of another row of the list is never taken for the sender of the message open', async () => {
+    // The newest e-mail claims the name "Acme" but comes from elsewhere; the real Acme one, older, names its address in the list.
+    setMails({ id: 'm1', from: 'noreply@evil.localhost', name: 'Acme', subject: 'Your Acme code', at: minutesAgo(1), html: '<p>Code <b>6655443</b></p>' },
+      codeMail({ id: 'm2', at: minutesAgo(30) }));
+    const outlook = tabOf(await mcp.call('fl_open', { url: at('outlook.localhost', '/mail/?titles=old'), text: 0 }));
+    const tab = tabOf(await mcp.call('fl_open', { url: at('dash.acme.localhost', '/code') }));
+    await assert.rejects(mcp.call('fl_mail_code', { tab, from: 'acme.localhost', waitSeconds: 0 }), /No e-mail from acme\.localhost received in the last 10 min/);
+    assert.deepEqual(site.codes, [], 'the code of the e-mail from elsewhere was never typed');
+    await mcp.call('fl_close', { tab });
+    await mcp.call('fl_close', { tab: outlook });
+  });
+
   test('no webmail open in the browser: the agent is told what to do', async () => {
     const tab = tabOf(await mcp.call('fl_open', { url: at('dash.acme.localhost', '/code') }));
     await assert.rejects(mcp.call('fl_mail_code', { tab, from: 'acme.localhost', waitSeconds: 0 }), /No webmail tab Rocketwright can read is open in agent .*Ask the user to open their mailbox/);
