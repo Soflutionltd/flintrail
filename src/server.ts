@@ -2,7 +2,7 @@ import './legacy.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BrowserContext } from 'playwright-core';
 import { z } from 'zod';
-import { act, adoptTab, adoptTabById, agentRanJs, reopenTab, retireTab, takeReusedFrom, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, tabWindow, type Action, type Step } from './engine.js';
+import { act, adoptTab, adoptTabById, agentRanJs, reopenTab, retireTab, takeOpenNote, takeReusedFrom, windowLabel, assertNoSecret, releaseTab, closeTab, consoleLog, domQuiet, drivenIn, elementByRef, getTab, hideForeignFrames, mainFrameSelector, listTabs, openTab, snapshot, tabBrowser, tabWindow, type Action, type Step } from './engine.js';
 import { runFlow, runMany } from './flows.js';
 import { getDriven } from './browser.js';
 import { actDesktop, listApps, snapshotApp, type DesktopAction } from './desktop.js';
@@ -103,7 +103,7 @@ export const SERVER_INSTRUCTIONS = [
   'Before the first browser task of a conversation, call fl_extension to see which user browsers are connected and which profiles are installed but not open.',
   '- Several user browsers connected: ask the user which one to work in (each is named after its profile or the name set in the extension, e.g. "brave-soflution"), unless they already named it. Remember the answer for the rest of the conversation.',
   '- Exactly one connected: use it, and say which one in one line.',
-  '- A user browser with several windows: each window has a name (fl_tabs all:true lists them; the user sees and changes it in the extension popup). When the user names a window ("work in Docix"), pass window:"Docix" to fl_open once: this conversation then stays in that window. Never pick another window than the one the user named.',
+  '- A user browser with several windows: each window has an id that no other window ever gets ("W7") and a name ("Cloudflare"); fl_tabs all:true lists them, fl_open and fl_adopt say which window the tab is in, and the user sees both in the extension popup. Keep to windows by their id. When the user names a window ("work in W7", "work in Docix"), pass window:"W7" to fl_open once: this conversation then stays in that window. Never pick another window than the one the user named. One task, one window: newWindow:true opens a window only once per conversation (the next ones go to it), and never while the site is already open in a window (that window is used).',
   '- None connected: right away, tell the user to install the Rocketwright extension in the browser and profile they use, and give them its link: ' + EXTENSION_URL + ' (Chrome, Edge, Brave, Arc; or Load unpacked from the release zip in <brand>://extensions with Developer mode on). Then they open its popup, check it shows "Connected to Rocketwright" with a green dot (otherwise click Connect), and optionally give the browser a name. Until one is connected, a task that needs their sessions (an account they are signed in to) waits for it; any other task runs in the dedicated "agent" browser.',
   'Never switch to another profile of the user than the one agreed, and never sign in for them by typing a password: use fl_login (their password manager) or let them sign in by hand.',
   '- A user browser whose extension does not connect is never opened or restarted by Rocketwright: the error says why (extension off, site access "On click", extension folder moved); pass that on to the user. Use fl_open launch:true only when the user asked to open a profile that is not open.',
@@ -112,15 +112,18 @@ export const SERVER_INSTRUCTIONS = [
   'A tab cut off by another extension (a password manager\'s frame) or where you ran JavaScript: fl_reopen opens its page in a fresh tab (fl_login does it by itself); if it gets cut off again, ask the user to set that extension\'s "Site access" to "On click".',
 ].join('\n');
 
+/** The line telling which window of the user's browser a tab is in, or nothing. */
+const windowLine = (id: string) => (tabWindow(id) ? `Window: ${tabWindow(id)}\n` : '');
+
 export function buildServer(): McpServer {
   const s = new McpServer({ name: 'rocketwright', version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
   s.registerTool('fl_open', {
-    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab opens behind the one the user is on, so they keep working: they go to it when they want to follow. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open, or whose extension does not connect, is never opened or restarted by itself: the call fails and says why (extension off, site access "On click", extension folder moved); launch:true opens a profile that is not open, only when the user asked for it. In a user browser, a tab already showing this address, or any tab of the same site, is taken over and brought to the address instead of opening another one. newTab and newWindow are refused while the site is already open there, unless evenIfSiteOpen is set. window picks one of its windows (ids from fl_extension tabs:true): a choice of yours, so the tab opens there even when the site is open elsewhere. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
+    description: 'Open a URL in a new tab (logged-in sessions kept). In a user browser, the tab opens behind the one the user is on, so they keep working: they go to it when they want to follow. By default in the dedicated browser; set browser to drive one of the user\'s own browsers instead: a name from fl_extension ("brave-soflution"), the browser profile\'s name ("Soflution"), or a brand ("brave"). A profile of this computer that is not open, or whose extension does not connect, is never opened or restarted by itself: the call fails and says why (extension off, site access "On click", extension folder moved); launch:true opens a profile that is not open, only when the user asked for it. In a user browser, a tab already showing this address, or any tab of the same site, is taken over and brought to the address instead of opening another one. newTab is refused while the site is already open there, unless evenIfSiteOpen is set. newWindow opens a new window only when this conversation has none yet and the site is not open in a window: otherwise the tab goes to that window, and the answer says so. window picks one of its windows by id ("W7", from fl_tabs all:true): a choice of yours, so the tab opens there even when the site is open elsewhere. The answer names the window the tab is in. Returns a compact snapshot whose [eN] refs can be used directly in fl_act.',
     inputSchema: {
       url: z.string(), browser: browserOpt,
-      window: z.union([z.number().int(), z.string().min(1).max(40)]).optional().describe('User browser only: the window to work in, by its name (each window is named by the extension, e.g. "Github"; fl_tabs all:true lists them, and the user can rename one in the extension popup) or its number. Once named, this conversation stays in that window: its next tabs open there without saying it again.'),
-      newWindow: z.boolean().optional().describe('User browser only: open the tab in a new window. Refused while the site is already open in that browser (see evenIfSiteOpen).'),
+      window: z.union([z.number().int(), z.string().min(1).max(40)]).optional().describe('User browser only: the window to work in, by its id ("W7": never given to another window; fl_tabs all:true lists them, the extension popup shows it) or its name ("Github"). Once named, this conversation stays in that window: its next tabs open there without saying it again.'),
+      newWindow: z.boolean().optional().describe('User browser only: open the tab in a new window, which becomes this conversation\'s window. When this conversation already has a window, or the site is open in one, that window is used instead (the answer says so); evenIfSiteOpen forces a new window.'),
       newTab: z.boolean().optional().describe('User browser only: open a new tab instead of taking over one. Refused while the site is already open in that browser (see evenIfSiteOpen).'),
       evenIfSiteOpen: z.boolean().optional().describe('User browser only: allow one more tab of a site already open there. Only when two pages of that site have to stay open together, or when the user asked for another tab.'),
       launch: z.boolean().optional().describe('User browser only: open the browser profile named in browser when it is not open, with the Rocketwright extension of this installation loaded. Only when the user asked for that profile to be opened.'),
@@ -130,8 +133,8 @@ export function buildServer(): McpServer {
     const id = await openTab(url, browser, { window, newWindow, evenIfSiteOpen, launch }, !newTab);
     const from = takeReusedFrom(id);
     const reused = from ? `Tab ${id} was already yours, on ${from}: it went to this address, so that page and its refs are gone. For a second tab of the site, pass evenIfSiteOpen:true.\n` : '';
-    const inWindow = tabWindow(id) ? `Window: "${tabWindow(id)}"\n` : '';
-    return `Tab ${id} [${tabBrowser(id)}]\n${inWindow}${reused}` + (await snapshot(getTab(id), { text: t, max, within }));
+    const note = takeOpenNote(id);
+    return `Tab ${id} [${tabBrowser(id)}]\n${windowLine(id)}${note ? `${note}\n` : ''}${reused}` + (await snapshot(getTab(id), { text: t, max, within }));
   }));
 
   s.registerTool('fl_adopt', {
@@ -144,7 +147,7 @@ export function buildServer(): McpServer {
   }, guard(async ({ url, id: tabId, browser, text: t, max, within }) => {
     if ((url === undefined) === (tabId === undefined)) throw new Error('Give url or id (from fl_tabs all:true), one of the two.');
     const id = tabId !== undefined ? await adoptTabById(tabId, browser) : await adoptTab(url!, browser);
-    return `Tab ${id} [${tabBrowser(id)}]\n` + (await snapshot(getTab(id), { text: t, max, within }));
+    return `Tab ${id} [${tabBrowser(id)}]\n${windowLine(id)}` + (await snapshot(getTab(id), { text: t, max, within }));
   }));
 
   s.registerTool('fl_act', {
@@ -308,7 +311,7 @@ export function buildServer(): McpServer {
     const out = [...own];
     let ids = false;
     for (const b of wanted ? [wanted] : relay.browsers) {
-      let open: { id?: number; origin: string; title: string; window: number; windowName?: string; attached: boolean }[];
+      let open: { id?: number; origin: string; title: string; window: number; windowKey?: string; windowName?: string; attached: boolean }[];
       try {
         open = await relay.request('tabs', { key: b.key });
       } catch (e) {
@@ -321,7 +324,7 @@ export function buildServer(): McpServer {
       out.push(`${b.key}: ${open.length} tab(s)${hidden ? `, ${hidden} on sites outside the allowed list, not shown` : ''}`);
       for (const x of open.filter((y) => !offList(y))) {
         if (typeof x.id === 'number') ids = true;
-        out.push(`  ${typeof x.id === 'number' ? `#${x.id} ` : ''}window ${x.windowName ? `"${x.windowName}"` : x.window}: ${x.origin || '(blank)'}  ${x.title}${x.attached ? '  [driven]' : ''}`);
+        out.push(`  ${typeof x.id === 'number' ? `#${x.id} ` : ''}window ${x.windowKey ? windowLabel(x.windowKey, x.windowName) : x.windowName ? `"${x.windowName}"` : x.window}: ${x.origin || '(blank)'}  ${x.title}${x.attached ? '  [driven]' : ''}`);
       }
     }
     if (!relay.browsers.length) out.push('No user browser connected.');
@@ -601,12 +604,12 @@ export function buildServer(): McpServer {
           lines.push(`${b.key}: Extension connected (${b.browser}${name}, extension ${b.version})${old}`);
           if (!tabs) continue;
           try {
-            const open = await relay.request('tabs', { key: b.key }) as { origin: string; title: string; window: number; attached: boolean }[];
+            const open = await relay.request('tabs', { key: b.key }) as { origin: string; title: string; window: number; windowKey?: string; windowName?: string; attached: boolean }[];
             // Tabs on sites outside the user's list are not described to the agent.
             const offList = (t: { origin: string }) => config.allowedDomains.length > 0 && (!t.origin || !!domainProblem(t.origin));
             const outside = open.filter(offList).length;
             if (outside) lines.push(`  ${outside} tab(s) on sites outside the allowed list, not shown.`);
-            for (const t of open.filter((x) => !offList(x))) lines.push(`  window ${t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
+            for (const t of open.filter((x) => !offList(x))) lines.push(`  window ${t.windowKey ? windowLabel(t.windowKey, t.windowName) : t.window}: ${t.origin || '(blank)'}  ${t.title}${t.attached ? '  [driven or shared]' : ''}`);
           } catch (e) { lines.push(`  tabs unavailable: ${(e as Error).message}`); }
         }
         // Profiles of this computer with no connected window: fl_open opens them on demand.

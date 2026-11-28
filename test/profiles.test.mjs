@@ -79,7 +79,9 @@ test('a connected browser is named after its profile, and picked by that name', 
 test('a tab opens in the window the agent names, or in a new window', async () => {
   const userWindow = await sw.evaluate(async () => (await chrome.windows.create({ focused: false, url: 'about:blank' })).id);
   const listed = await mcp.call('fl_extension', { tabs: true });
-  assert.match(listed, new RegExp(`window ${userWindow}: \\(blank\\)`));
+  // Listed by its id; its number in the browser still works for window.
+  const userKey = (await sw.evaluate(() => windowNames())).find((w) => w.id === userWindow).key;
+  assert.match(listed, new RegExp(`window ${userKey}: \\(blank\\)`));
   const inWindow = tabId(await mcp.call('fl_open', { url: site.url + '/search', browser: 'Soflution', window: userWindow, text: 0 }));
   assert.deepEqual(await windowsOf(site.url + '/search'), [userWindow]);
   const before = await sw.evaluate(async () => (await chrome.windows.getAll()).map((w) => w.id));

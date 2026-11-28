@@ -16,12 +16,13 @@ async function render() {
   $('nameInfo').textContent = connected && s.name
     ? `Agents pick this browser profile as "${s.name}", whatever the window. Change it above if you like.`
     : 'Each browser profile gets a name of its own, the same in all its windows; change it above if you like.';
-  // This window's name: given by Rocketwright after the site it shows, shown ready to change.
+  // This window's id (never given to another window) and name (after the site it shows), the name ready to change.
   if (tab && !windowNameLoaded) {
-    const { name, manual } = await send({ type: 'windowName', windowId: tab.windowId });
-    $('windowName').value = name || '';
-    $('windowNameInfo').textContent = name
-      ? `Tell your agent "work in the window ${name}" and its tabs open here. ${manual ? 'You chose this name.' : 'Named after the site this window shows; change it above if you like.'}`
+    const { key, name, manual } = await send({ type: 'windowName', windowId: tab.windowId });
+    $('windowKey').textContent = key ? `· ${key}` : '';
+    $('windowName').value = name && name !== key ? name : '';
+    $('windowNameInfo').textContent = key
+      ? `Agents know this window as ${key}${name && name !== key ? ` "${name}"` : ''}: tell yours "work in window ${key}" and its tabs open here. ${manual ? 'You chose this name.' : 'Name it above if you like.'}`
       : '';
     windowNameLoaded = true;
   }

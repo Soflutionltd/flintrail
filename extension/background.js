@@ -258,13 +258,14 @@ async function detach(tabId, reason = 'released') {
 chrome.storage.session.remove('agentWindow').catch(() => {});
 
 // ---- Window names ---------------------------------------------------------------------------------
-// Each window gets a name by itself, after the site most of its tabs are on ("Github", "Docix"), so the
-// user can tell an agent "work in Docix" when one profile has several windows open. The user may rename it
-// in the popup. A name stays once given, whatever the window shows later. Window ids change when the
-// browser restarts: names are kept with the sites of their window, and given back to the window that
-// shows those sites again.
+// Each window gets an id of its own the first time Rocketwright sees it ("W7"): never given to another window,
+// kept for as long as the window lives, so an agent and the user always mean the same window. It also gets a
+// name, after the site most of its tabs are on ("Github", "Docix"), that the user may change in the popup; a
+// window that shows no site yet is called by its id. Window ids of the browser change when it restarts: ids and
+// names are kept with the sites of their window, and given back to the window that shows those sites again.
 const TWO_PART_SUFFIXES = new Set(['co.uk', 'org.uk', 'com.au', 'co.nz', 'co.jp', 'com.br', 'com.mx', 'co.za', 'com.tr', 'co.in', 'gouv.fr']);
 const WINDOW_NAME_MAX = 40;
+const WINDOW_KEY = /^w\d+$/i;
 
 function siteLabel(host) {
   const bare = host.replace(/^www\./, '');
@@ -291,68 +292,104 @@ function freeName(base, taken) {
   return name;
 }
 
-function autoWindowName(hosts, taken, index) {
+/** The site with most tabs (the first met wins a tie), capitalised; '' for a window showing no site. */
+function siteName(hosts) {
   const counts = new Map();
   for (const host of hosts) counts.set(siteLabel(host), (counts.get(siteLabel(host)) || 0) + 1);
-  // The site with most tabs; the first met wins a tie.
   const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  return freeName(best ? best.charAt(0).toUpperCase() + best.slice(1) : `Window ${index}`, taken);
+  return best ? best.charAt(0).toUpperCase() + best.slice(1) : '';
 }
 
-/** Every normal window with its name, naming the ones that have none yet. */
-async function windowNames() {
+// One naming pass at a time: two at once (a tab opening while the tabs are listed) would give two ids to one window.
+let naming = Promise.resolve();
+function windowNames() {
+  const run = naming.then(nameWindows, nameWindows);
+  naming = run.catch(() => {});
+  return run;
+}
+
+/** Every normal window with its id and name, giving them to the windows that have none yet. */
+async function nameWindows() {
   const wins = await chrome.windows.getAll({ windowTypes: ['normal'] });
   const tabs = await chrome.tabs.query({});
   const { windowNames: stored = {} } = await chrome.storage.session.get('windowNames');
-  const { namedWindows: saved = [] } = await chrome.storage.local.get('namedWindows');
+  const { namedWindows: saved = [], nextWindowKey = 1 } = await chrome.storage.local.get(['namedWindows', 'nextWindowKey']);
+  let next = Math.max(1, Number(nextWindowKey) || 1);
+  // Ids already handed out, saved ones included: a new window never gets an id another window had.
+  for (const x of [...Object.values(stored), ...saved]) {
+    const n = WINDOW_KEY.test(x?.key || '') ? Number(x.key.slice(1)) : 0;
+    if (n >= next) next = n + 1;
+  }
   const hosts = new Map(wins.map((w) => [w.id, hostsOf(tabs.filter((t) => t.windowId === w.id))]));
   const live = {};
-  for (const w of wins) if (stored[w.id]) live[w.id] = stored[w.id];
+  for (const w of wins) if (stored[w.id]?.key) live[w.id] = stored[w.id];
+  const takenKeys = new Set(Object.values(live).map((x) => x.key.toLowerCase()));
   const taken = new Set(Object.values(live).map((x) => x.name.toLowerCase()));
-  let index = 0;
   for (const w of wins) {
-    index++;
     if (live[w.id]) continue;
     const here = new Set(hosts.get(w.id));
-    // After a restart: the name of the window that showed these sites, when at least half of them are back.
-    const back = saved.find((x) => !taken.has(x.name.toLowerCase()) && x.hosts?.length
-      && x.hosts.filter((h) => here.has(h)).length * 2 >= x.hosts.length);
-    live[w.id] = back
-      ? { name: back.name, manual: !!back.manual }
-      : { name: autoWindowName(hosts.get(w.id), taken, index), manual: false };
+    // After a restart: the id and name of the window that showed these sites, when at least half of them are back.
+    const back = saved.find((x) => WINDOW_KEY.test(x.key || '') && !takenKeys.has(x.key.toLowerCase()) && !taken.has(String(x.name || '').toLowerCase())
+      && x.hosts?.length && x.hosts.filter((h) => here.has(h)).length * 2 >= x.hosts.length);
+    if (back) {
+      live[w.id] = { key: back.key, name: back.name || back.key, manual: !!back.manual };
+    } else {
+      const key = `W${next++}`;
+      live[w.id] = { key, name: freeName(siteName(hosts.get(w.id)) || key, taken), manual: false };
+    }
+    takenKeys.add(live[w.id].key.toLowerCase());
     taken.add(live[w.id].name.toLowerCase());
+  }
+  // A window named after its id while it showed nothing takes the name of its site once it shows one.
+  for (const w of wins) {
+    const x = live[w.id];
+    if (x.manual || x.name !== x.key) continue;
+    const site = siteName(hosts.get(w.id));
+    if (!site) continue;
+    taken.delete(x.name.toLowerCase());
+    x.name = freeName(site, taken);
+    taken.add(x.name.toLowerCase());
   }
   await chrome.storage.session.set({ windowNames: live });
   await chrome.storage.local.set({
+    nextWindowKey: next,
     namedWindows: wins.map((w) => ({ ...live[w.id], hosts: [...new Set(hosts.get(w.id))].slice(0, 30) })),
   });
   return wins.map((w) => ({
-    id: w.id, name: live[w.id].name, manual: live[w.id].manual, focused: !!w.focused,
+    id: w.id, key: live[w.id].key, name: live[w.id].name, manual: live[w.id].manual, focused: !!w.focused,
     tabs: tabs.filter((t) => t.windowId === w.id).length,
   }));
 }
 
-/** The window an agent named: its exact name, whatever the case, else the only one starting with it. */
+/** How a window is told to agents and to the user: its id, and its name when it has one of its own. */
+const windowLabel = (w) => (w.name && w.name !== w.key ? `${w.key} "${w.name}"` : w.key);
+const windowInfo = (w) => (w ? { id: w.id, key: w.key, name: w.name } : undefined);
+
+/** The window an agent named: its id ("W7"), else its exact name whatever the case, else the only one starting with it. */
 async function windowByName(wanted) {
   const all = await windowNames();
   const asked = String(wanted).trim().toLowerCase();
-  const exact = all.filter((w) => w.name.toLowerCase() === asked);
+  const byKey = all.filter((w) => w.key.toLowerCase() === asked);
+  const exact = byKey.length ? byKey : all.filter((w) => w.name.toLowerCase() === asked);
   const found = exact.length ? exact : all.filter((w) => asked && w.name.toLowerCase().startsWith(asked));
   if (found.length === 1) return found[0];
-  const names = all.map((w) => `"${w.name}"`).join(', ');
+  const names = all.map(windowLabel).join(', ');
   throw new Error(found.length
-    ? `Several windows start with "${wanted}": give the whole name. Windows: ${names}.`
-    : `No window named "${wanted}". Windows: ${names}.`);
+    ? `Several windows start with "${wanted}": give the window's id. Windows: ${names}.`
+    : `No window "${wanted}" (closed?). Windows: ${names}.`);
 }
 
 async function renameWindow(windowId, wanted) {
   const name = String(wanted || '').replace(/\s+/g, ' ').trim().slice(0, WINDOW_NAME_MAX);
   if (!name) throw new Error('A window name cannot be empty.');
   const all = await windowNames();
-  if (!all.some((w) => w.id === windowId)) throw new Error('That window is closed.');
+  const win = all.find((w) => w.id === windowId);
+  if (!win) throw new Error('That window is closed.');
   if (all.some((w) => w.id !== windowId && w.name.toLowerCase() === name.toLowerCase())) throw new Error(`Another window is already named "${name}".`);
+  // An id is never a name: "W3" typed as the name of W7 would send agents to the wrong window.
+  if (WINDOW_KEY.test(name) && name.toLowerCase() !== win.key.toLowerCase()) throw new Error(`"${name}" looks like a window id: choose another name.`);
   const { windowNames: stored = {} } = await chrome.storage.session.get('windowNames');
-  stored[windowId] = { name, manual: true };
+  stored[windowId] = { key: win.key, name, manual: true };
   await chrome.storage.session.set({ windowNames: stored });
   await windowNames();
   return name;
@@ -429,7 +466,7 @@ async function handle(method, p) {
       const targetInfo = await attach(tab.id);
       if (p.url && p.url !== 'about:blank') chrome.tabs.update(tab.id, { url: p.url });
       const placed = (await windowNames()).find((w) => w.id === tab.windowId);
-      return { tabId: tab.id, targetInfo, window: placed ? { id: placed.id, name: placed.name } : undefined };
+      return { tabId: tab.id, targetInfo, window: windowInfo(placed) };
     }
     case 'send':
       if (isProtected(p.params?.url)) throw new Error('Rocketwright never opens browser or extension pages.');
@@ -474,11 +511,12 @@ async function handle(method, p) {
     case 'listTabs': {
       // Site and title only (no path, no query string): enough to find the window where an account is open.
       const all = await chrome.tabs.query({});
-      const named = new Map((await windowNames()).map((w) => [w.id, w.name]));
+      const named = new Map((await windowNames()).map((w) => [w.id, w]));
       return all.map((t) => {
         let origin = '';
         try { origin = t.url ? new URL(t.url).origin : ''; } catch { /* chrome:// and the like */ }
-        return { id: t.id, window: t.windowId, windowName: named.get(t.windowId) || '', origin: origin === 'null' ? '' : origin, title: t.title || '', attached: attached.has(t.id) };
+        const w = named.get(t.windowId);
+        return { id: t.id, window: t.windowId, windowKey: w?.key || '', windowName: w?.name || '', origin: origin === 'null' ? '' : origin, title: t.title || '', attached: attached.has(t.id) };
       });
     }
     case 'windows':
@@ -586,7 +624,8 @@ async function adoptOpenTab(p) {
     const tab = await chrome.tabs.get(p.tabId).catch(() => null);
     if (!tab || !tab.url || !webUrl(tab.url) || tab.url === 'about:blank' || attached.has(tab.id)) return { tabId: null };
     if (hostAllowed(hostOf(tab), settings.neverAdopt)) return { refused: `${hostOf(tab)} is in the Rocketwright extension's list of sites agents never take over` };
-    return { tabId: tab.id, targetInfo: await attach(tab.id) };
+    const targetInfo = await attach(tab.id);
+    return { tabId: tab.id, targetInfo, window: windowInfo((await windowNames()).find((w) => w.id === tab.windowId)) };
   }
   const match = String(p.match || '').trim();
   // An empty or tiny address would match any tab, the last one the user looked at included.
@@ -607,7 +646,7 @@ async function adoptOpenTab(p) {
   // The one the user looked at last.
   const tab = open.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
   const targetInfo = await attach(tab.id);
-  return { tabId: tab.id, targetInfo };
+  return { tabId: tab.id, targetInfo, window: windowInfo((await windowNames()).find((w) => w.id === tab.windowId)) };
 }
 
 // ---------- password filling ----------
@@ -817,7 +856,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return reply({});
       case 'windowName': {
         const found = (await windowNames()).find((w) => w.id === msg.windowId);
-        return reply({ name: found?.name || '', manual: !!found?.manual });
+        return reply({ key: found?.key || '', name: found?.name || '', manual: !!found?.manual });
       }
       case 'setWindowName':
         try {

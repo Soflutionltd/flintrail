@@ -123,7 +123,7 @@ test('the user names a browser, agents pick it by that name and see its open sit
   const snap = await a.call('fl_open', { url: site.url, browser: 'IdéeKdo', text: 0 });
   assert.match(snap, /^Tab t\d+ \[chromium-ideekdo\]/);
   const listed = await b.call('fl_extension', { tabs: true });
-  assert.match(listed, new RegExp(`window \\d+: ${site.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+Shop`));
+  assert.match(listed, new RegExp(`window W\\d+(?: "[^"]+")?: ${site.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+Shop`));
   // Origin and title only: never the path or the query string.
   assert.doesNotMatch(listed, /\/details|\/search\?/);
   await a.call('fl_close', { tab: tabId(snap) });

@@ -70,6 +70,17 @@ const isBrowserSession = (sessionId: string | undefined) => !sessionId || sessio
  * The name each browser got the first time it connected, kept in ~/.rocketwright/browsers.json: a browser keeps
  * its name whatever the order browsers connect in, and keeps its profile name when the profiles cannot be read.
  */
+/**
+ * A window as the extension describes it, for the Rocketwright side: its id ("W7", 2.3.0 on) is what a conversation
+ * keeps to, its name is for people. An extension of 2.2.0 gives a name only, which then stands for the id.
+ */
+export function windowFields(w: unknown): { rocketwrightWindow?: string; rocketwrightWindowName?: string } {
+  const win = (w && typeof w === 'object' ? w : {}) as { key?: unknown; name?: unknown };
+  const name = typeof win.name === 'string' ? win.name : '';
+  const key = typeof win.key === 'string' && win.key ? win.key : name;
+  return key ? { rocketwrightWindow: key, rocketwrightWindowName: name || key } : {};
+}
+
 /** Whether an extension of this version names its windows (2.2.0 on). */
 export function namesWindows(version: string | undefined): boolean {
   const [major = 0, minor = 0] = String(version || '').split('.').map(Number);
@@ -394,7 +405,7 @@ class ExtensionBridge {
   }
 
   /** Gives a tab the user shared (URL containing match) to this client. */
-  async claim(client: ClientConn, match: string, mode: MatchMode = 'contains', tabId?: number): Promise<{ url: string } | null> {
+  async claim(client: ClientConn, match: string, mode: MatchMode = 'contains', tabId?: number): Promise<{ url: string; rocketwrightWindow?: string; rocketwrightWindowName?: string } | null> {
     const view = this.viewOf(client);
     const fits = (t: Tab) => (tabId !== undefined ? t.tabId === tabId : urlMatches(String(t.targetInfo.url || ''), match, mode));
     const shared = [...this.tabsById.values()].filter((t) => !t.owner && fits(t)).at(-1);
@@ -405,7 +416,7 @@ class ExtensionBridge {
     }
     // Not shared: the extension may hand over a tab the user has open, as its settings allow (older extensions do not).
     if (this.legacy) return null;
-    let found: { tabId?: number | null; targetInfo?: Tab['targetInfo']; refused?: string };
+    let found: { tabId?: number | null; targetInfo?: Tab['targetInfo']; refused?: string; window?: unknown };
     try {
       found = await this.request('adoptTab', tabId !== undefined ? { tabId } : { match, mode }, 10000);
     } catch (e) {
@@ -416,7 +427,7 @@ class ExtensionBridge {
     if (typeof found.tabId !== 'number' || !found.targetInfo) return null;
     const tab = this.addTab(found.tabId, found.targetInfo, view);
     log(`${this.key}: tab ${found.tabId} taken over by a conversation`);
-    return { url: String(tab.targetInfo.url || '') };
+    return { url: String(tab.targetInfo.url || ''), ...windowFields(found.window) };
   }
 
   /** The connected view of this client on this browser. */
@@ -545,9 +556,8 @@ class ExtensionBridge {
           throw new Error('client disconnected');
         }
         const tab = this.addTab(r.tabId, r.targetInfo, view);
-        // The window the tab went to, by the name the extension gives it (none from an older extension).
-        const window = typeof r.window?.name === 'string' ? { rocketwrightWindow: r.window.name } : {};
-        return { targetId: tab.targetInfo.targetId, ...window };
+        // The window the tab went to, by the id and name the extension gives it (none from an older extension).
+        return { targetId: tab.targetInfo.targetId, ...windowFields(r.window) };
       }
       case 'Rocketwright.releaseTarget': {
         // fl_release: this conversation stops driving the tab, the user keeps it open. The tab may have moved
