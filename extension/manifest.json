@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Rocketwright",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Let your AI agent drive this browser through Rocketwright, and teach it a task by doing it once yourself.",
   "homepage_url": "https://github.com/Soflutionltd/rocketwright",
   "minimum_chrome_version": "125",

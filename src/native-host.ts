@@ -7,8 +7,20 @@ import './legacy-home.js';
 import { loadToken } from './auth.js';
 import { config } from './config.js';
 import { appendFileSync } from 'node:fs';
+import { connect } from 'node:net';
 import { join } from 'node:path';
 import { chosenName, profileOfInstance, profileReadProblems } from './profiles.js';
+
+/** Whether something listens on this port of this computer: a TCP connection, closed at once, nothing sent. */
+function listening(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: '127.0.0.1', port });
+    const done = (up: boolean) => { socket.destroy(); resolve(up); };
+    socket.setTimeout(1000, () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+  });
+}
 
 function reply(message: unknown) {
   const body = Buffer.from(JSON.stringify(message), 'utf8');
@@ -33,8 +45,14 @@ function readMessage(): Promise<unknown> {
 }
 
 try {
-  const message = (await readMessage()) as { type?: string; instance?: string } | null;
-  if (message?.type === 'pair') reply({ type: 'paired', token: loadToken(), port: config.relayPort });
+  const message = (await readMessage()) as { type?: string; instance?: string; port?: unknown } | null;
+  // Asked before each connection attempt: a WebSocket to a port where nothing listens is logged by the browser as
+  // an error in the extension's page, every 30 s while no agent runs. A port number only, on this computer only.
+  if (message?.type === 'relay') {
+    const port = Number(message.port);
+    reply(Number.isInteger(port) && port > 0 && port < 65536 ? { type: 'relay', up: await listening(port) } : { type: 'error', error: 'bad port' });
+  }
+  else if (message?.type === 'pair') reply({ type: 'paired', token: loadToken(), port: config.relayPort });
   // Started by the browser itself, this process may read the browser's own profile files, which macOS often
   // keeps from other apps (the relay among them): it tells the extension which profile it runs in.
   else if (message?.type === 'profile') {

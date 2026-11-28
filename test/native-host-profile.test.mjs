@@ -49,3 +49,17 @@ test('a profile still under the browser\'s own default name ("Votre Chromium", "
   const env = { ROCKETWRIGHT_HOME: mkdtempSync(join(tmpdir(), 'rocketwright-')), ROCKETWRIGHT_PAIRING_DIRS: dataDir };
   assert.deepEqual(await ask({ type: 'profile', instance }, env), { type: 'profile', name: '' });
 });
+
+test('the pairing host tells whether the relay listens, without sending it anything', async () => {
+  const { createServer } = await import('node:net');
+  const env = { ROCKETWRIGHT_HOME: mkdtempSync(join(tmpdir(), 'rocketwright-')) };
+  let received = 0;
+  const server = createServer((s) => { s.on('data', () => received++); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const { port } = server.address();
+  assert.deepEqual(await ask({ type: 'relay', port }, env), { type: 'relay', up: true });
+  await new Promise((r) => server.close(r));
+  assert.deepEqual(await ask({ type: 'relay', port }, env), { type: 'relay', up: false });
+  assert.equal(received, 0);
+  assert.deepEqual(await ask({ type: 'relay', port: 'x' }, env), { type: 'error', error: 'bad port' });
+});

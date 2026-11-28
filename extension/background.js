@@ -82,6 +82,19 @@ async function profileName(instance) {
   }
 }
 
+// Whether the relay listens, asked of the pairing host: a WebSocket to a closed port is logged by the browser as an
+// error on the extension's page, which no code can stop, every 30 s while no agent runs. null when the host cannot
+// tell (no native messaging, or a host from before 2.3.1): the WebSocket is tried as before.
+async function relayListening(port) {
+  if (!await chrome.permissions.contains({ permissions: ['nativeMessaging'] })) return null;
+  try {
+    const r = await chrome.runtime.sendNativeMessage(HOST_NAME, { type: 'relay', port });
+    return r?.type === 'relay' ? r.up === true : null;
+  } catch {
+    return null;
+  }
+}
+
 // Stable per-browser id, so a reconnecting browser keeps its name on the Rocketwright side.
 async function instanceId() {
   const { instance } = await store.get('instance');
@@ -118,6 +131,11 @@ async function openConnection() {
   }
   const { port = 8932, label = '' } = await store.get(['port', 'label']);
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  if (await relayListening(port) === false) {
+    await setStatus('disconnected', 'Rocketwright is not running (it starts with your agent).');
+    retrySoon();
+    return;
+  }
   const instance = await instanceId();
   const profile = await profileName(instance);
   const cnonce = crypto.randomUUID();
