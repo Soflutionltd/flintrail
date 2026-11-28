@@ -486,20 +486,24 @@ class ExtensionBridge {
     const { method = '', params = {}, sessionId } = m;
     if (!sessionId || isBrowserSession(sessionId)) return this.browserCommand(view, method, params);
     const tab = this.ownedTab(view, sessionId);
-    if (tab && method === 'Page.getFrameTree') {
-      tab.frameTreesPending = (tab.frameTreesPending || 0) + 1;
+    // An embedded frame of another site runs in a session of its own (a child of the tab's session).
+    const childOwner = tab ? undefined : this.childSessions.get(sessionId);
+    const parent = tab ?? (childOwner !== undefined && this.tabsById.get(childOwner)?.owner === view ? this.tabsById.get(childOwner) : undefined);
+    if (!parent) throw new Error(`Unknown session ${sessionId}`);
+    const forward = tab ? { tabId: tab.tabId, method, params } : { tabId: parent.tabId, sessionId, method, params };
+    if (method === 'Page.getFrameTree') {
+      // The same race in an embedded frame's session as in the tab's (see onDebuggerEvent): its contexts held
+      // until its frame tree is answered, or Playwright never sees them and reading that frame never returns.
+      parent.frameTreesPending = (parent.frameTreesPending || 0) + 1;
       try {
-        const tree = await this.request('send', { tabId: tab.tabId, method, params });
+        const tree = await this.request('send', forward);
         this.toView(view, { id: m.id, sessionId, result: tree ?? {} });
         return HANDLED;
       } finally {
-        if (!--tab.frameTreesPending) for (const event of tab.heldEvents?.splice(0) ?? []) this.toView(tab.owner, event);
+        if (!--parent.frameTreesPending) for (const event of parent.heldEvents?.splice(0) ?? []) this.toView(parent.owner, event);
       }
     }
-    if (tab) return this.request('send', { tabId: tab.tabId, method, params });
-    const owner = this.childSessions.get(sessionId);
-    if (owner !== undefined && this.tabsById.get(owner)?.owner === view) return this.request('send', { tabId: owner, sessionId, method, params });
-    throw new Error(`Unknown session ${sessionId}`);
+    return this.request('send', forward);
   }
 
   private async browserCommand(view: CdpView, method: string, params: Record<string, unknown>): Promise<unknown> {

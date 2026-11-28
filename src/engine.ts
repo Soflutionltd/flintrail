@@ -668,7 +668,7 @@ export async function gotoFast(page: Page, url: string) {
 
 /** Lets a client-side app finish re-rendering before we read it. Never waits on the network. */
 export async function domQuiet(page: Page, idle = 25, quiet = 80, max = 1200) {
-  await page.mainFrame().evaluate(domQuietScript, { idle, quiet, max }).catch(() => {});
+  await withDeadline(page.mainFrame().evaluate(domQuietScript, { idle, quiet, max }), max + 3000).catch(() => {});
 }
 
 /** Runs an interaction and waits for a navigation only if that interaction actually started one. */
@@ -714,6 +714,22 @@ export async function hideForeignFrames(page: Page): Promise<{ restore: () => Pr
   return { restore: async () => { for (const u of undo) await u(); } };
 }
 
+/** Rejects with a TimeoutError-like error when work takes longer than ms (the work itself goes on, its result dropped). */
+export function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new DeadlineError(ms)), ms); });
+  work.catch(() => {});
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+export class DeadlineError extends Error {
+  constructor(readonly ms: number) { super(`no answer within ${ms / 1000} s`); }
+}
+
+// A frame whose script context never reached Rocketwright (an embedded page of another site, most often) would
+// leave a read waiting forever: past these delays it is told, never waited for.
+const FRAME_READ_MS = 4000;
+const PAGE_READ_MS = 15000;
+
 // Defaults kept short: the agent raises max or text, or narrows with within, when it needs more.
 const SNAP_MAX = 100;
 const SNAP_TEXT = 400;
@@ -726,14 +742,21 @@ export async function snapshot(page: Page, opts: { max?: number; text?: number; 
   const frames = page.frames().map((frame, index) => ({ frame, index }))
     .filter(({ frame, index }) => !frame.isDetached() && (index === 0 || readableFrame(frame))).slice(0, 6);
   // Frames are read in parallel: one round trip instead of one per frame.
-  const reads = await Promise.all(frames.map(({ frame, index }) => frame.evaluate(snapshotScript, {
+  const silent: string[] = [];
+  const reads = await Promise.all(frames.map(({ frame, index }) => withDeadline(frame.evaluate(snapshotScript, {
     max: index === 0 ? opts.max ?? SNAP_MAX : 40,
     text: index === 0 ? opts.text ?? SNAP_TEXT : 0,
     prefix: index === 0 ? '' : `f${index}:`,
     within: opts.within,
     // A secret Rocketwright put in this page: no field shows its value, even one the site re-rendered.
     hideValues: !!stateOf(page).secretFilled,
-  }).catch(() => null)));
+  }), index === 0 ? PAGE_READ_MS : FRAME_READ_MS).catch((e) => {
+    if (e instanceof DeadlineError) silent.push(index === 0 ? 'page' : `frame ${index} (${maskUrl(frame.url()).slice(0, 80)})`);
+    return null;
+  })));
+  if (silent.includes('page')) {
+    throw new Error(`The page in this tab did not answer within ${PAGE_READ_MS / 1000} s: Rocketwright never got to run its reader in it (the page may be frozen, or its scripts never reached Rocketwright). fl_reopen opens the page again in a fresh tab; if that hangs too, tell the user.`);
+  }
   // The page may have moved while it was being read: what a tab or frame now outside the list returned is dropped.
   const moved = domainProblem(page.url());
   if (moved) {
@@ -747,6 +770,7 @@ export async function snapshot(page: Page, opts: { max?: number; text?: number; 
     if (i > 0 && s?.lines.length && readableFrame(frame)) extra.push(`-- frame ${index} (${frame.url().slice(0, 80)})`, ...s.lines);
   });
   const notes = pageNotes(page);
+  for (const what of silent) notes.push(`Not read: ${what} did not answer within ${FRAME_READ_MS / 1000} s, skipped.`);
   if (!head) {
     lastSeen.delete(page);
     return [...notes, `URL: ${page.url()} (page not readable yet)`].join('\n');
